@@ -1,0 +1,46 @@
+# Dependency, compiler, package and test outputs.
+/node_modules/
+/.npm-cache/
+/.electron-cache/
+/.vite/
+/out/
+/out-*/
+/coverage/
+/test-results/
+/playwright-report/
+/native/build/
+/native/build-*/
+/native/dist/
+/autonomous-output/
+
+# IDE and operating-system state.
+*.user
+*.suo
+*.VC.db
+.DS_Store
+Thumbs.db
+
+# AIMuse projects, portable packs and local credentials.
+*.aimuse/
+*.aimusepack
+/credentials/
+*.mcp-connection.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+
+# Codex/agent state and retained local QA coordination evidence are never source.
+/.codex/
+/.agents/
+/connection.json
+/rename-visibility.json
+/identity-01-target.dat
+/identity-02-target.dat
+/identity-03-target.dat
+/identity-04-target.dat
+/identity-05-target.dat

@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "checkpointId": "20260807T194500Z-aud02-exclusive-native-acceptance",
+  "workspace": "E:\\AIMuse",
+  "runRoot": "E:\\AIMuse\\test-results\\20260807T194500Z-aud02-exclusive-native-acceptance",
+  "sourceFiles": {
+    "native\\src\\audio_service.cpp": { "bytes": 10646, "sha256": "033B8D2FB3884EA3B0CDB6BCE376D1783423C507D9C61A51B31BC66ED1E8FAEE" },
+    "native\\src\\audio_service_options.hpp": { "bytes": 1651, "sha256": "A4BC749CD4C027E06B5E5BE2A5DD1B200EF61318726530EE7B92CCEF64B8363D" },
+    "native\\src\\protocol.hpp": { "bytes": 4004, "sha256": "B0A99D6E217B15C080D0321E3CB188D4FBBA97BC7EFC4DEFA30AFAADA80840D6" },
+    "native\\src\\realtime_playback.cpp": { "bytes": 14700, "sha256": "AE32AD3F8C882B4D663D6D168A704E732B1D5A5858AC1BA4475F6E68E2D1AA6B" },
+    "native\\src\\realtime_playback.hpp": { "bytes": 2390, "sha256": "DF16EED0046E111CE4B567808644D6C2ADFC140107A83CEF18D1C876E9FACF67" },
+    "native\\src\\dsp.cpp": { "bytes": 5809, "sha256": "70F67BAC1201F58D204F06926F7DC00BF7400690253EF05385F8AAEE4A1F1DD0" },
+    "native\\src\\dsp.hpp": { "bytes": 2022, "sha256": "1DB92F1286AA1E0AE8C671FEF22064AE7339DD91C958A84323F98220B124CC06" },
+    "native\\tests\\dsp_tests.cpp": { "bytes": 6464, "sha256": "4F55D92794A3EF3664EA80A4375A649935CD9C5DEAE51D869B69D6B8EBA75866" },
+    "native\\CMakeLists.txt": { "bytes": 4979, "sha256": "BDDBF8FDB26D74E7676EF19B5E5AB21ED1820C48FC84956F956B0EB77954E141" },
+    "native\\cmake\\Dependencies.cmake": { "bytes": 1031, "sha256": "F50566B1807106C30E7508234802D6121A3B8E0493C9D0902A075AB170FAAC04" },
+    "native\\dependency-lock.json": { "bytes": 1449, "sha256": "938856F91F7C7F3DD8C2C63EEBA8C339ABE631D76D6E13BA0840534D4015FED8" },
+    "src\\main\\audio-playback-mode.ts": { "bytes": 2607, "sha256": "7028AC8D5DEA9286B2EC341B54D7CD9BDBE669EF7B3D6984CDE3C95BE5443117" },
+    "src\\main\\audio-engine.ts": { "bytes": 24959, "sha256": "FD298675A0223ABC7F0522CB2F4B94A0DFB8F485A7A2EA9B130046CC98FB5E11" },
+    "tests\\main\\audio-playback-mode.test.ts": { "bytes": 3105, "sha256": "EA6088BDAF737BEF79A816A34DA1134FAAC1117A4FE5B3AA2BF571B28EDA904A" },
+    "tests\\native\\audio-playback-mode-source.test.ts": { "bytes": 1679, "sha256": "5FEB2A8AAD8DA411DB4916104139CF2B1DB8158FCD0FABF2EC22D351422D3A43" },
+    "scripts\\qa-audited-native-process.ps1": { "bytes": 1659, "sha256": "8BD2EA81AC6F7FAAB5882364A454C02D64D1E7204C72318854624F94EF5CDAA2" },
+    "scripts\\qa-aud02-exclusive-native-checkpoint.ps1": { "bytes": 19083, "sha256": "7AB37DA63C040F87A7A88865AFE90C6978DC0632D248B563092B8F5F1BE4AB85" },
+    "scripts\\qa-aud02-exclusive-device.mjs": { "bytes": 14742, "sha256": "6C9237E321AF234C1B5F3C18B4090345B4AFD868846343F77D28767644DBC8A8" },
+    "scripts\\qa-aud02-exclusive-checkpoint-self-test.ps1": { "bytes": 7562, "sha256": "22615ED83381C3A6ABBEBC1D919799B539A40BEE5D379B64845CF2E847780CB1" }
+  },
+  "tools": {
+    "powershell": { "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "bytes": 454656, "sha256": "7600FFE12DA441FE89D035B13801E8E91D064BC544A27B19A5CF49F6AB8B18F5", "productVersion": "10.0.26100.8875" },
+    "node": { "path": "C:\\Users\\hokom\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe", "bytes": 91380224, "sha256": "63C259C81E5D472B5F11C8D506070130CB04A1ECF84B80377A34ED6EC9048088", "productVersion": "24.14.0" },
+    "cmake": { "path": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\cmake.exe", "bytes": 14060088, "sha256": "D8173552E9D943C20FEADD74D0437371F49D45C3D53A20DAE2655ECC2493392C", "productVersion": "4.2.3-msvc3" },
+    "ctest": { "path": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin\\ctest.exe", "bytes": 15152224, "sha256": "4D00D31A10D004EDB8D7F39BCD47D0A94DA1CD4464E9D2246D199F0CF6C7852B", "productVersion": "4.2.3-msvc3" },
+    "msbuild": { "path": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\MSBuild\\Current\\Bin\\amd64\\MSBuild.exe", "bytes": 511248, "sha256": "0D74544FB05D4D6016BC59A5C364F09D52C6BF6127F766A6D7A09CA23C237D8D", "productVersion": "18.4.0+6e61e96acff3f3bd97740401540053cc2d49b189" },
+    "vctoolsVersion": { "path": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Auxiliary\\Build\\Microsoft.VCToolsVersion.default.txt", "bytes": 11, "sha256": "D96417BF267C1037B81C6DD23C838B0163281C3D7F1AB8E8D7A3896DDB8350D6", "productVersion": "" },
+    "compiler": { "path": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\Hostx64\\x64\\cl.exe", "bytes": 682568, "sha256": "194DDF4AAFCB74452218A982309A97DE30E0ADB33EDF4AF02904EE107213E782", "productVersion": "14.50.35728.0" },
+    "linker": { "path": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\Hostx64\\x64\\link.exe", "bytes": 3416136, "sha256": "C988ACB4EC7EF964AE4D4E414B693A6A3782DD85F1E200100B3F896DB6B1A202", "productVersion": "14.50.35728.0" },
+    "git": { "path": "C:\\Program Files\\Git\\cmd\\git.exe", "bytes": 45584, "sha256": "3558374AE2A34EB954E79C729427E62098885BCCED17DEC3E480A707AD93252C", "productVersion": "" },
+    "gitRuntime": { "path": "C:\\Program Files\\Git\\mingw64\\bin\\git.exe", "bytes": 3513856, "sha256": "B7DCF0ABDDC630F2CE822DD9562AB21294B15B612FAD5B5499D468D37A42B08E", "productVersion": "" },
+    "windowsAudioClientHeader": { "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\um\\audioclient.h", "bytes": 95350, "sha256": "CFF4082B537FEDA0242979ADDE6B554A51B2A54C13CF0B3813C8B9B23BCE45C6", "productVersion": "" },
+    "windowsMmDeviceHeader": { "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\um\\mmdeviceapi.h", "bytes": 55214, "sha256": "3E0B02D819DD7CE0CB1B5E0721C7370EB1C42F21AA1D4B2747A97EEB22AA5EDE", "productVersion": "" },
+    "windowsOneCoreLibrary": { "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\onecore.lib", "bytes": 2390360, "sha256": "9780D1A6ABDD6D47166B1E660F10F86F9E3E4393A15012E49B2B2186061D5629", "productVersion": "" },
+    "windowsUuidLibrary": { "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64\\uuid.lib", "bytes": 8936424, "sha256": "D077FFB106503E057428DC7BB4C5DAAC019C269FFC714EDB18CA028723CC840A", "productVersion": "" }
+  },
+  "dependency": {
+    "name": "miniaudio",
+    "repository": "https://github.com/mackron/miniaudio.git",
+    "tag": "0.11.25",
+    "miniaudioRevision": "9634bedb5b5a2ca38c1ee7108a9358a4e233f14d",
+    "identityRule": "CMake FetchContent must clone only this revision below <run-root>\\dependencies; build evidence records git rev-parse HEAD plus the fetched miniaudio.h SHA-256 and size."
+  },
+  "build": {
+    "generator": "Visual Studio 18 2026",
+    "architecture": "x64",
+    "configuration": "RelWithDebInfo",
+    "platformToolset": "v145",
+    "windowsSdkVersion": "10.0.26100.0",
+    "targets": ["aimuse-audio", "aimuse-native-tests"],
+    "ctestName": "aimuse-native-dsp",
+    "buildDirectory": "native-build",
+    "dependencyDirectory": "dependencies",
+    "prospectiveExecutable": "native-build\\aimuse-audio.exe",
+    "executableIdentityRule": "After successful build and exact CTest PASS, record executable SHA-256 and byte length in build-evidence\\summary.json. Device authorization must bind both that summary hash and executable hash; no pre-build hash is claimed.",
+    "networkBoundary": "Future build phase requires outbound Git HTTPS only for the pinned miniaudio repository/revision. No network is permitted in device phase."
+  },
+  "device": {
+    "endpointAcquisition": "Windows.Media.Devices.MediaDevice.GetDefaultAudioRenderId(Default); retain uppercase SHA-256 and character count only",
+    "cases": ["default-shared", "explicit-exclusive"],
+    "sharedArguments": ["--stdio"],
+    "exclusiveArguments": ["--stdio", "--playback-mode=exclusive"],
+    "sampleRate": 48000,
+    "toneHz": 440,
+    "peak": 0.02,
+    "durationMsPerReadyCase": 180,
+    "maximumAudibleDurationMs": 360,
+    "exclusiveAcceptance": "Either effective exclusive WASAPI output starts and plays the bounded probe, or hello plus transport report requested exclusive/effective unavailable with a precise exclusive initialization/start failure. Shared fallback is always FAIL.",
+    "shutdown": "Protocol shutdown once per exact child, then wait 3000 ms for natural code-0/no-signal exit. No kill, signal, force, retry or cleanup authority; a survivor PID is retained and left uncontrolled."
+  },
+  "processBoundary": {
+    "relevantNames": ["AIMuse", "electron", "aimuse-audio"],
+    "baselineAndPostflightMustBeZero": true,
+    "buildChildren": "Controller directly owns only audited CMake, Git and CTest processes; their compiler/linker children are awaited, never signaled or controlled separately.",
+    "deviceChildren": "The Node runner spawns exactly one audio child at a time and records each PID; no unrelated process is inspected or controlled."
+  },
+  "retention": {
+    "automaticCleanup": false,
+    "reuse": false,
+    "buildPhase": "Creates the absent root and only build-evidence, dependencies and native-build children. Failures remain retained.",
+    "devicePhase": "May append only one previously absent device-evidence child after exact build-summary, executable and run-root identity revalidation. Failures and survivors remain reported without cleanup."
+  },
+  "commands": {
+    "selfTest": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File E:\\AIMuse\\scripts\\qa-aud02-exclusive-checkpoint-self-test.ps1 -PlanPath E:\\AIMuse\\scripts\\qa-aud02-exclusive-native-plan.json -ControllerPath E:\\AIMuse\\scripts\\qa-aud02-exclusive-native-checkpoint.ps1 -DeviceRunnerPath E:\\AIMuse\\scripts\\qa-aud02-exclusive-device.mjs",
+    "buildTemplate": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File E:\\AIMuse\\scripts\\qa-aud02-exclusive-native-checkpoint.ps1 -Phase Build -RunRoot E:\\AIMuse\\test-results\\20260807T194500Z-aud02-exclusive-native-acceptance -Workspace E:\\AIMuse -PlanPath E:\\AIMuse\\scripts\\qa-aud02-exclusive-native-plan.json -ExpectedPlanSha256 <PLAN_SHA256>",
+    "deviceTemplate": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File E:\\AIMuse\\scripts\\qa-aud02-exclusive-native-checkpoint.ps1 -Phase Device -RunRoot E:\\AIMuse\\test-results\\20260807T194500Z-aud02-exclusive-native-acceptance -Workspace E:\\AIMuse -PlanPath E:\\AIMuse\\scripts\\qa-aud02-exclusive-native-plan.json -ExpectedPlanSha256 <PLAN_SHA256> -ExpectedBuildSummarySha256 <BUILD_SUMMARY_SHA256> -ExpectedAudioSha256 <AUDIO_SHA256>"
+  }
+}

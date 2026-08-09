@@ -1,0 +1,638 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
+import { createId, entityBase, HUMAN_ACTOR, nowIso, type AsyncJob, type AuthorityPolicy, type MediaAsset, type MidiClip, type ProjectTransaction } from '@aimuse/core';
+import { AudioEngineController } from '../../src/main/audio-engine';
+import { AuthorityManager } from '../../src/main/authority-manager';
+import { ExportManager } from '../../src/main/export-manager';
+import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
+import { RecoveryJournal } from '../../src/main/journal';
+import { McpHost } from '../../src/main/mcp-host';
+import { MediaManager } from '../../src/main/media-manager';
+import { PluginManager } from '../../src/main/plugin-manager';
+import { ProjectService } from '../../src/main/project-service';
+import { TransactionTraceStore } from '../../src/main/trace-store';
+
+interface RpcResponse { jsonrpc: '2.0'; id?: string | number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown>; error?: Record<string, unknown> }
+interface NotificationStream { messages: RpcResponse[]; done: Promise<void>; abort: () => void; failure: () => unknown }
+
+describe('authenticated localhost MCP contract', () => {
+  let root: string;
+  let audio: AudioEngineController;
+  let projects: ProjectService;
+  let authority: AuthorityManager;
+  let host: McpHost;
+  let url: string;
+  const token = 'test-token-0123456789-abcdefghijklmnopqrstuvwxyz';
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'aimuse-mcp-'));
+    audio = new AudioEngineController();
+    projects = new ProjectService({
+      appVersion: 'test', checkpointRoot: join(root, 'checkpoints'),
+      journal: new RecoveryJournal(join(root, 'recovery')),
+      trace: new TransactionTraceStore(join(root, 'traces')), audio,
+    });
+    authority = new AuthorityManager();
+    const media = new MediaManager(join(root, 'managed'), projects, authority);
+    const plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
+    const credentials: ProviderCredentials = {
+      get: async () => undefined,
+      set: async () => undefined,
+      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
+    };
+    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
+    const exports = new ExportManager(projects, audio, authority);
+    host = new McpHost({ appVersion: 'test', profileId: 'A'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'), cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, generation, exports });
+    await audio.start();
+    await projects.initialize();
+    await plugins.initialize();
+    url = (await host.start(token)).url;
+  });
+
+  afterEach(async () => {
+    await host.stop();
+    await audio.stop();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function request(body: unknown, sessionId?: string): Promise<{ response: Response; message?: RpcResponse }> {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        ...(sessionId ? { 'mcp-session-id': sessionId } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    if (!text) return { response };
+    if (response.headers.get('content-type')?.includes('text/event-stream')) {
+      const messages = text.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => JSON.parse(line.slice(5).trim()) as RpcResponse);
+      return { response, message: messages.at(-1) };
+    }
+    return { response, message: JSON.parse(text) as RpcResponse };
+  }
+
+  async function initialize(): Promise<{ sessionId: string; message: RpcResponse }> {
+    const initialized = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'AIMuse contract test', version: '1' } } });
+    expect(initialized.response.status).toBe(200);
+    const sessionId = initialized.response.headers.get('mcp-session-id');
+    expect(sessionId).toBeTruthy();
+    await request({ jsonrpc: '2.0', method: 'notifications/initialized' }, sessionId!);
+    return { sessionId: sessionId!, message: initialized.message! };
+  }
+
+  async function openNotificationStream(sessionId: string): Promise<NotificationStream> {
+    const controller = new AbortController();
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream', 'mcp-session-id': sessionId },
+      signal: controller.signal,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    expect(response.body).toBeTruthy();
+    const messages: RpcResponse[] = [];
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let pending = '';
+    let streamFailure: unknown;
+    const consume = (chunk: string) => {
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data) messages.push(JSON.parse(data) as RpcResponse);
+      }
+    };
+    const done = (async () => {
+      try {
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          consume(decoder.decode(next.value, { stream: true }));
+        }
+        consume(decoder.decode());
+      } catch (error) {
+        if (!controller.signal.aborted) streamFailure = error;
+      }
+    })();
+    return { messages, done, abort: () => controller.abort(), failure: () => streamFailure };
+  }
+
+  async function waitForMessages(stream: NotificationStream, count: number): Promise<void> {
+    const deadline = Date.now() + 2_000;
+    while (stream.messages.length < count && Date.now() < deadline) await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
+    expect(stream.messages).toHaveLength(count);
+  }
+
+  async function closeSession(sessionId: string, stream: NotificationStream): Promise<void> {
+    const response = await fetch(url, { method: 'DELETE', headers: { authorization: `Bearer ${token}`, accept: 'application/json, text/event-stream', 'mcp-session-id': sessionId } });
+    expect([200, 202, 204]).toContain(response.status);
+    await stream.done;
+    expect(stream.failure()).toBeUndefined();
+  }
+
+  let sequence = 0;
+  function createRequestId(): number { sequence += 1; return sequence; }
+
+  it('rejects unauthenticated and malformed requests before creating state', async () => {
+    const { instanceId, profileId } = host.credentials();
+    expect(instanceId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(profileId).toBe('A'.repeat(64));
+    const health = await fetch(url.replace('/mcp', '/health'));
+    expect(health.status).toBe(200);
+    await expect(health.json()).resolves.toMatchObject({ name: 'AIMuse Engine', status: 'ok', pid: process.pid, instanceId, profileId, uiRequired: false });
+
+    const unauthorized = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.headers.get('www-authenticate')).toContain('Bearer');
+
+    const malformed = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: '{broken' });
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toMatchObject({ error: 'invalid_json' });
+
+    const oversized = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ value: 'x'.repeat(4 * 1024 * 1024) }) });
+    expect(oversized.status).toBe(413);
+    await expect(oversized.json()).resolves.toMatchObject({ error: 'body_too_large' });
+  });
+
+  it('publishes credential-free receiver acknowledgements and poisons duplicate request IDs', async () => {
+    const requestId = '33333333-3333-4333-8333-333333333333';
+    const { instanceId, profileId } = host.credentials();
+    expect(host.beginShowAcknowledgement(requestId)).toBe(true);
+    const pending = await (await fetch(url.replace('/mcp', '/health'))).json() as { showAcknowledgements: Array<Record<string, unknown>> };
+    expect(pending.showAcknowledgements).toEqual([expect.objectContaining({ requestId, status: 'pending', pid: process.pid, instanceId, profileId, attempts: 1 })]);
+    expect(pending.showAcknowledgements[0]).not.toHaveProperty('acknowledgedAt');
+    expect(host.completeShowAcknowledgement(requestId, 'accepted')).toBe(true);
+    const accepted = await (await fetch(url.replace('/mcp', '/health'))).json() as { showAcknowledgements: Array<Record<string, unknown>> };
+    expect(accepted.showAcknowledgements).toEqual([expect.objectContaining({ requestId, status: 'accepted', pid: process.pid, instanceId, profileId, attempts: 1 })]);
+    expect(JSON.stringify(accepted.showAcknowledgements)).not.toContain(token);
+
+    expect(host.beginShowAcknowledgement(requestId)).toBe(false);
+    const duplicated = await (await fetch(url.replace('/mcp', '/health'))).json() as { showAcknowledgements: Array<Record<string, unknown>> };
+    expect(duplicated.showAcknowledgements).toEqual([expect.objectContaining({ requestId, status: 'rejected', reason: 'duplicate-request', attempts: 2 })]);
+    expect(host.completeShowAcknowledgement(requestId, 'accepted')).toBe(false);
+    expect(host.beginShowAcknowledgement('malformed')).toBe(false);
+    expect(host.showAcknowledgements()).toHaveLength(1);
+
+    for (let index = 0; index < 63; index += 1) expect(host.beginShowAcknowledgement(`00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`)).toBe(true);
+    expect(host.showAcknowledgements()).toHaveLength(64);
+    expect(host.beginShowAcknowledgement('ffffffff-ffff-4fff-8fff-ffffffffffff')).toBe(false);
+    expect(host.showAcknowledgements()).toHaveLength(64);
+    expect(host.showAcknowledgements()).toContainEqual(expect.objectContaining({ requestId, status: 'rejected', attempts: 2, reason: 'duplicate-request' }));
+  });
+
+  it('negotiates resource subscriptions and reads every public resource shape', async () => {
+    const { sessionId, message } = await initialize();
+    expect(message.result).toMatchObject({ capabilities: { resources: { subscribe: true, listChanged: true } } });
+    const joined = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'session_manage', arguments: { action: 'join', name: 'Resource Owner' } } }, sessionId);
+    const actorId = (JSON.parse((((joined.message?.result?.content as Array<{ text: string }>)[0]).text)) as { actor: { id: string } }).actor.id;
+
+    const project = projects.getActiveProject()!;
+    const mediaBytes = Buffer.from('{"fixture":"analysis-resource"}\n');
+    const mediaPath = join(root, 'analysis-resource.json');
+    await writeFile(mediaPath, mediaBytes);
+    const asset: MediaAsset = {
+      ...entityBase('asset', HUMAN_ACTOR),
+      kind: 'analysis',
+      name: 'analysis-resource.json',
+      mimeType: 'application/json',
+      sha256: createHash('sha256').update(mediaBytes).digest('hex'),
+      byteLength: mediaBytes.byteLength,
+      storage: 'managed-cache',
+      externalPath: mediaPath,
+      source: 'system',
+    };
+    const transaction: ProjectTransaction = {
+      id: createId('tx'), clientOperationId: 'mcp-resource-fixture', projectId: project.id, actor: HUMAN_ACTOR,
+      label: 'Register MCP resource fixture', createdAt: nowIso(), operations: [{ kind: 'asset.add', asset }], checkpointPolicy: 'none',
+    };
+    await expect(projects.apply(transaction, HUMAN_ACTOR)).resolves.toMatchObject({ status: 'committed', revision: 1 });
+    projects.registerAssetSource(asset.id, mediaPath);
+    const timestamp = nowIso();
+    const job: AsyncJob = { id: 'job-resource-fixture', ownerActorId: actorId, projectId: project.id, kind: 'render', status: 'completed', progress: 1, message: 'Resource fixture complete.', createdAt: timestamp, updatedAt: timestamp, cancellable: false, result: { assetId: asset.id } };
+    projects.upsertJob(job);
+
+    const list = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'resources/list', params: {} }, sessionId);
+    expect(list.message?.error).toBeUndefined();
+    expect((list.message?.result?.resources as Array<{ uri: string }>).map((resource) => resource.uri).sort()).toEqual(['aimuse://guide', 'aimuse://plugins', 'aimuse://projects', 'aimuse://sessions']);
+    const templates = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'resources/templates/list', params: {} }, sessionId);
+    expect(templates.message?.error).toBeUndefined();
+    expect((templates.message?.result?.resourceTemplates as Array<{ uriTemplate: string }>).map((resource) => resource.uriTemplate).sort()).toEqual([
+      'aimuse://jobs/{id}',
+      'aimuse://projects/{id}/changes/{revision}',
+      'aimuse://projects/{id}/manifest',
+      'aimuse://projects/{id}/snapshot',
+      'aimuse://projects/{id}/trace',
+      'aimuse://projects/{projectId}/media/{assetId}',
+    ]);
+
+    const readResource = async (uri: string) => {
+      const read = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'resources/read', params: { uri } }, sessionId);
+      expect(read.message?.error).toBeUndefined();
+      const contents = read.message?.result?.contents as Array<{ uri: string; mimeType?: string; text?: string; blob?: string }>;
+      expect(contents).toHaveLength(1);
+      expect(contents[0].uri).toBe(uri);
+      return contents[0];
+    };
+
+    const projectList = JSON.parse((await readResource('aimuse://projects')).text!) as Array<{ id: string }>;
+    expect(projectList.map((value) => value.id)).toContain(project.id);
+    const sessions = JSON.parse((await readResource('aimuse://sessions')).text!) as { presence: unknown[]; jobs: Array<{ id: string }> };
+    expect(sessions).toMatchObject({ presence: [expect.objectContaining({ actor: expect.objectContaining({ id: actorId }) })], jobs: [expect.objectContaining({ id: job.id })] });
+    expect(JSON.parse((await readResource('aimuse://plugins')).text!)).toEqual([]);
+    expect((await readResource('aimuse://guide')).text).toContain('a human must allow or deny');
+
+    const manifest = JSON.parse((await readResource(`aimuse://projects/${project.id}/manifest`)).text!) as Record<string, unknown>;
+    expect(manifest).toMatchObject({ id: project.id, revision: 1, assets: 1 });
+    const snapshot = JSON.parse((await readResource(`aimuse://projects/${project.id}/snapshot`)).text!) as { id: string; assets: Record<string, unknown> };
+    expect(snapshot.id).toBe(project.id);
+    expect(snapshot.assets).toHaveProperty(asset.id);
+    const changes = JSON.parse((await readResource(`aimuse://projects/${project.id}/changes/0`)).text!) as Array<{ revision: number }>;
+    expect(changes).toEqual([expect.objectContaining({ revision: 1 })]);
+    const trace = (await readResource(`aimuse://projects/${project.id}/trace`)).text!;
+    expect(trace.split('\n').filter(Boolean).map((line) => JSON.parse(line))).toEqual([expect.objectContaining({ transaction: expect.objectContaining({ clientOperationId: transaction.clientOperationId }) })]);
+    expect(JSON.parse((await readResource(`aimuse://jobs/${job.id}`)).text!)).toMatchObject({ id: job.id, status: 'completed', result: { assetId: asset.id } });
+    const media = await readResource(`aimuse://projects/${project.id}/media/${asset.id}`);
+    expect(media.mimeType).toBe(asset.mimeType);
+    expect(Buffer.from(media.blob!, 'base64')).toEqual(mediaBytes);
+  });
+
+  it('teaches a cold tools-only client conditional contracts, workflow, privacy, polling, and human boundaries', async () => {
+    const { sessionId, message } = await initialize();
+    expect(String(message.result?.instructions)).toContain('Call aimuse_help(getting-started)');
+    expect(String(message.result?.instructions)).toContain('Human approvals cannot be granted through MCP');
+
+    const listed = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/list', params: {} }, sessionId);
+    expect(listed.message?.error).toBeUndefined();
+    type ToolContract = { name: string; description?: string; inputSchema: Record<string, unknown>; outputSchema?: Record<string, unknown> };
+    const tools = listed.message?.result?.tools as ToolContract[];
+    expect(tools).toHaveLength(12);
+    for (const tool of tools) {
+      expect(tool.description?.length).toBeGreaterThan(30);
+      expect(tool.inputSchema).toMatchObject({ type: 'object' });
+      expect(tool.outputSchema).toMatchObject({ type: 'object', properties: { data: { description: expect.any(String) }, next: { description: expect.any(String) } } });
+    }
+
+    const contract = (name: string) => tools.find((tool) => tool.name === name)!;
+    const branch = (name: string, action: string) => (contract(name).inputSchema.oneOf as Array<{ properties: { action: { const: string } }; required: string[] }>).find((value) => value.properties.action.const === action)!;
+    expect(branch('session_manage', 'join').required).toEqual(['action', 'name']);
+    expect(branch('project_manage', 'open').required).toEqual(['action', 'path']);
+    expect(branch('project_manage', 'unpack').required).toEqual(['action', 'path', 'destination']);
+    expect(branch('transport_manage', 'seek').required).toEqual(['action', 'tick']);
+    expect(branch('media_manage', 'import').required).toEqual(['action', 'paths']);
+    expect(branch('plugin_manage', 'set-parameter').required).toEqual(['action', 'deviceId', 'parameterId', 'value']);
+    expect(branch('generation_manage', 'accept').required).toEqual(['action', 'jobId', 'candidateId']);
+    expect(branch('job_manage', 'wait').required).toEqual(['action', 'jobId']);
+    expect((contract('project_manage').inputSchema.properties as Record<string, { description?: string }>).destination.description).toContain('authority');
+    expect((contract('project_apply').inputSchema.properties as Record<string, { description?: string }>).clientOperationId.description).toContain('idempotency');
+    expect(JSON.stringify(contract('job_manage').inputSchema)).not.toContain('approve');
+
+    const help = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'aimuse_help', arguments: { topic: 'jobs-and-approvals' } } }, sessionId);
+    const helpText = JSON.parse((((help.message?.result?.content as Array<{ text: string }>)[0]).text)) as Record<string, unknown>;
+    expect(helpText).toMatchObject({ topic: 'jobs-and-approvals', fullGuideResource: 'aimuse://guide' });
+    expect(String(helpText.guidance)).toContain('human must decide');
+    expect(help.message?.result?.structuredContent).toMatchObject({ data: helpText });
+
+    for (const [name, args] of [
+      ['project_manage', { action: 'open' }],
+      ['project_manage', { action: 'list', path: join(root, 'not-allowed') }],
+      ['project_apply', { projectId: projects.getActiveProjectId(), clientOperationId: 'missing-branch-id', label: 'Invalid branch', operations: [{ kind: 'project.rename', name: 'No mutation' }], commitMode: 'branch' }],
+      ['job_manage', { action: 'approve', jobId: 'not-a-job' }],
+    ] as const) {
+      const rejected = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name, arguments: args } }, sessionId);
+      expect(rejected.message?.error).toBeUndefined();
+      expect(rejected.message?.result?.isError).toBe(true);
+    }
+    expect(projects.getActiveProject()).toMatchObject({ name: 'New Song', revision: 0 });
+  });
+
+  it('routes exact resource updates only to subscribed live sessions', async () => {
+    const first = await initialize();
+    const second = await initialize();
+    const project = projects.getActiveProject()!;
+    const manifest = `aimuse://projects/${project.id}/manifest`;
+    const snapshot = `aimuse://projects/${project.id}/snapshot`;
+    const changes = (revision: number) => `aimuse://projects/${project.id}/changes/${revision}`;
+    const subscription = async (sessionId: string, method: 'resources/subscribe' | 'resources/unsubscribe', uri: string) => {
+      const result = await request({ jsonrpc: '2.0', id: createRequestId(), method, params: { uri } }, sessionId);
+      expect(result.message?.error).toBeUndefined();
+      expect(result.message?.result).toEqual({});
+    };
+    const rename = async (name: string, clientOperationId: string, revision: number) => {
+      const transaction: ProjectTransaction = { id: createId('tx'), clientOperationId, projectId: project.id, actor: HUMAN_ACTOR, label: name, createdAt: nowIso(), operations: [{ kind: 'project.rename', name }], checkpointPolicy: 'none' };
+      await expect(projects.apply(transaction, HUMAN_ACTOR)).resolves.toMatchObject({ status: 'committed', revision });
+    };
+    const updatedUris = (stream: NotificationStream) => stream.messages.map((message) => {
+      expect(message.method).toBe('notifications/resources/updated');
+      return message.params?.uri;
+    });
+    const streams: NotificationStream[] = [];
+
+    try {
+      await subscription(first.sessionId, 'resources/subscribe', manifest);
+      await subscription(first.sessionId, 'resources/subscribe', changes(0));
+      await subscription(second.sessionId, 'resources/subscribe', snapshot);
+      const firstStream = await openNotificationStream(first.sessionId); streams.push(firstStream);
+      const secondStream = await openNotificationStream(second.sessionId); streams.push(secondStream);
+
+      await rename('Subscription revision 1', 'subscription-revision-1', 1);
+      await waitForMessages(firstStream, 2);
+      await waitForMessages(secondStream, 1);
+      expect(updatedUris(firstStream).sort()).toEqual([changes(0), manifest].sort());
+      expect(updatedUris(secondStream)).toEqual([snapshot]);
+
+      firstStream.messages.length = 0; secondStream.messages.length = 0;
+      await subscription(first.sessionId, 'resources/subscribe', changes(1));
+      await subscription(first.sessionId, 'resources/unsubscribe', manifest);
+      await subscription(first.sessionId, 'resources/unsubscribe', changes(0));
+      await subscription(first.sessionId, 'resources/unsubscribe', changes(1));
+      await rename('Subscription revision 2', 'subscription-revision-2', 2);
+      await waitForMessages(secondStream, 1);
+      expect(firstStream.messages).toEqual([]);
+      expect(updatedUris(secondStream)).toEqual([snapshot]);
+
+      firstStream.messages.length = 0; secondStream.messages.length = 0;
+      await subscription(first.sessionId, 'resources/subscribe', manifest);
+      await subscription(first.sessionId, 'resources/subscribe', snapshot);
+      await subscription(first.sessionId, 'resources/subscribe', changes(2));
+      await closeSession(first.sessionId, firstStream);
+      const stale = await fetch(url, { method: 'GET', headers: { authorization: `Bearer ${token}`, accept: 'text/event-stream', 'mcp-session-id': first.sessionId } });
+      expect(stale.status).toBe(404);
+
+      const third = await initialize();
+      await subscription(third.sessionId, 'resources/subscribe', manifest);
+      await subscription(third.sessionId, 'resources/subscribe', changes(2));
+      const thirdStream = await openNotificationStream(third.sessionId); streams.push(thirdStream);
+      await rename('Subscription revision 3', 'subscription-revision-3', 3);
+      await waitForMessages(secondStream, 1);
+      await waitForMessages(thirdStream, 2);
+      expect(firstStream.messages).toEqual([]);
+      expect(updatedUris(secondStream)).toEqual([snapshot]);
+      expect(updatedUris(thirdStream).sort()).toEqual([changes(2), manifest].sort());
+
+      await closeSession(second.sessionId, secondStream);
+      await closeSession(third.sessionId, thirdStream);
+    } finally {
+      for (const stream of streams) stream.abort();
+      await Promise.all(streams.map((stream) => stream.done));
+    }
+  });
+
+  it('publishes the twelve tool-first contracts and applies edits with server-authenticated attribution', async () => {
+    const { sessionId, message } = await initialize();
+    expect(message.result).toMatchObject({ protocolVersion: LATEST_PROTOCOL_VERSION, serverInfo: { name: 'aimuse', version: 'test' } });
+
+    const listed = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/list', params: {} }, sessionId);
+    const tools = (listed.message?.result?.tools as Array<{ name: string }>).map((tool) => tool.name).sort();
+    expect(tools).toEqual(['aimuse_help', 'export_manage', 'generation_manage', 'history_manage', 'job_manage', 'media_manage', 'plugin_manage', 'project_apply', 'project_manage', 'project_observe', 'session_manage', 'transport_manage']);
+
+    const joined = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'session_manage', arguments: { action: 'join', name: 'Composer Agent', client: { product: 'contract-test', model: 'fixture' } } } }, sessionId);
+    const joinPayload = JSON.parse((((joined.message?.result?.content as Array<{ text: string }>)[0]).text)) as { actor: { id: string } };
+    const project = projects.getActiveProject()!;
+    const applied = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'project_apply', arguments: { projectId: project.id, clientOperationId: 'contract-rename-1', label: 'Rename through MCP', operations: [{ kind: 'project.rename', name: 'MCP Song' }], commitMode: 'direct' } } }, sessionId);
+    const applyPayload = JSON.parse((((applied.message?.result?.content as Array<{ text: string }>)[0]).text)) as { status: string; revision: number };
+    expect(applyPayload).toMatchObject({ status: 'committed', revision: 1 });
+    expect(projects.getActiveProject()).toMatchObject({ name: 'MCP Song', activity: [{ actor: { id: joinPayload.actor.id, kind: 'agent' } }] });
+
+    const duplicate = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'project_apply', arguments: { projectId: project.id, clientOperationId: 'contract-rename-1', label: 'Rename through MCP', operations: [{ kind: 'project.rename', name: 'MCP Song' }], commitMode: 'direct' } } }, sessionId);
+    expect(JSON.parse((((duplicate.message?.result?.content as Array<{ text: string }>)[0]).text))).toMatchObject({ status: 'duplicate', revision: 1 });
+  });
+
+  it('enforces human entity and time-range locks across authenticated sessions without blocking unrelated work', async () => {
+    const first = await initialize();
+    const second = await initialize();
+    const callTool = async (sessionId: string, name: string, args: Record<string, unknown>): Promise<unknown> => {
+      const response = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name, arguments: args } }, sessionId);
+      expect(response.message?.error).toBeUndefined();
+      const content = response.message?.result?.content as Array<{ text: string }>;
+      expect(content).toHaveLength(1);
+      return JSON.parse(content[0].text) as unknown;
+    };
+    const joinSession = async (sessionId: string, name: string) => {
+      const payload = await callTool(sessionId, 'session_manage', { action: 'join', name }) as { actor: { id: string } };
+      return payload.actor.id;
+    };
+    const firstActorId = await joinSession(first.sessionId, 'Locked Region Agent');
+    const secondActorId = await joinSession(second.sessionId, 'Unrelated Edit Agent');
+    expect(firstActorId).not.toBe(secondActorId);
+
+    const project = projects.getActiveProject()!;
+    const timelineTrack = project.tracks[project.trackOrder[0]];
+    const masterTrack = project.tracks[project.trackOrder[1]];
+    const clip: MidiClip = {
+      ...entityBase('clip', HUMAN_ACTOR), kind: 'midi', trackId: timelineTrack.id, name: 'Lock range fixture', color: '#8b5cf6', startTick: 0, durationTicks: 960,
+      muted: false, gainDb: 0, fadeIn: { durationTicks: 0, curve: 'linear' }, fadeOut: { durationTicks: 0, curve: 'linear' },
+      loopEnabled: false, notes: {}, noteOrder: [], controls: {}, controlOrder: [], pitchBends: {}, pitchBendOrder: [],
+    };
+    await expect(projects.apply({
+      id: createId('tx'), clientOperationId: 'mcp-lock-fixture', projectId: project.id, actor: HUMAN_ACTOR,
+      label: 'Seed lock fixture', createdAt: nowIso(), operations: [{ kind: 'clip.add', clip }], checkpointPolicy: 'none',
+    }, HUMAN_ACTOR)).resolves.toMatchObject({ status: 'committed', revision: 1 });
+
+    const entityLock = projects.acquireLock({ projectId: project.id, entityIds: [masterTrack.id] });
+    const rangeLock = projects.acquireLock({ projectId: project.id, range: { trackId: timelineTrack.id, startTick: 960, endTick: 1_920 } });
+    expect(entityLock).toMatchObject({ acquired: true, lockId: expect.any(String) });
+    expect(rangeLock).toMatchObject({ acquired: true, lockId: expect.any(String) });
+
+    try {
+      const entityConflict = await callTool(first.sessionId, 'project_apply', {
+        projectId: project.id, clientOperationId: 'mcp-entity-lock-conflict', label: 'Conflicting master edit', commitMode: 'direct',
+        operations: [{ kind: 'track.update', trackId: masterTrack.id, changes: { gainDb: -3 }, expectedRevision: masterTrack.revision }],
+      });
+      expect(entityConflict).toEqual({
+        status: 'locked', message: 'A human is actively editing this entity or timeline range.',
+        conflict: { entityId: masterTrack.id, retryable: true },
+      });
+
+      const rangeConflict = await callTool(first.sessionId, 'project_apply', {
+        projectId: project.id, clientOperationId: 'mcp-range-lock-conflict', label: 'Conflicting clip move', commitMode: 'direct',
+        operations: [{ kind: 'clip.move', clipId: clip.id, trackId: timelineTrack.id, startTick: 1_200, expectedRevision: clip.revision }],
+      });
+      expect(rangeConflict).toEqual({
+        status: 'locked', message: 'A human is actively editing this entity or timeline range.',
+        conflict: { retryable: true },
+      });
+
+      const unrelated = await callTool(second.sessionId, 'project_apply', {
+        projectId: project.id, clientOperationId: 'mcp-lock-unrelated-edit', label: 'Unrelated track edit', commitMode: 'direct',
+        operations: [{ kind: 'track.update', trackId: timelineTrack.id, changes: { gainDb: -2 }, expectedRevision: timelineTrack.revision }],
+      });
+      expect(unrelated).toMatchObject({ status: 'committed', revision: 2 });
+      expect(projects.getActiveProject()).toMatchObject({
+        revision: 2,
+        tracks: {
+          [timelineTrack.id]: { gainDb: -2, revision: 1, updatedBy: secondActorId },
+          [masterTrack.id]: { gainDb: masterTrack.gainDb, revision: masterTrack.revision },
+        },
+        clips: { [clip.id]: { startTick: clip.startTick, revision: clip.revision } },
+      });
+    } finally {
+      projects.releaseLock(entityLock.lockId!);
+      projects.releaseLock(rangeLock.lockId!);
+    }
+  });
+
+  it('keeps job payloads and cancellation authority scoped to the owning session', async () => {
+    const first = await initialize();
+    const second = await initialize();
+    const callTool = async (sessionId: string, name: string, args: Record<string, unknown>): Promise<unknown> => {
+      const response = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name, arguments: args } }, sessionId);
+      expect(response.message?.error).toBeUndefined();
+      const content = response.message?.result?.content as Array<{ text: string }>;
+      expect(content).toHaveLength(1);
+      return JSON.parse(content[0].text) as unknown;
+    };
+    const joinSession = async (sessionId: string, name: string) => {
+      const payload = await callTool(sessionId, 'session_manage', { action: 'join', name }) as { actor: { id: string } };
+      return payload.actor.id;
+    };
+    const firstActorId = await joinSession(first.sessionId, 'Job Owner A');
+    await joinSession(second.sessionId, 'Job Observer B');
+    const timestamp = nowIso();
+    const projectId = projects.getActiveProject()!.id;
+    const ownerOnly = 'owner-a-private-payload-sentinel';
+    const cancellable: AsyncJob = { id: 'job-owner-cancellable', ownerActorId: firstActorId, projectId, kind: 'generation', status: 'running', progress: 0.4, message: 'Owner job running.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, result: { ownerOnly } };
+    const completed: AsyncJob = { id: 'job-owner-completed', ownerActorId: firstActorId, projectId, kind: 'analysis', status: 'completed', progress: 1, message: 'Owner job complete.', createdAt: timestamp, updatedAt: timestamp, cancellable: false, result: { ownerOnly, output: 'analysis-result' } };
+    const approval: AsyncJob = { id: 'job-owner-approval', ownerActorId: firstActorId, projectId, kind: 'approval', status: 'waiting-for-user', progress: 0, message: 'Owner approval required.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, approval: { kind: 'file-read', summary: 'Read owner fixture', request: { ownerOnly, path: join(root, 'owner-fixture.wav') }, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+    projects.upsertJob(cancellable); projects.upsertJob(completed); projects.upsertJob(approval);
+
+    const foreignList = await callTool(second.sessionId, 'job_manage', { action: 'list' });
+    const foreignInspect = await callTool(second.sessionId, 'job_manage', { action: 'inspect', jobId: completed.id });
+    const foreignWait = await callTool(second.sessionId, 'job_manage', { action: 'wait', jobId: cancellable.id, timeoutMs: 1 });
+    const foreignDependency = await callTool(second.sessionId, 'job_manage', { action: 'approval-dependency', jobId: approval.id });
+    const foreignGenerationInspect = await callTool(second.sessionId, 'generation_manage', { action: 'inspect', jobId: completed.id });
+    const beforeForeignCancel = projects.getJob(cancellable.id);
+    const foreignCancel = await callTool(second.sessionId, 'job_manage', { action: 'cancel', jobId: cancellable.id });
+    expect(foreignList).toEqual([]);
+    expect(foreignInspect).toEqual({ error: 'job_not_found' });
+    expect(foreignWait).toEqual({ error: 'job_not_found' });
+    expect(foreignDependency).toEqual({ error: 'job_not_found' });
+    expect(foreignGenerationInspect).toEqual({ error: 'generation_job_not_found' });
+    expect(foreignCancel).toEqual({ error: 'job_not_found' });
+    expect(JSON.stringify([foreignList, foreignInspect, foreignWait, foreignDependency, foreignGenerationInspect, foreignCancel])).not.toContain(ownerOnly);
+    expect(projects.getJob(cancellable.id)).toEqual(beforeForeignCancel);
+
+    const ownerList = await callTool(first.sessionId, 'job_manage', { action: 'list' }) as Array<{ id: string }>;
+    expect(ownerList.map((job) => job.id).sort()).toEqual([approval.id, cancellable.id, completed.id].sort());
+    const ownerInspect = await callTool(first.sessionId, 'job_manage', { action: 'inspect', jobId: completed.id });
+    expect(ownerInspect).toMatchObject({ id: completed.id, status: 'completed', result: { ownerOnly, output: 'analysis-result' } });
+    const ownerDependency = await callTool(first.sessionId, 'job_manage', { action: 'approval-dependency', jobId: approval.id });
+    expect(ownerDependency).toMatchObject({ id: approval.id, status: 'waiting-for-user', dependency: { type: 'user-approval', approval: { request: { ownerOnly } } } });
+    const ownerWait = await callTool(first.sessionId, 'job_manage', { action: 'wait', jobId: cancellable.id, timeoutMs: 0 });
+    expect(ownerWait).toMatchObject({ id: cancellable.id, status: 'running' });
+    const ownerCancel = await callTool(first.sessionId, 'job_manage', { action: 'cancel', jobId: cancellable.id });
+    expect(ownerCancel).toMatchObject({ id: cancellable.id, status: 'cancelled', message: 'Cancelled.' });
+    expect(projects.getJob(cancellable.id)).toMatchObject({ status: 'cancelled' });
+    expect(await callTool(second.sessionId, 'job_manage', { action: 'list' })).toEqual([]);
+  });
+
+  it('keeps file approvals owner-private and records an authorized save as durable non-undoable actor audit', async () => {
+    const allowedRoot = join(root, 'file-authority', 'allowed');
+    const outsideRoot = join(root, 'file-authority', 'outside');
+    await mkdir(allowedRoot, { recursive: true });
+    await mkdir(outsideRoot, { recursive: true });
+    const now = Date.now();
+    const policy: AuthorityPolicy = {
+      version: 1, id: 'mcp-file-authority', issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), maxRuntimeMinutes: 5,
+      budget: { currency: 'USD', maxSpendMinor: 0, maxGenerationRequests: 0, maxUnknownCostRequests: 0 }, providers: {}, readRoots: [], writeRoots: [allowedRoot], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
+    };
+    await expect(authority.install(policy)).resolves.toEqual({ installed: true });
+
+    const first = await initialize();
+    const second = await initialize();
+    const callTool = async (sessionId: string, name: string, args: Record<string, unknown>) => {
+      const response = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name, arguments: args } }, sessionId);
+      expect(response.message?.error).toBeUndefined();
+      expect(response.message?.result?.isError).not.toBe(true);
+      const content = response.message?.result?.content as Array<{ text: string }>;
+      return { payload: JSON.parse(content[0].text) as Record<string, unknown>, result: response.message?.result };
+    };
+    const joinSession = async (sessionId: string, name: string) => ((await callTool(sessionId, 'session_manage', { action: 'join', name })).payload.actor as { id: string }).id;
+    const firstActorId = await joinSession(first.sessionId, 'File Approval Owner');
+    const secondActorId = await joinSession(second.sessionId, 'Authorized Saver');
+    expect(firstActorId).not.toBe(secondActorId);
+
+    const project = projects.getActiveProject()!;
+    const initialRevision = project.revision;
+    const initialActivity = project.activity;
+    const privateSentinel = 'owner-only-outside-save-sentinel';
+    const outsideTarget = join(outsideRoot, privateSentinel);
+    const queued = (await callTool(first.sessionId, 'project_manage', { action: 'save', projectId: project.id, path: outsideTarget })).payload;
+    const jobId = String(queued.jobId);
+    expect(queued).toMatchObject({ jobId: expect.any(String), status: 'waiting-for-user', dependency: { type: 'user-approval', approval: { kind: 'file-write', request: { action: 'save', projectId: project.id, path: expect.stringContaining(privateSentinel) } } }, next: { tool: 'job_manage', humanRequired: true } });
+    expect(projects.listJobs()).toHaveLength(1);
+    expect(projects.listJobs(firstActorId)).toEqual([expect.objectContaining({ id: jobId, ownerActorId: firstActorId, status: 'waiting-for-user' })]);
+    expect(projects.listJobs(secondActorId)).toEqual([]);
+    expect(projects.snapshot().jobs).toEqual([expect.objectContaining({ id: jobId, approval: expect.any(Object) })]);
+    expect(projects.snapshot(secondActorId).jobs).toEqual([]);
+    await expect(access(outsideTarget)).rejects.toThrow();
+    await expect(access(`${outsideTarget}.aimuse`)).rejects.toThrow();
+
+    const ownerWait = (await callTool(first.sessionId, 'job_manage', { action: 'wait', jobId, timeoutMs: 0 })).payload;
+    expect(ownerWait).toMatchObject({ id: jobId, status: 'waiting-for-user', dependency: { type: 'user-approval' }, next: { tool: 'job_manage', humanRequired: true } });
+    const foreignTool = (await callTool(second.sessionId, 'job_manage', { action: 'inspect', jobId })).payload;
+    expect(foreignTool).toEqual({ error: 'job_not_found' });
+
+    const readJsonResource = async (sessionId: string, uri: string) => {
+      const response = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'resources/read', params: { uri } }, sessionId);
+      const content = response.message?.result?.contents as Array<{ text: string }> | undefined;
+      return { response, value: content ? JSON.parse(content[0].text) as unknown : undefined };
+    };
+    const ownerSessions = await readJsonResource(first.sessionId, 'aimuse://sessions');
+    const foreignSessions = await readJsonResource(second.sessionId, 'aimuse://sessions');
+    expect(ownerSessions.value).toMatchObject({ jobs: [expect.objectContaining({ id: jobId, dependency: expect.objectContaining({ type: 'user-approval' }) })] });
+    expect(foreignSessions.value).toMatchObject({ jobs: [] });
+    expect(JSON.stringify(foreignSessions.value)).not.toContain(privateSentinel);
+    expect(JSON.stringify(foreignSessions.value)).not.toContain(jobId);
+
+    const ownerResource = await readJsonResource(first.sessionId, `aimuse://jobs/${jobId}`);
+    expect(ownerResource.value).toMatchObject({ id: jobId, dependency: { approval: { request: { path: expect.stringContaining(privateSentinel) } } } });
+    const foreignResource = await readJsonResource(second.sessionId, `aimuse://jobs/${jobId}`);
+    const missingResource = await readJsonResource(second.sessionId, 'aimuse://jobs/job-does-not-exist');
+    expect(foreignResource.response.message?.error).toMatchObject({ code: missingResource.response.message?.error?.code, message: missingResource.response.message?.error?.message });
+    expect(JSON.stringify(foreignResource.response.message?.error)).not.toContain(privateSentinel);
+    expect(JSON.stringify(foreignResource.response.message?.error)).not.toContain(jobId);
+
+    const approvedTarget = join(allowedRoot, 'session-b-owned-save');
+    const saved = (await callTool(second.sessionId, 'project_manage', { action: 'save', projectId: project.id, path: approvedTarget })).payload;
+    expect(saved).toMatchObject({ projectPath: expect.stringMatching(/session-b-owned-save\.aimuse$/i), warnings: [], audit: { version: 1, type: 'file.saved', projectId: project.id, actor: { id: secondActorId, kind: 'agent', name: 'Authorized Saver' }, outcome: 'succeeded', recordedAt: expect.any(String) } });
+    const savedPath = String(saved.projectPath);
+    await expect(access(join(savedPath, 'project.json'))).resolves.toBeUndefined();
+    const persistedAudit = JSON.parse((await readFile(join(savedPath, 'activity', 'file-audit.jsonl'), 'utf8')).trim()) as Record<string, unknown>;
+    expect(persistedAudit).toEqual(saved.audit);
+    expect(JSON.stringify(persistedAudit)).not.toContain(savedPath);
+    expect(JSON.stringify(persistedAudit)).not.toContain(privateSentinel);
+    expect(projects.getActiveProject()).toMatchObject({ revision: initialRevision, dirty: false, activity: initialActivity });
+    expect(projects.snapshot(secondActorId).canUndo).toBe(false);
+
+    const observed = (await callTool(second.sessionId, 'project_observe', { projectId: project.id, includeFileAudit: true })).payload;
+    expect(observed).toMatchObject({ revision: initialRevision, fileAudit: [persistedAudit] });
+    expect(JSON.stringify(observed.fileAudit)).not.toContain(savedPath);
+    expect(JSON.stringify(observed.fileAudit)).not.toContain(privateSentinel);
+    expect(projects.listJobs()).toEqual([expect.objectContaining({ id: jobId, ownerActorId: firstActorId, status: 'waiting-for-user' })]);
+    await expect(access(outsideTarget)).rejects.toThrow();
+    await expect(access(`${outsideTarget}.aimuse`)).rejects.toThrow();
+  });
+
+  it('caps concurrent sessions at 32 and releases capacity on MCP DELETE', async () => {
+    const sessions: string[] = [];
+    for (let index = 0; index < 32; index += 1) sessions.push((await initialize()).sessionId);
+    const overflow = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'overflow', version: '1' } } });
+    expect(overflow.response.status).toBe(503);
+    expect(overflow.response.headers.get('retry-after')).toBe('5');
+
+    const removed = await fetch(url, { method: 'DELETE', headers: { authorization: `Bearer ${token}`, accept: 'application/json, text/event-stream', 'mcp-session-id': sessions[0] } });
+    expect([200, 202, 204]).toContain(removed.status);
+    expect((await initialize()).sessionId).toBeTruthy();
+  });
+});

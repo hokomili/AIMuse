@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "reviewStatus": "pinned-for-audit",
+  "dependencies": {
+    "vst3sdk": {
+      "repository": "https://github.com/steinbergmedia/vst3sdk.git",
+      "tag": "v3.8.0_build_66",
+      "revision": "9fad9770f2ae8542ab1a548a68c1ad1ac690abe0",
+      "license": "VST 3 SDK License / GPLv3 dual option; AIMuse uses the proprietary-compatible VST 3 SDK terms, pending distribution review"
+    },
+    "clap": {
+      "repository": "https://github.com/free-audio/clap.git",
+      "tag": "1.2.10",
+      "revision": "195b42a004144fab0b3cf95e9c067187d15365b7",
+      "license": "MIT"
+    },
+    "miniaudio": {
+      "repository": "https://github.com/mackron/miniaudio.git",
+      "tag": "0.11.25",
+      "revision": "9634bedb5b5a2ca38c1ee7108a9358a4e233f14d",
+      "license": "MIT No Attribution / public domain"
+    },
+    "signalsmith-stretch": {
+      "repository": "https://github.com/Signalsmith-Audio/signalsmith-stretch.git",
+      "tag": "main@2026-08-04",
+      "revision": "57b93f4e9206a089a45387eaa39bdc9f310d3308",
+      "license": "MIT"
+    }
+  },
+  "notes": [
+    "Revisions are immutable inputs. The Windows native/package script fetches the pinned miniaudio revision for WASAPI; macOS structural tests fetch no audio SDK and runtime packaging remains blocked pending CoreAudio. Plug-in SDKs and Signalsmith remain opt-in.",
+    "The separately licensed ASIO bridge is intentionally absent from this repository.",
+    "Release engineering must change reviewStatus to audited only after source, license, and SBOM review."
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "rootFiles": [
+    ".gitattributes",
+    ".gitignore",
+    ".nvmrc",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "eslint.config.mjs",
+    "forge.config.ts",
+    "index.html",
+    "package-lock.json",
+    "package.json",
+    "playwright.config.ts",
+    "playwright.renderer.config.ts",
+    "tsconfig.json",
+    "vite.main.config.ts",
+    "vite.preload.config.ts",
+    "vite.renderer.config.ts",
+    "vitest.config.ts",
+    "vitest.macos.config.ts",
+    "vitest.performance.config.ts"
+  ],
+  "trees": [
+    ".github/workflows",
+    "docs",
+    "e2e",
+    "native/cmake",
+    "native/src",
+    "native/tests",
+    "packages/core/src",
+    "scripts",
+    "src",
+    "tests"
+  ],
+  "files": [
+    "native/CMakeLists.txt",
+    "native/dependency-lock.json",
+    "packages/core/package.json"
+  ],
+  "neverTrackRootNames": [
+    ".agents",
+    ".codex",
+    "connection.json",
+    "identity-01-target.dat",
+    "identity-02-target.dat",
+    "identity-03-target.dat",
+    "identity-04-target.dat",
+    "identity-05-target.dat",
+    "rename-visibility.json",
+    "test-results"
+  ]
+}

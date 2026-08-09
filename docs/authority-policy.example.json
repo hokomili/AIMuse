@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "id": "example-autonomous-session",
+  "issuedAt": "2026-08-04T00:00:00.000Z",
+  "expiresAt": "2026-08-05T00:00:00.000Z",
+  "maxRuntimeMinutes": 240,
+  "budget": {
+    "currency": "USD",
+    "maxSpendMinor": 1000,
+    "maxGenerationRequests": 20,
+    "maxUnknownCostRequests": 0
+  },
+  "providers": {
+    "elevenlabs": {
+      "models": ["music_v2", "eleven_text_to_sound_v2"],
+      "enabled": true
+    }
+  },
+  "readRoots": ["C:\\Users\\you\\Music\\AIMuse Inputs"],
+  "writeRoots": ["C:\\Users\\you\\Music\\AIMuse Exports"],
+  "overwritePaths": [],
+  "pluginAllowlist": [],
+  "allowMicrophone": false,
+  "allowMidiInput": false,
+  "allowMidiOutput": false
+}
+
