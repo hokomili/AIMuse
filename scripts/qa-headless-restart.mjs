@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { access, lstat, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { atomicWriteJsonEvidence } from './qa-evidence.mjs';
+import { resolveSubjectPath, verifyPackageSubject } from './package-subject.mjs';
 import { inspectOwnerPrivatePath as inspectPrivatePath, protectOwnerPrivateRoot as protectRunRoot } from './qa-private-root.mjs';
 
 export { assertPrivateWindowsAcl } from './qa-private-root.mjs';
@@ -17,7 +18,7 @@ const PRIVATE_CREDENTIAL_KEYS = new Set(['apikey', 'authorization', 'password', 
 const HELP = `AIMuse isolated headless bootstrap/restart acceptance
 
 Usage:
-  node scripts/qa-headless-restart.mjs --exe <AIMuse.exe> --expected-sha256 <64 hex> --run-root <new directory below test-results>
+  node scripts/qa-headless-restart.mjs --exe <AIMuse executable> --expected-sha256 <64 hex> --run-root <new directory below test-results> [--package-subject-manifest <json> --package-subject-manifest-sha256 <sha256>]
 
 The run root must not already exist. On Windows this command must run as one
 whole command outside the filesystem sandbox so the packaged process and its
@@ -43,6 +44,48 @@ function required(values, key) {
   const value = values.get(key);
   if (!value) throw new Error(`--${key} is required.`);
   return value;
+}
+
+export function resolvePackageSubjectRequest(values, environment = process.env) {
+  const manifestValue = values.get('package-subject-manifest') ?? environment.AIMUSE_PACKAGE_SUBJECT_MANIFEST;
+  const digestValue = values.get('package-subject-manifest-sha256') ?? environment.AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256;
+  if (!manifestValue && !digestValue) return undefined;
+  if (!manifestValue || !digestValue) throw new Error('Package subject binding requires both --package-subject-manifest/AIMUSE_PACKAGE_SUBJECT_MANIFEST and --package-subject-manifest-sha256/AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256.');
+  if (!SHA256.test(digestValue)) throw new Error('Package subject manifest SHA-256 must be 64 hexadecimal characters.');
+  return { manifestPath: resolve(manifestValue), expectedManifestSha256: digestValue.toUpperCase() };
+}
+
+export async function verifyHeadlessPackageSubject({ exe, request, workspace = resolve('.'), platform = process.platform, verifySubject = verifyPackageSubject }) {
+  if (!request) return undefined;
+  const result = await verifySubject({ workspace, manifestPath: request.manifestPath, expectedManifestSha256: request.expectedManifestSha256, platform });
+  const identity = result?.manifest?.subject?.identitySha256;
+  const declaredExecutable = result?.manifest?.subject?.files?.applicationExecutable?.path;
+  if (typeof identity !== 'string' || !SHA256.test(identity) || typeof declaredExecutable !== 'string') throw new Error('Verified package subject did not return a complete subject identity.');
+  const subjectExecutable = resolveSubjectPath(workspace, declaredExecutable);
+  if (resolve(exe) !== subjectExecutable) throw new Error(`Headless --exe does not match the verified package subject executable: ${exe}`);
+  const binding = { manifestPath: resolve(result.manifestPath), manifestSha256: String(result.manifestSha256).toUpperCase(), subjectIdentitySha256: identity.toUpperCase() };
+  if (binding.manifestPath !== resolve(request.manifestPath) || binding.manifestSha256 !== request.expectedManifestSha256) throw new Error('Verified package subject result does not match the requested manifest binding.');
+  return binding;
+}
+
+export function assertPackageSubjectEvidence(value, expected) {
+  if (!expected) {
+    if (value !== undefined) throw new Error('Unexpected package subject evidence in a non-formal headless cycle.');
+    return true;
+  }
+  const evidence = asRecord(value, 'Headless package subject evidence');
+  if (resolve(evidence.manifestPath) !== expected.manifestPath || String(evidence.manifestSha256).toUpperCase() !== expected.manifestSha256 || String(evidence.subjectIdentitySha256).toUpperCase() !== expected.subjectIdentitySha256) throw new Error('Headless package subject evidence does not match the verified subject binding.');
+  return true;
+}
+
+function assertPackageSubjectStable(before, after) {
+  assertPackageSubjectEvidence(after, before);
+}
+
+export async function reverifyHeadlessPackageSubjectAtRestart(options) {
+  const current = await verifyHeadlessPackageSubject(options);
+  assertPackageSubjectStable(options.before, current);
+  return current;
 }
 
 function within(root, path) {
@@ -112,7 +155,22 @@ async function inspectWindow(pid) {
   return { mainWindowHandle: 0, mainWindowTitle: '', checkedBy: 'exact-pid-process-window-state' };
 }
 
+export function parseDarwinRelevantProcesses(output) {
+  const names = new Set(['AIMuse', 'aimuse-audio', 'aimuse-plugin-scanner', 'aimuse-plugin-bridge']);
+  return output.split(/\r?\n/u).flatMap((line) => {
+    const match = line.match(/^\s*(\d+)\s+(.+)$/u);
+    if (!match) return [];
+    const name = basename(match[2].trim());
+    if (!names.has(name) && !/^AIMuse Helper(?: \(.+\))?$/u.test(name)) return [];
+    return [{ name, pid: Number(match[1]) }];
+  });
+}
+
 async function relevantProcesses() {
+  if (process.platform === 'darwin') {
+    const result = await runCommand('/bin/ps', ['-ww', '-axo', 'pid=,comm=']);
+    return parseDarwinRelevantProcesses(result.stdout);
+  }
   if (process.platform !== 'win32') return [];
   const script = [
     "$names = @('AIMuse', 'aimuse-audio', 'aimuse-plugin-scanner', 'aimuse-plugin-bridge')",
@@ -188,7 +246,7 @@ async function runNodeScript(script, arguments_) {
   return runCommand(process.execPath, [resolve(script), ...arguments_]);
 }
 
-async function runCycle({ cycleName, exe, profile, authorityPolicy, trustedFolder, runRoot, privateRoot }) {
+async function runCycle({ cycleName, exe, profile, authorityPolicy, trustedFolder, runRoot, privateRoot, packageSubject }) {
   const cycleRoot = join(runRoot, cycleName);
   const connectionPath = join(cycleRoot, 'connection.json');
   const manifestPath = join(cycleRoot, 'session.json');
@@ -200,14 +258,24 @@ async function runCycle({ cycleName, exe, profile, authorityPolicy, trustedFolde
   let cycleResult;
   const cleanupErrors = [];
 
+  await mkdir(cycleRoot, { recursive: false, mode: 0o700 });
+  await inspectPrivatePath(cycleRoot, privateRoot);
+
   try {
     const startResult = await runNodeScript('scripts/qa-session.mjs', [
       'start', '--exe', exe, '--private-root', runRoot, '--profile', profile, '--connection', connectionPath, '--manifest', manifestPath,
       '--mode', 'headless', '--launch-context', 'unsandboxed-gui', '--authority-policy', authorityPolicy,
       '--trust-folder', trustedFolder,
+      ...(packageSubject ? ['--package-subject-manifest', packageSubject.manifestPath, '--package-subject-manifest-sha256', packageSubject.manifestSha256] : []),
     ]);
     const manifest = parseJsonOutput(startResult, `${cycleName} start`);
     started = true;
+    const manifestPackageSubject = [manifest.packageSubjectManifest, manifest.packageSubjectManifestSha256, manifest.packageSubjectIdentitySha256].some((value) => value !== undefined) ? {
+      manifestPath: manifest.packageSubjectManifest,
+      manifestSha256: manifest.packageSubjectManifestSha256,
+      subjectIdentitySha256: manifest.packageSubjectIdentitySha256,
+    } : undefined;
+    assertPackageSubjectEvidence(manifestPackageSubject, packageSubject);
     if (manifest.mode !== 'headless' || manifest.windowRequested !== false) throw new Error(`${cycleName} did not start in the declared no-window mode.`);
     const connection = assertConnection(JSON.parse(await readFile(connectionPath, 'utf8')), manifest, trustedFolder);
     liveCredential = connection.token;
@@ -260,6 +328,7 @@ async function runCycle({ cycleName, exe, profile, authorityPolicy, trustedFolde
         authenticatedMcpJoinedAndClosed: true,
         stopOutcome: stop.stopOutcome,
         connectionCredentialsRedacted: true,
+        ...(packageSubject ? { packageSubject } : {}),
       },
       credential: liveCredential,
     };
@@ -282,27 +351,39 @@ async function runCycle({ cycleName, exe, profile, authorityPolicy, trustedFolde
 }
 
 async function writeReport(path, summary) {
-  const cycleLines = summary.cycles.map((cycle) => `- ${cycle.cycle}: PID \`${cycle.pid}\`, instance \`${cycle.instanceId}\`, profile \`${cycle.profileId}\`, no window handle/title, authenticated MCP join/DELETE, stop \`${cycle.stopOutcome}\`, connection redacted.`).join('\n');
+  const cycleLines = summary.cycles.map((cycle) => {
+    const windowEvidence = cycle.window.checkedBy === 'not-applicable'
+      ? 'no editor window requested (direct OS window enumeration was not applicable)'
+      : 'exact-PID window inspection found no window handle or title';
+    return `- ${cycle.cycle}: PID \`${cycle.pid}\`, instance \`${cycle.instanceId}\`, profile \`${cycle.profileId}\`, ${windowEvidence}, authenticated MCP join/DELETE, stop \`${cycle.stopOutcome}\`, connection redacted.`;
+  }).join('\n');
+  const rootProtection = summary.privateRoot.platform === 'win32'
+    ? 'Windows inheritance was removed and ACL access was limited to the launching user, SYSTEM, and Administrators'
+    : 'POSIX mode and ownership checks limited access to the launching user';
+  const windowBoundary = summary.cycles.every((cycle) => cycle.window.checkedBy !== 'not-applicable')
+    ? 'Exact-PID process-window inspection returned handle `0` and an empty title in both cycles.'
+    : 'The harness requested no window and health declared `uiRequired: false`; direct macOS window enumeration belongs to the separate Computer Use gate.';
   const report = `# AIMuse AGT-04 isolated headless bootstrap/restart acceptance
 
 ## Outcome
 
 - **PASS** for exact executable SHA-256 \`${summary.executable.sha256}\` at \`${summary.executable.path}\`.
+${summary.packageSubject ? `- Package subject manifest \`${summary.packageSubject.manifestPath}\`, digest \`${summary.packageSubject.manifestSha256}\`, subject identity \`${summary.packageSubject.subjectIdentitySha256}\`.` : ''}
 - This is a test-owned headless lifecycle acceptance, not a Luna/high certificate and not evidence for provider credentials, provider traffic, real UI, Electron renderer serialization, or Computer Use.
 
 ## Evidence
 
 - Fresh protected run root: \`${summary.runRoot}\`.
-- The root was absent before creation and its Windows inheritance was removed before any localhost bearer token existed. ACL access is limited to the launching user, SYSTEM, and Administrators.
+- The root was absent before creation; ${rootProtection} before any localhost bearer token existed.
 - Authority policy installed with zero provider/generation budget and the exact run-owned trusted folder was returned by both private connection handoffs.
 ${cycleLines}
 - Restart used the same isolated profile identity but a distinct PID and fresh engine instance UUID. Each cycle authenticated from its newly read private handoff; the protected localhost token was ${summary.restart.credentialDisposition} across restart, and neither its value nor a derived hash is retained in this report.
 - After both graceful stops, connection and MCP client state were credential-redacted, neither live token occurred anywhere below the run root, the provider credential file was absent, and the exact executable hash was unchanged.
-- Exact-PID process-window inspection returned handle \`0\` and an empty title in both cycles. The harness never requested show/attach and never acquired or injected desktop input.
+- ${windowBoundary} The harness never requested show/attach and never acquired or injected desktop input.
 
 ## Boundaries
 
-- The immutable \`9F82CC2C…A758C\` infrastructure-BLOCKED Luna/high report remains unchanged and closed; this separate run does not earn its missing real provider-safeStorage/Electron leakage assertions.
+- This test-owned run does not replace or amend any formal independent Computer Use report and does not earn real provider-safeStorage/Electron leakage assertions.
 - No provider was configured, no provider/external/paid request occurred, and no real user/global configuration or credential was read.
 - No force termination or unrelated-process control was used.
 `;
@@ -315,6 +396,7 @@ async function main() {
   const exe = resolve(required(values, 'exe'));
   const expectedSha256 = required(values, 'expected-sha256').toUpperCase();
   const runRoot = resolve(required(values, 'run-root'));
+  const packageSubjectRequest = resolvePackageSubjectRequest(values);
   const testResultsRoot = resolve('test-results');
   if (!SHA256.test(expectedSha256)) throw new Error('--expected-sha256 must be 64 hexadecimal characters.');
   if (!within(testResultsRoot, runRoot) || runRoot === testResultsRoot) throw new Error(`--run-root must be a new child below ${testResultsRoot}.`);
@@ -322,6 +404,7 @@ async function main() {
   await access(exe);
   const initialHash = await sha256(exe);
   if (initialHash !== expectedSha256) throw new Error(`Executable hash mismatch: expected ${expectedSha256}, received ${initialHash}.`);
+  const packageSubject = await verifyHeadlessPackageSubject({ exe, request: packageSubjectRequest });
   const initialProcesses = await relevantProcesses();
   if (initialProcesses.length) throw new Error('Refusing to start while an AIMuse process already exists.');
 
@@ -349,8 +432,9 @@ async function main() {
   } });
   await inspectPrivatePath(authorityPolicy, privateRoot);
 
-  const first = await runCycle({ cycleName: 'cycle-1', exe, profile, authorityPolicy, trustedFolder, runRoot, privateRoot });
-  const second = await runCycle({ cycleName: 'cycle-2', exe, profile, authorityPolicy, trustedFolder, runRoot, privateRoot });
+  const first = await runCycle({ cycleName: 'cycle-1', exe, profile, authorityPolicy, trustedFolder, runRoot, privateRoot, packageSubject });
+  const restartPackageSubject = await reverifyHeadlessPackageSubjectAtRestart({ exe, request: packageSubjectRequest, before: packageSubject });
+  const second = await runCycle({ cycleName: 'cycle-2', exe, profile, authorityPolicy, trustedFolder, runRoot, privateRoot, packageSubject: restartPackageSubject });
   const restart = validateRestartIdentity(first.privateSummary, second.privateSummary);
   const tokenContinuity = first.credential === second.credential;
   await assertNoCredentialBytes(runRoot, [first.credential, second.credential]);
@@ -365,6 +449,7 @@ async function main() {
     outcome: 'PASS',
     runRoot,
     executable: { path: exe, sha256: finalHash, byteLength: (await stat(exe)).size },
+    ...(packageSubject ? { packageSubject } : {}),
     privateRoot: { platform: privateRoot.platform, owner: privateRoot.owner, allowedPrincipals: privateRoot.allowedPrincipals, inheritedFromBroadParent: privateRoot.inheritedFromBroadParent },
     authority: { policy: authorityPolicy, trustedFolder, providersConfigured: false, maximumSpendMinor: 0 },
     cycles: [first.privateSummary, second.privateSummary],

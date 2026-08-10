@@ -9,7 +9,8 @@ AIMuse is pre-release software. Do not use this alpha as the sole copy of import
 - Autonomous access is deny-by-default and limited by a process-lifetime `AuthorityPolicy`.
 - Media bytes enter through controlled import, provider, recording contract, or render jobs. Project operations do not accept inline bytes.
 - Project extraction rejects absolute/traversal paths, excessive entry counts, excessive total size and unsafe compression ratios.
-- Provider credentials use Electron `safeStorage` (Windows protected storage today; a Keychain-backed boundary is declared but unverified on macOS) and are not written to project files.
+- Provider credentials use Electron `safeStorage` and are not written to project files. A packaged macOS headless restart proves encryption and later decryption of the local MCP token through the same Keychain-backed adapter; real provider setter/IPC serialization, locked-Keychain behavior and prompt UX remain unverified.
+- Local macOS QA packages are hardened-runtime and ad-hoc signed with a development-only library-validation entitlement so Electron's separately signed framework can load. Developer ID builds select the stricter entitlement files; only those identity-signed, notarized and stapled bytes are eligible for distribution review.
 - Root-local MCP connection, coordinator, profile and retained QA evidence is never source. The initial Git snapshot must use the allowlist in `docs/INITIAL_COMMIT.md`, never a repository-root wildcard.
 - Third-party plug-ins are intended to run outside the canonical engine process. The current alpha does not yet provide production SDK-backed hosting; do not interpret its process shells as a completed sandbox.
 

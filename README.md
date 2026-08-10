@@ -33,7 +33,7 @@ The packaged app is written to `out\AIMuse-win32-x64`. Level 2 adds the exact pa
 
 ## Prepare on macOS
 
-The repository now has a source-transfer and structural macOS verification lane, but no CoreAudio runtime or Mac package claim. On a macOS host, use `nvm install`, `nvm use`, `npm ci`, then `npm run verify:macos`. That command builds only native DSP/playback/parser tests; runtime binaries and packaging fail closed until CoreAudio, Keychain, signing, entitlements and native package verification are implemented and accepted. See [macOS development structure](docs/MACOS_DEVELOPMENT.md).
+The repository has an executable macOS development lane. On a macOS host, use `nvm install`, `nvm use`, `npm ci`, then `npm test` and `npm run verify:macos`; run `npm run macos:coreaudio-smoke` from a real user session for bounded shared-device soak/restart evidence, and `npm run package` for a verified local `out/AIMuse-darwin-<arch>/AIMuse.app`. The ordinary test entry point preserves the full Windows suite while routing exactly the sealed Windows-only partition away from Darwin. Local arm64 runtime/package, x64 and universal package composition, provider-Keychain setter persistence with synthetic values, AAC/M4A metadata admission and Mac plug-in bundle discovery have development evidence. The app remains ad-hoc signed and not notarized; physical hot-plug/Keychain-denial evidence, SDK-backed plug-in hosting, compressed decode/export, x64-hardware/universal per-slice runtime and formal fresh-task Computer Use remain unearned. See [macOS development](docs/MACOS_DEVELOPMENT.md) and the [macOS gate matrix](docs/MACOS_GATE_MATRIX.md).
 
 ## Lifecycle
 
@@ -44,6 +44,14 @@ The repository now has a source-transfer and structural macOS verification lane,
 ```
 
 Autonomous bootstrap can additionally use repeatable `--trust-folder=C:\absolute\folder` flags and `--authority-policy=C:\absolute\policy.json`. The connection file contains a bearer token: create its parent with an owner-only operating-system ACL before launch, re-read the handoff after every restart, and redact or remove it when the controller is done. Node's `0o600` mode alone is not a Windows ACL boundary. Closing the editor leaves the engine alive by design. `--quit-engine` shuts down both surfaces cleanly.
+
+On macOS, invoke the packaged executable inside the app bundle when passing lifecycle flags:
+
+```sh
+./out/AIMuse-darwin-arm64/AIMuse.app/Contents/MacOS/AIMuse
+./out/AIMuse-darwin-arm64/AIMuse.app/Contents/MacOS/AIMuse --headless --write-mcp-connection=/absolute/owner-private/aimuse-mcp.json
+./out/AIMuse-darwin-arm64/AIMuse.app/Contents/MacOS/AIMuse --quit-engine
+```
 
 ## Documentation
 
@@ -57,5 +65,6 @@ Autonomous bootstrap can additionally use repeatable `--trust-folder=C:\absolute
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Initial Git snapshot boundary](docs/INITIAL_COMMIT.md)
 - [macOS development structure](docs/MACOS_DEVELOPMENT.md)
+- [macOS acceptance gate matrix](docs/MACOS_GATE_MATRIX.md)
 - [Security policy](SECURITY.md)
 - [Third-party and licensing status](THIRD_PARTY_NOTICES.md)

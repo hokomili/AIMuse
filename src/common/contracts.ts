@@ -45,6 +45,7 @@ export interface HumanLock {
   entityIds: Id[];
   range?: { trackId?: Id; startTick: number; endTick: number };
   parameter?: { deviceId: Id; parameterId: string };
+  phase: 'gesture' | 'grace';
   acquiredAt: string;
   expiresAt: string;
 }
@@ -154,8 +155,9 @@ export interface AIMuseDesktopAPI {
   saveProject(projectId?: Id): Promise<SaveResult>;
   saveProjectAs(projectId?: Id): Promise<SaveResult>;
   closeProject(projectId: Id, force?: boolean): Promise<{ closed: boolean; reason?: string }>;
-  acquireHumanLock(request: HumanLockRequest): Promise<{ acquired: boolean; lockId?: Id; reason?: string }>;
-  refreshHumanLock(lockId: Id): Promise<{ refreshed: boolean }>;
+  acquireHumanLock(request: HumanLockRequest): Promise<{ acquired: boolean; lockId?: Id; lock?: HumanLock; reason?: string }>;
+  refreshHumanLock(lockId: Id): Promise<{ refreshed: boolean; expiresAt?: string }>;
+  holdHumanLock(lockId: Id): Promise<{ held: boolean; expiresAt?: string }>;
   releaseHumanLock(lockId: Id): Promise<void>;
   updateSelection(selection?: TimelineSelection): Promise<void>;
   transport(action: 'play' | 'record' | 'pause' | 'stop' | 'seek' | 'loop', options?: { tick?: number; loopEnabled?: boolean; loopStartTick?: number; loopEndTick?: number }): Promise<TransportState>;
@@ -189,7 +191,7 @@ export interface AIMuseDesktopAPI {
 export const IPC = {
   bootstrap: 'aimuse:bootstrap', newProject: 'aimuse:projects:new', activateProject: 'aimuse:projects:activate', applyTransaction: 'aimuse:project:apply',
   undo: 'aimuse:history:undo', redo: 'aimuse:history:redo', openProjects: 'aimuse:projects:open', saveProject: 'aimuse:projects:save', saveProjectAs: 'aimuse:projects:save-as', closeProject: 'aimuse:projects:close',
-  acquireHumanLock: 'aimuse:locks:acquire', refreshHumanLock: 'aimuse:locks:refresh', releaseHumanLock: 'aimuse:locks:release', updateSelection: 'aimuse:selection:update', transport: 'aimuse:transport', stopAgents: 'aimuse:agents:stop',
+  acquireHumanLock: 'aimuse:locks:acquire', refreshHumanLock: 'aimuse:locks:refresh', holdHumanLock: 'aimuse:locks:hold', releaseHumanLock: 'aimuse:locks:release', updateSelection: 'aimuse:selection:update', transport: 'aimuse:transport', stopAgents: 'aimuse:agents:stop',
   engineStatus: 'aimuse:engine:status', engineStartAtLogin: 'aimuse:engine:start-at-login', mcpCredentials: 'aimuse:mcp:credentials', configureAgentClient: 'aimuse:mcp:configure-agent-client', configureCodex: 'aimuse:mcp:configure-codex',
   showApplicationMenu: 'aimuse:menu:show',
   resolveJob: 'aimuse:jobs:resolve', cancelJob: 'aimuse:jobs:cancel', importMedia: 'aimuse:media:import', exportProject: 'aimuse:projects:export', checkpointCreate: 'aimuse:checkpoints:create', checkpointRestore: 'aimuse:checkpoints:restore',

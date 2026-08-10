@@ -4,9 +4,10 @@ import { fileURLToPath } from 'node:url';
 export function packagePlatformDecision(platform) {
   if (platform === 'win32') return { allowed: true, platform, reason: 'The audited Windows package path remains enabled.' };
   if (platform === 'darwin') return {
-    allowed: false,
+    allowed: true,
     platform,
-    reason: 'macOS packaging is blocked until CoreAudio runtime binaries, native bundle staging, hardened-runtime entitlements, signing, notarization and package verification are implemented and accepted on macOS.',
+    mode: 'development',
+    reason: 'The macOS development .app path is enabled; release still requires Developer ID signing, notarization, stapling and independent exact-build acceptance.',
   };
   return { allowed: false, platform, reason: `Packaging is not implemented for ${platform}.` };
 }

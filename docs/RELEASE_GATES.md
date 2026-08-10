@@ -10,6 +10,8 @@ Run for every packaged candidate:
 node scripts/npm-node24.mjs run test:level1:auto
 ```
 
+For formal use, first create the fresh protected `test-results/luna-high/<run>` root and a disjoint `test-results/playwright/<run>` child, then set `AIMUSE_FORMAL_RUN_ROOT`, `AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR` and optionally `AIMUSE_PACKAGE_SUBJECT_MANIFEST=<formal-root>/package-subject.json`. Preserve the command's real exit with the platform-specific `pipefail`/`tee` procedure in [TESTING.md](TESTING.md). Level 1 packages exactly once and declares the manifest-bound subject only after packaging.
+
 The packaged test launches the exact hardened `AIMuse.exe`, verifies its PID and private MCP URL, performs a UI edit observed through MCP, performs an authenticated MCP edit observed live in the UI, captures the editor, releases its MCP session, and shuts the persistent engine down through `--quit-engine`.
 
 Current alpha automated status: passing on the development Windows 11 x64 machine as of 2026-08-04. This is not a formal Level 1 certification until a fresh independent Luna/high task also completes isolated MCP, native Computer Use, identity and bidirectional evidence.
@@ -22,6 +24,8 @@ Before a preview build:
 node scripts/npm-node24.mjs run test:level2:auto
 ```
 
+Use the same formal environment and protected logging procedure. Level 2 packages exactly once, exclusively publishes and verifies the post-package manifest, runs packaged E2E against that exact digest, then verifies all bound components again. Do not substitute standalone `npm run test:e2e`, which packages for developer use.
+
 - Run all core schema/migration/reducer/inverse/time tests and main-process persistence, authority, journal, media, export, generation, collaboration and MCP suites.
 - Run native golden/null DSP tests and the service/scanner/bridge protocol fixtures.
 - Repeat packaged Song and SFX UI/MCP workflows, recovery after forced interruption, checkpoint restore, actor undo, authorization exhaustion, generation failure, missing media and degraded plug-in scenarios.
@@ -30,6 +34,8 @@ node scripts/npm-node24.mjs run test:level2:auto
 - Verify keyboard-only navigation, focus visibility, accessible names, zoom and high-contrast behavior.
 
 Current alpha status: automated core coverage is passing; the full manual/scenario matrix is incomplete.
+
+Fresh independent macOS Level 2 run `20260809T150538Z-macos-level2` at HEAD `470cbe51b5633144687c06cff3bccbb85910e30a` is `BLOCKED`, not FAIL or certification. Automation passed, but the former packaged-Playwright default destroyed its evidence root/log and the old workflow called pre-package `3066FE2D…5D3B` the subject before the intentional package phase produced `F9E4F3B4…27C7`; UI/MCP were not reached. Source remediation now isolates output and freezes one post-package subject, but the genuine remediated command and a new independent run remain pending.
 
 ## Release Exhaustive
 
@@ -54,4 +60,6 @@ No release script changes the package to `1.0.0`; version promotion is a separat
 
 ## macOS boundary
 
-`npm run verify:macos` is a source/native-test structural gate only. It intentionally disables runtime audio and plug-in helper binaries and cannot package. A macOS release gate does not exist until CoreAudio, Keychain, native lifecycle/UI, signing, entitlements, notarization and exact package verification have independent evidence. Windows certification does not transfer to macOS bytes.
+`npm run verify:macos` now builds the CoreAudio/native-helper development targets in addition to the portable source/native-test lane. `npm run macos:coreaudio-smoke` is the separate real-user-session shared-device gate, and `npm run package` produces a structurally verified, fuse-hardened, validly ad-hoc-signed local `AIMuse.app`. The two-cycle packaged headless acceptance also proves authenticated MCP restart/quit and encrypted local-token reuse for one isolated profile.
+
+Those are development gates, not a macOS release certificate. Local remediation now covers a bounded CoreAudio soak/restart, provider-Keychain setter persistence with synthetic values, x64 package composition, universal helper compilation, safe plug-in bundle discovery and AAC/M4A metadata admission. Release remains blocked on physical endpoint/hot-plug/interruption and locked/denied/cancelled Keychain evidence, product-wide recording/MIDI, SDK plug-in hosting and compressed decode/export, a shipping architecture/runtime policy, Developer ID signing, strict release-entitlement inspection, Gatekeeper assessment, notarization, stapling, archive/update/rollback verification and the fresh independent Computer Use workflow in both cross-surface directions. Track each exit criterion in [the macOS gate matrix](MACOS_GATE_MATRIX.md). Windows certification does not transfer to macOS bytes.

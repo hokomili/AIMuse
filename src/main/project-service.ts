@@ -65,6 +65,8 @@ interface BranchState { base: AIMuseProject; current: AIMuseProject; operationId
 
 const ENTITY_MAPS = ['tempoEvents', 'timeSignatureEvents', 'markers', 'sections', 'tracks', 'clips', 'takeLanes', 'compSegments', 'devices', 'sends', 'sidechains', 'automationLanes', 'sfxDeliverables'] as const;
 const ORDER_FIELDS = ['tempoOrder', 'timeSignatureOrder', 'markerOrder', 'sectionOrder', 'trackOrder'] as const;
+export const HUMAN_LOCK_GESTURE_LEASE_MS = 10_000;
+export const HUMAN_LOCK_GRACE_MS = 15_000;
 function comparable(value: unknown): string { return JSON.stringify(value, (key, item) => ['revision', 'updatedAt', 'updatedBy'].includes(key) ? undefined : item); }
 function sameContent(left: unknown, right: unknown): boolean { return comparable(left) === comparable(right); }
 
@@ -84,7 +86,9 @@ export class ProjectService extends EventEmitter {
   private readonly operationIds = new Map<Id, Map<string, number>>();
   private readonly changes = new Map<Id, ChangeEntry[]>();
   private readonly jobs = new Map<Id, AsyncJob>();
+  private approvalReservation?: { id: Id; ownerActorId: Id; jobId?: Id };
   private readonly locks = new Map<Id, HumanLock>();
+  private readonly lockExpiryTimers = new Map<Id, ReturnType<typeof setTimeout>>();
   private readonly presence = new Map<Id, AgentPresence>();
   private readonly plugins = new Map<string, PluginDescriptor>();
   private readonly assetSources = new Map<Id, string>();
@@ -361,23 +365,47 @@ export class ProjectService extends EventEmitter {
 
   private async closeUnlocked(projectId: Id, force = false): Promise<{ closed: boolean; reason?: string }> {
     const project = this.projects.get(projectId); if (!project) return { closed: true }; if (project.dirty && !force) return { closed: false, reason: 'Project has unsaved changes.' };
-    this.projects.delete(projectId); this.histories.delete(projectId); this.operationIds.delete(projectId); this.changes.delete(projectId); this.fileAudit.delete(projectId); for (const [id, lock] of this.locks) if (lock.projectId === projectId) this.locks.delete(id);
-    if (!project.dirty) await this.options.journal.remove(projectId); this.activeProjectId = this.projects.keys().next().value; const active = this.activeProjectId ? this.projects.get(this.activeProjectId) : undefined; if (active) await this.options.audio.synchronizeProject(active); this.publish(); return { closed: true };
+    await this.options.journal.remove(projectId);
+    this.projects.delete(projectId); this.histories.delete(projectId); this.operationIds.delete(projectId); this.changes.delete(projectId); this.fileAudit.delete(projectId); for (const [id, lock] of this.locks) if (lock.projectId === projectId) this.deleteLock(id);
+    this.activeProjectId = this.projects.keys().next().value; const active = this.activeProjectId ? this.projects.get(this.activeProjectId) : undefined; if (active) await this.options.audio.synchronizeProject(active); this.publish(); return { closed: true };
   }
 
-  acquireLock(request: HumanLockRequest): { acquired: boolean; lockId?: Id; reason?: string } {
-    this.expireLocks(); const candidate: HumanLock = { id: createId('lock'), projectId: request.projectId, actorId: HUMAN_ACTOR.id, entityIds: [...(request.entityIds ?? [])], range: request.range ? clone(request.range) : undefined, parameter: request.parameter ? clone(request.parameter) : undefined, acquiredAt: nowIso(), expiresAt: new Date(Date.now() + 10_000).toISOString() };
-    if (this.locksCollide(candidate, [...this.locks.values()])) return { acquired: false, reason: 'The region is already locked.' }; this.locks.set(candidate.id, candidate); this.publish(); return { acquired: true, lockId: candidate.id };
+  acquireLock(request: HumanLockRequest): { acquired: boolean; lockId?: Id; lock?: HumanLock; reason?: string } {
+    this.expireLocks(); const candidate: HumanLock = { id: createId('lock'), projectId: request.projectId, actorId: HUMAN_ACTOR.id, entityIds: [...(request.entityIds ?? [])], range: request.range ? clone(request.range) : undefined, parameter: request.parameter ? clone(request.parameter) : undefined, phase: 'gesture', acquiredAt: nowIso(), expiresAt: new Date(Date.now() + HUMAN_LOCK_GESTURE_LEASE_MS).toISOString() };
+    if (this.locksCollide(candidate, [...this.locks.values()])) return { acquired: false, reason: 'The region is already locked.' }; this.locks.set(candidate.id, candidate); this.scheduleLockExpiry(candidate); this.publish(); return { acquired: true, lockId: candidate.id, lock: clone(candidate) };
   }
-  refreshLock(lockId: Id): { refreshed: boolean } { const lock = this.locks.get(lockId); if (!lock) return { refreshed: false }; lock.expiresAt = new Date(Date.now() + 10_000).toISOString(); this.publish(); return { refreshed: true }; }
-  releaseLock(lockId: Id): void { if (this.locks.delete(lockId)) this.publish(); }
+  refreshLock(lockId: Id): { refreshed: boolean; expiresAt?: string } {
+    this.expireLocks(); const lock = this.locks.get(lockId); if (!lock || lock.phase !== 'gesture') return { refreshed: false };
+    lock.expiresAt = new Date(Date.now() + HUMAN_LOCK_GESTURE_LEASE_MS).toISOString(); this.scheduleLockExpiry(lock); this.publish(); return { refreshed: true, expiresAt: lock.expiresAt };
+  }
+  holdLock(lockId: Id): { held: boolean; expiresAt?: string } {
+    this.expireLocks(); const lock = this.locks.get(lockId); if (!lock) return { held: false };
+    if (lock.phase === 'grace') return { held: true, expiresAt: lock.expiresAt };
+    lock.phase = 'grace'; lock.expiresAt = new Date(Date.now() + HUMAN_LOCK_GRACE_MS).toISOString(); this.scheduleLockExpiry(lock); this.publish(); return { held: true, expiresAt: lock.expiresAt };
+  }
+  releaseLock(lockId: Id): void { if (this.deleteLock(lockId)) this.publish(); }
   setSelection(selection?: TimelineSelection): void { this.selection = selection ? clone(selection) : undefined; this.publish(); }
 
   updatePresence(presence: AgentPresence): void { this.presence.set(presence.actor.id, clone(presence)); this.emitEvent({ type: 'presence', presence: clone(presence) }); this.publish(); }
   removePresence(actorId: Id): void { this.presence.delete(actorId); this.publish(); }
   stopAgents(projectId?: Id): number { const stopped = new Set<Id>(); let count = 0; for (const [id, presence] of this.presence) if (!projectId || presence.projectId === projectId) { this.presence.delete(id); stopped.add(id); count += 1; } for (const job of this.jobs.values()) if ((!projectId || job.projectId === projectId) && !['completed', 'failed', 'cancelled'].includes(job.status) && stopped.has(job.ownerActorId)) this.upsertJob({ ...job, status: 'cancelled', message: 'Cancelled by Stop Agents.', updatedAt: nowIso() }); this.publish(); return count; }
 
-  upsertJob(job: AsyncJob): void { this.jobs.set(job.id, clone(job)); this.emitEvent({ type: 'job', job: clone(job) }); this.publish(); }
+  reserveApproval(ownerActorId: Id): { reservationId: Id } | undefined { if (this.approvalReservation || [...this.jobs.values()].some((job) => job.status === 'waiting-for-user')) return undefined; const id = createId('approval-reservation'); this.approvalReservation = { id, ownerActorId }; return { reservationId: id }; }
+  bindApprovalReservation(reservationId: Id, jobId: Id, ownerActorId: Id): boolean { const reservation = this.approvalReservation; if (!reservation || reservation.id !== reservationId || reservation.ownerActorId !== ownerActorId || (reservation.jobId !== undefined && reservation.jobId !== jobId)) return false; reservation.jobId = jobId; const job = this.jobs.get(jobId); if (job && job.status !== 'queued') this.approvalReservation = undefined; return true; }
+  releaseApprovalReservation(reservationId: Id): void { if (this.approvalReservation?.id === reservationId) this.approvalReservation = undefined; }
+  upsertJob(job: AsyncJob): void {
+    let next = clone(job); const reservation = this.approvalReservation;
+    if (next.status === 'waiting-for-user') {
+      const incumbent = [...this.jobs.values()].find((candidate) => candidate.id !== next.id && candidate.status === 'waiting-for-user');
+      const reservedForJob = reservation?.jobId === next.id;
+      if (incumbent || (reservation && !reservedForJob)) {
+        const message = 'Another approval-capable request is being prepared or awaits human review.';
+        if (reservedForJob) this.approvalReservation = undefined;
+        next = { ...next, status: 'failed', message, approval: undefined, error: { code: 'approval_pending', message, retryable: true } };
+      } else if (reservedForJob) this.approvalReservation = undefined;
+    } else if (reservation?.jobId === next.id && next.status !== 'queued') this.approvalReservation = undefined;
+    this.jobs.set(next.id, clone(next)); this.emitEvent({ type: 'job', job: clone(next) }); this.publish();
+  }
   getJob<T = unknown>(jobId: Id): AsyncJob<T> | undefined { const job = this.jobs.get(jobId); return job ? clone(job) as AsyncJob<T> : undefined; }
   listJobs(ownerActorId?: Id): AsyncJob[] { return [...this.jobs.values()].filter((job) => !ownerActorId || job.ownerActorId === ownerActorId).map(clone); }
   cancelJob(jobId: Id): AsyncJob | undefined { const job = this.jobs.get(jobId); if (!job || ['completed', 'failed', 'cancelled'].includes(job.status)) return job ? clone(job) : undefined; const next = { ...job, status: 'cancelled' as const, updatedAt: nowIso(), message: 'Cancelled.' }; this.upsertJob(next); return clone(next); }
@@ -387,7 +415,14 @@ export class ProjectService extends EventEmitter {
   listTrace(projectId: Id, limit?: number): Promise<TransactionTraceEntry[]> { return this.options.trace.list(projectId, limit); }
   findTrace(projectId: Id, transactionId: Id): Promise<TransactionTraceEntry | undefined> { return this.options.trace.find(projectId, transactionId); }
   listFileAudit(projectId: Id, limit = Number.POSITIVE_INFINITY): FileSavedAuditEvent[] { return (this.fileAudit.get(projectId) ?? []).slice(-limit).map(clone); }
-  async compactRecovery(): Promise<void> { for (const project of this.projects.values()) await this.options.journal.compact(project); }
+  async compactRecovery(): Promise<void> {
+    for (const projectId of [...this.projects.keys()]) {
+      await this.mutateProject(projectId, async () => {
+        const project = this.projects.get(projectId);
+        if (project) await this.options.journal.compact(project);
+      });
+    }
+  }
   async replayTrace(projectId: Id, transactionId: Id): Promise<{ replaying: boolean; reason?: string }> { const entry = await this.findTrace(projectId, transactionId); if (!entry?.transaction) return { replaying: false, reason: 'Transaction trace entry is unavailable.' }; const operations = entry.transaction.operations.length; for (let index = 0; index <= operations; index += 1) { this.emitEvent({ type: 'trace-replay', projectId, transactionId, progress: operations ? index / operations : 1, status: index === operations ? 'completed' : 'playing' }); if (index < operations) await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(120, Math.max(20, 800 / Math.max(1, operations))))); } return { replaying: true }; }
   registerAssetSource(assetId: Id, path: string): void { this.assetSources.set(assetId, resolve(path)); }
 
@@ -414,7 +449,21 @@ export class ProjectService extends EventEmitter {
     try { return await work(); }
     finally { release(); if (this.mutationTails.get(projectId) === tail) this.mutationTails.delete(projectId); }
   }
-  private expireLocks(): void { const now = Date.now(); for (const [id, lock] of this.locks) if (new Date(lock.expiresAt).getTime() <= now) this.locks.delete(id); }
+  private deleteLock(lockId: Id): boolean {
+    const timer = this.lockExpiryTimers.get(lockId); if (timer) clearTimeout(timer); this.lockExpiryTimers.delete(lockId); return this.locks.delete(lockId);
+  }
+  private scheduleLockExpiry(lock: HumanLock): void {
+    const previous = this.lockExpiryTimers.get(lock.id); if (previous) clearTimeout(previous);
+    const expectedExpiry = lock.expiresAt;
+    const timer = setTimeout(() => {
+      this.lockExpiryTimers.delete(lock.id);
+      const current = this.locks.get(lock.id); if (!current || current.expiresAt !== expectedExpiry) return;
+      if (new Date(current.expiresAt).getTime() > Date.now()) { this.scheduleLockExpiry(current); return; }
+      this.locks.delete(lock.id); this.publish();
+    }, Math.max(0, new Date(expectedExpiry).getTime() - Date.now()));
+    timer.unref?.(); this.lockExpiryTimers.set(lock.id, timer);
+  }
+  private expireLocks(): void { const now = Date.now(); for (const [id, lock] of this.locks) if (new Date(lock.expiresAt).getTime() <= now) this.deleteLock(id); }
 
   private findLockCollision(project: AIMuseProject, operations: ProjectOperation[]): HumanLock | undefined {
     this.expireLocks(); const locks = [...this.locks.values()].filter((lock) => lock.projectId === project.id);
@@ -425,7 +474,7 @@ export class ProjectService extends EventEmitter {
       let range: { trackId?: Id; startTick: number; endTick: number } | undefined;
       const clipId = typeof record.clipId === 'string' ? record.clipId : undefined; const clip = clipId ? project.clips[clipId] : undefined;
       if (clip) range = { trackId: clip.trackId, startTick: operation.kind === 'clip.move' || operation.kind === 'clip.trim' ? Number(record.startTick ?? clip.startTick) : clip.startTick, endTick: (operation.kind === 'clip.move' || operation.kind === 'clip.trim' ? Number(record.startTick ?? clip.startTick) + Number(record.durationTicks ?? clip.durationTicks) : clip.startTick + clip.durationTicks) };
-      const candidate: HumanLock = { id: 'candidate', projectId: project.id, actorId: 'agent', entityIds: [...ids], range, parameter: operation.kind === 'device.parameter.set' ? { deviceId: operation.deviceId, parameterId: operation.parameterId } : undefined, acquiredAt: '', expiresAt: '' };
+      const candidate: HumanLock = { id: 'candidate', projectId: project.id, actorId: 'agent', entityIds: [...ids], range, parameter: operation.kind === 'device.parameter.set' ? { deviceId: operation.deviceId, parameterId: operation.parameterId } : undefined, phase: 'gesture', acquiredAt: '', expiresAt: '' };
       const collision = locks.find((lock) => this.locksCollide(candidate, [lock])); if (collision) return collision;
     }
     return undefined;
@@ -433,6 +482,7 @@ export class ProjectService extends EventEmitter {
 
   private locksCollide(candidate: HumanLock, locks: HumanLock[]): boolean {
     return locks.some((lock) => {
+      if (candidate.projectId !== lock.projectId) return false;
       if (candidate.entityIds.some((id) => lock.entityIds.includes(id))) return true;
       if (candidate.parameter && lock.parameter && candidate.parameter.deviceId === lock.parameter.deviceId && candidate.parameter.parameterId === lock.parameter.parameterId) return true;
       if (candidate.range && lock.range && (!candidate.range.trackId || !lock.range.trackId || candidate.range.trackId === lock.range.trackId)) return candidate.range.startTick < lock.range.endTick && candidate.range.endTick > lock.range.startTick;

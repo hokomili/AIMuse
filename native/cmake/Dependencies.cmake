@@ -6,7 +6,7 @@ FetchContent_Declare(clap GIT_REPOSITORY https://github.com/free-audio/clap.git 
 FetchContent_Declare(miniaudio GIT_REPOSITORY https://github.com/mackron/miniaudio.git GIT_TAG 9634bedb5b5a2ca38c1ee7108a9358a4e233f14d GIT_SHALLOW FALSE)
 FetchContent_Declare(signalsmith_stretch GIT_REPOSITORY https://github.com/Signalsmith-Audio/signalsmith-stretch.git GIT_TAG 57b93f4e9206a089a45387eaa39bdc9f310d3308 GIT_SHALLOW FALSE)
 
-if(AIMUSE_ENABLE_WASAPI)
+if(AIMUSE_ENABLE_WASAPI OR AIMUSE_ENABLE_COREAUDIO)
   FetchContent_MakeAvailable(miniaudio)
 endif()
 if(AIMUSE_ENABLE_PLUGIN_SDKS)

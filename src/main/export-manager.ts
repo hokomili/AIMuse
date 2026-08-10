@@ -10,7 +10,7 @@ import {
 import type { ExportRequest } from '../common/contracts';
 import { AudioEngineController } from './audio-engine';
 import { AuthorityManager } from './authority-manager';
-import { atomicWriteFile, packProjectFolder } from './persistence';
+import { atomicWriteFile, packProjectFolder, sha256File } from './persistence';
 import { ProjectService } from './project-service';
 import { analyzePcm } from './media-manager';
 import { decodeWav, encodeFloat32Wav } from './wav';
@@ -91,20 +91,44 @@ function dawProjectXml(project: AIMuseProject): { xml: string; fallbacks: string
   const tempo = project.tempoEvents[project.tempoOrder[0]]; const meter = project.timeSignatureEvents[project.timeSignatureOrder[0]]; return { xml: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Project version="1.0"><Application name="AIMuse" version="0.1.0-alpha.0"/><Transport><Tempo max="400" min="20" unit="bpm" value="${tempo.bpm}" id="${id()}" name="Tempo"/><TimeSignature denominator="${meter.denominator}" numerator="${meter.numerator}" id="${id()}"/></Transport><Structure>${trackXml}</Structure><Arrangement id="${id()}"><Lanes timeUnit="beats" id="${id()}">${lanes}</Lanes></Arrangement><Scenes/></Project>`, fallbacks };
 }
 
+interface DawProjectArchiveFile { archivePath: string; sourcePath: string }
+
+async function dawProjectArchiveFiles(project: AIMuseProject, projects: ProjectService): Promise<DawProjectArchiveFile[]> {
+  const files = new Map<string, { sourcePath: string; digest?: Awaited<ReturnType<typeof sha256File>> }>();
+  for (const asset of Object.values(project.assets)) {
+    const sourcePath = projects.getAssetSource(project.id, asset.id);
+    if (!sourcePath) continue;
+    const archivePath = asset.kind === 'audio'
+      ? `audio/${asset.sha256}${extname(asset.name) || '.wav'}`
+      : asset.kind === 'plugin-state' ? `plugins/${asset.id}.state` : undefined;
+    if (!archivePath) continue;
+    const existing = files.get(archivePath);
+    if (!existing) {
+      files.set(archivePath, { sourcePath });
+      continue;
+    }
+    existing.digest ??= await sha256File(existing.sourcePath);
+    const candidate = await sha256File(sourcePath);
+    if (existing.digest.sha256 !== candidate.sha256 || existing.digest.byteLength !== candidate.byteLength) {
+      throw new Error(`DAWproject archive member ${archivePath} resolves to different payloads.`);
+    }
+  }
+  return [...files].map(([archivePath, value]) => ({ archivePath, sourcePath: value.sourcePath }));
+}
+
 async function writeDawProject(project: AIMuseProject, destination: string, projects: ProjectService): Promise<{ destination: string; fallbackReport: string }> {
-  const target = finalExtension(destination, '.dawproject'); const temporary = `${target}.${process.pid}.${Date.now()}.tmp`; await mkdir(dirname(target), { recursive: true }); const generated = dawProjectXml(project); const report = { format: 'AIMuse DAWproject fallback report', projectId: project.id, generatedAt: nowIso(), warnings: generated.fallbacks, sends: project.sends, sidechains: project.sidechains, provenance: project.provenance };
-  await new Promise<void>((resolvePromise, reject) => { const output = createWriteStream(temporary, { flags: 'wx' }); const archive = archiver('zip', { zlib: { level: 6 }, forceZip64: true }); output.once('close', resolvePromise); output.once('error', reject); archive.once('error', reject); archive.pipe(output); archive.append(generated.xml, { name: 'project.xml' }); archive.append(`<?xml version="1.0" encoding="UTF-8"?><MetaData><Title>${xml(project.name)}</Title><Artist>AIMuse creator</Artist><Comment>Exported from AIMuse</Comment></MetaData>`, { name: 'metadata.xml' }); archive.append(`${JSON.stringify(report, null, 2)}\n`, { name: 'fallback-report.json' }); for (const asset of Object.values(project.assets)) { const path = projects.getAssetSource(project.id, asset.id); if (!path) continue; if (asset.kind === 'audio') archive.file(path, { name: `audio/${asset.sha256}${extname(asset.name) || '.wav'}` }); if (asset.kind === 'plugin-state') archive.file(path, { name: `plugins/${asset.id}.state` }); } void archive.finalize(); }); await rename(temporary, target); return { destination: target, fallbackReport: generated.fallbacks.join('\n') };
+  const target = finalExtension(destination, '.dawproject'); const temporary = `${target}.${process.pid}.${Date.now()}.tmp`; await mkdir(dirname(target), { recursive: true }); const generated = dawProjectXml(project); const report = { format: 'AIMuse DAWproject fallback report', projectId: project.id, generatedAt: nowIso(), warnings: generated.fallbacks, sends: project.sends, sidechains: project.sidechains, provenance: project.provenance }; const archiveFiles = await dawProjectArchiveFiles(project, projects);
+  await new Promise<void>((resolvePromise, reject) => { const output = createWriteStream(temporary, { flags: 'wx' }); const archive = archiver('zip', { zlib: { level: 6 }, forceZip64: true }); output.once('close', resolvePromise); output.once('error', reject); archive.once('error', reject); archive.pipe(output); archive.append(generated.xml, { name: 'project.xml' }); archive.append(`<?xml version="1.0" encoding="UTF-8"?><MetaData><Title>${xml(project.name)}</Title><Artist>AIMuse creator</Artist><Comment>Exported from AIMuse</Comment></MetaData>`, { name: 'metadata.xml' }); archive.append(`${JSON.stringify(report, null, 2)}\n`, { name: 'fallback-report.json' }); for (const file of archiveFiles) archive.file(file.sourcePath, { name: file.archivePath }); void archive.finalize(); }); await rename(temporary, target); return { destination: target, fallbackReport: generated.fallbacks.join('\n') };
 }
 
 export class ExportManager {
   private readonly actors = new Map<Id, Actor>();
   constructor(private readonly projects: ProjectService, private readonly audio: AudioEngineController, private readonly authority: AuthorityManager) { projects.on('approval-resolved', (job: AsyncJob, decision: string) => { const request = (job.result as { request?: ExportRequest } | undefined)?.request; const actor = this.actors.get(job.id); if (request && actor && ['render', 'pack'].includes(job.kind) && decision !== 'deny') void this.run(job.id, request, actor, true); }); }
 
-  start(request: ExportRequest, actor: Actor = HUMAN_ACTOR): { jobId: Id } { const jobId = `export-${crypto.randomUUID()}`; const timestamp = nowIso(); this.actors.set(jobId, structuredClone(actor)); this.projects.upsertJob({ id: jobId, ownerActorId: actor.id, projectId: request.projectId, kind: request.kind === 'pack' ? 'pack' : 'render', status: 'queued', progress: 0, message: 'Export queued.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, result: { request } }); void this.run(jobId, request, actor, false); return { jobId }; }
+  start(request: ExportRequest, actor: Actor = HUMAN_ACTOR, approvalReservationId?: Id): { jobId: Id } { const jobId = `export-${crypto.randomUUID()}`; if (approvalReservationId && !this.projects.bindApprovalReservation(approvalReservationId, jobId, actor.id)) throw new Error('Approval reservation is no longer available.'); const timestamp = nowIso(); this.actors.set(jobId, structuredClone(actor)); this.projects.upsertJob({ id: jobId, ownerActorId: actor.id, projectId: request.projectId, kind: request.kind === 'pack' ? 'pack' : 'render', status: 'queued', progress: 0, message: 'Export queued.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, result: { request } }); void this.run(jobId, request, actor, false); return { jobId }; }
 
   private async run(jobId: Id, request: ExportRequest, actor: Actor, authorityOverride: boolean): Promise<void> {
-    const job = this.projects.getJob(jobId)!;
-    try { const target = effectiveDestination(request); const effectiveRequest = { ...request, destination: target }; const targetExists = await exists(target); if (actor.kind === 'agent' && !authorityOverride) { const decision = await this.authority.file(target, 'write', targetExists); if (!decision.allowed) { this.projects.upsertJob({ ...job, status: 'waiting-for-user', message: decision.reason ?? 'Export requires approval.', updatedAt: nowIso(), approval: { kind: decision.approvalKind ?? 'file-write', summary: `${actor.name} requests a ${request.kind} export.`, request: { destination: target, kind: request.kind, format: request.format, overwrite: request.overwrite, existedAtReview: targetExists }, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() } }); return; } } if (targetExists && !request.overwrite) throw new Error('Export destination exists and overwrite was not explicitly requested.'); const project = this.projects.getProject(request.projectId); if (!project) throw new Error('Project is not open.'); this.projects.upsertJob({ ...job, status: 'running', progress: 0.03, message: `Exporting ${request.kind}…`, updatedAt: nowIso(), approval: undefined }); let report: ExportReport;
+    try { const target = effectiveDestination(request); const effectiveRequest = { ...request, destination: target }; const targetExists = await exists(target); if (actor.kind === 'agent' && !authorityOverride) { const decision = await this.authority.file(target, 'write', targetExists); const current = this.projects.getJob(jobId); if (!current || current.status === 'cancelled') return; if (!decision.allowed) { this.projects.upsertJob({ ...current, status: 'waiting-for-user', message: decision.reason ?? 'Export requires approval.', updatedAt: nowIso(), approval: { kind: decision.approvalKind ?? 'file-write', summary: `${actor.name} requests a ${request.kind} export.`, request: { destination: target, kind: request.kind, format: request.format, overwrite: request.overwrite, existedAtReview: targetExists }, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() } }); return; } } if (targetExists && !request.overwrite) throw new Error('Export destination exists and overwrite was not explicitly requested.'); const project = this.projects.getProject(request.projectId); if (!project) throw new Error('Project is not open.'); const runnable = this.projects.getJob(jobId); if (!runnable || runnable.status === 'cancelled') return; this.projects.upsertJob({ ...runnable, status: 'running', progress: 0.03, message: `Exporting ${request.kind}…`, updatedAt: nowIso(), approval: undefined }); let report: ExportReport;
       if (request.kind === 'master') report = await this.master(project, effectiveRequest); else if (request.kind === 'stems') report = await this.stems(project, effectiveRequest, jobId); else if (request.kind === 'midi') { await atomicWriteFile(target, encodeMidi(project, request.trackIds)); report = { destination: target, warnings: [] }; } else if (request.kind === 'dawproject') { const value = await writeDawProject(project, target, this.projects); report = { destination: value.destination, warnings: value.fallbackReport ? value.fallbackReport.split('\n') : [], fallbackReport: value.fallbackReport }; } else if (request.kind === 'sfx-batch') report = await this.sfx(project, effectiveRequest, jobId); else report = await this.pack(project, effectiveRequest, actor);
       const current = this.projects.getJob(jobId)!; this.projects.upsertJob({ ...current, status: 'completed', progress: 1, message: `Exported to ${report.destination}`, updatedAt: nowIso(), result: report });
     } catch (error) { const current = this.projects.getJob(jobId)!; this.projects.upsertJob({ ...current, status: current.status === 'cancelled' ? 'cancelled' : 'failed', message: error instanceof Error ? error.message : String(error), updatedAt: nowIso(), error: { code: 'export-failed', message: error instanceof Error ? error.message : String(error), retryable: true } }); }

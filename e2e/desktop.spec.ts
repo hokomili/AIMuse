@@ -5,10 +5,12 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
+import { packagedE2eSubject } from './package-subject';
 
-const executable = resolve('out', 'AIMuse-win32-x64', 'AIMuse.exe');
+const packagedSubject = packagedE2eSubject();
+const executable = packagedSubject.executable;
 interface RpcResponse { jsonrpc: '2.0'; id?: number; result?: Record<string, unknown>; error?: Record<string, unknown> }
 
 async function waitForExit(process: ChildProcess, label: string, timeoutMilliseconds = 15_000): Promise<void> {
@@ -81,7 +83,7 @@ async function connectToPackagedEditor(port: number): Promise<{ browser: Browser
 }
 
 test.describe('packaged cross-surface smoke', () => {
-  test.skip(!existsSync(executable), 'Run npm run package before packaged desktop QA.');
+  test.skip(!packagedSubject.exact && !existsSync(executable), 'Run npm run package before packaged desktop QA.');
 
   let applicationProcess: ChildProcess | undefined;
   let browser: Browser | undefined;
@@ -111,7 +113,7 @@ test.describe('packaged cross-surface smoke', () => {
     await expect(window.locator('.app-brand')).toContainText('AIMuse');
     await expect(window.getByText('New Song', { exact: true }).first()).toBeVisible();
 
-    await window.getByRole('button', { name: /MIDI clip/i }).click();
+    await window.getByRole('button', { name: 'MIDI clip', exact: true }).click();
     await expect(window.getByText('New idea', { exact: true }).first()).toBeVisible();
 
     expect(connection).toMatchObject({ version: 1, pid: applicationProcess.pid, activeProjectId: expect.stringMatching(/^project_/) });
@@ -136,8 +138,58 @@ test.describe('packaged cross-surface smoke', () => {
     expect(Object.values(observation.project.clips).some((clip) => clip.name === 'New idea')).toBe(true);
 
     const applied = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'project_apply', arguments: { projectId: connection.activeProjectId, clientOperationId: 'packaged-cross-surface-rename-1', label: 'Rename from packaged MCP client', operations: [{ kind: 'project.rename', name: 'MCP Coauthored Song' }], commitMode: 'direct' } } }, sessionId!);
-    expect(toolPayload<{ status: string }>(applied.message)).toMatchObject({ status: 'committed' });
+    const appliedPayload = toolPayload<{ status: string; revision: number; transactionId: string }>(applied.message);
+    expect(appliedPayload).toMatchObject({ status: 'committed', transactionId: expect.stringMatching(/^tx_/) });
     await expect(window.getByText('MCP Coauthored Song', { exact: true }).first()).toBeVisible();
+
+    const beforeReplayResponse = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'project_observe', arguments: { projectId: connection.activeProjectId } } }, sessionId!);
+    const beforeReplay = toolPayload<{ project: Record<string, unknown> }>(beforeReplayResponse.message);
+    const replayed = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'trace_replay', arguments: { projectId: connection.activeProjectId, transactionId: appliedPayload.transactionId } } }, sessionId!);
+    const replayReceipt = toolPayload<{
+      status: string; projectId: string; transactionId: string; auditSha256: string;
+      source: { resource: string; revision: number; operationCount: number; operationKinds: string[]; entrySha256: string; transactionSha256: string };
+      replay: { mode: string; appliedOperations: number; progressEventCount: number; steps: Array<Record<string, unknown>> };
+      canonical: { beforeRevision: number; afterRevision: number; beforeSha256: string; afterSha256: string; unchanged: boolean };
+    }>(replayed.message);
+    expect(replayReceipt).toMatchObject({
+      status: 'completed', projectId: connection.activeProjectId, transactionId: appliedPayload.transactionId,
+      source: {
+        resource: `aimuse://projects/${connection.activeProjectId}/trace`, revision: appliedPayload.revision,
+        operationCount: 1, operationKinds: ['project.rename'], entrySha256: expect.stringMatching(/^[0-9a-f]{64}$/), transactionSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+      replay: {
+        mode: 'non-mutating-visualization', appliedOperations: 0, progressEventCount: 2,
+        steps: [{ index: 0, kind: 'project.rename', progressStart: 0, progressEnd: 1 }],
+      },
+      canonical: { beforeRevision: appliedPayload.revision, afterRevision: appliedPayload.revision, unchanged: true },
+      auditSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(replayReceipt.canonical.beforeSha256).toBe(replayReceipt.canonical.afterSha256);
+    const afterReplayResponse = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'project_observe', arguments: { projectId: connection.activeProjectId } } }, sessionId!);
+    expect(toolPayload<{ project: Record<string, unknown> }>(afterReplayResponse.message)).toEqual(beforeReplay);
+    await expect(window.getByText('MCP Coauthored Song', { exact: true }).first()).toBeVisible();
+
+    const firstApprovalResponse = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'export_manage', arguments: { projectId: connection.activeProjectId, kind: 'midi', destination: join(testRoot, 'approval-first'), overwrite: false } } }, sessionId!);
+    const firstApproval = toolPayload<{ jobId: string }>(firstApprovalResponse.message);
+    expect(firstApproval.jobId).toMatch(/^export-/);
+    const competingResponse = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'export_manage', arguments: { projectId: connection.activeProjectId, kind: 'dawproject', destination: join(testRoot, 'approval-competing'), overwrite: false } } }, sessionId!);
+    const competing = toolPayload<{ error: string; retryable: boolean; jobId?: string; next: { humanRequired: boolean } }>(competingResponse.message);
+    expect(competing).toMatchObject({ error: 'approval_pending', retryable: true, next: { humanRequired: true } });
+    expect(competing).not.toHaveProperty('jobId');
+    expect(JSON.stringify(competing)).not.toContain(firstApproval.jobId);
+    const waitForApproval = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'job_manage', arguments: { action: 'wait', jobId: firstApproval.jobId, timeoutMs: 5_000 } } }, sessionId!);
+    expect(toolPayload<{ id: string; status: string }>(waitForApproval.message)).toMatchObject({ id: firstApproval.jobId, status: 'waiting-for-user' });
+    const jobsWhilePending = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'job_manage', arguments: { action: 'list' } } }, sessionId!);
+    expect(toolPayload<Array<{ id: string; status: string }>>(jobsWhilePending.message).filter((job) => job.status === 'waiting-for-user')).toEqual([{ id: firstApproval.jobId, status: 'waiting-for-user', kind: 'render', progress: 0, message: 'No process-lifetime authority policy is installed.', createdAt: expect.any(String), updatedAt: expect.any(String), projectId: connection.activeProjectId, dependency: expect.any(Object), next: expect.any(Object) }]);
+    const cancelledApproval = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'job_manage', arguments: { action: 'cancel', jobId: firstApproval.jobId } } }, sessionId!);
+    expect(toolPayload<{ status: string }>(cancelledApproval.message)).toMatchObject({ status: 'cancelled' });
+    const afterCancellationResponse = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'export_manage', arguments: { projectId: connection.activeProjectId, kind: 'stems', destination: join(testRoot, 'approval-after-cancel'), overwrite: false } } }, sessionId!);
+    const afterCancellation = toolPayload<{ jobId: string }>(afterCancellationResponse.message);
+    expect(afterCancellation.jobId).toMatch(/^export-/);
+    const waitAfterCancellation = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'job_manage', arguments: { action: 'wait', jobId: afterCancellation.jobId, timeoutMs: 5_000 } } }, sessionId!);
+    expect(toolPayload<{ id: string; status: string }>(waitAfterCancellation.message)).toMatchObject({ id: afterCancellation.jobId, status: 'waiting-for-user' });
+    const cancelAfterCancellation = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'job_manage', arguments: { action: 'cancel', jobId: afterCancellation.jobId } } }, sessionId!);
+    expect(toolPayload<{ status: string }>(cancelAfterCancellation.message)).toMatchObject({ status: 'cancelled' });
 
     const transport = async (action: 'status' | 'play' | 'pause' | 'seek', tick?: number) => {
       const result = await rpc(connection.url, connection.token, { jsonrpc: '2.0', id: ++requestId, method: 'tools/call', params: { name: 'transport_manage', arguments: { action, ...(tick === undefined ? {} : { tick }) } } }, sessionId!);

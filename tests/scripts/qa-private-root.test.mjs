@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { assertOwnerPrivateRoot } from '../../scripts/qa-private-root.mjs';
 import { start } from '../../scripts/qa-session.mjs';
 import { init } from '../../scripts/qa-mcp.mjs';
@@ -49,6 +49,7 @@ function sessionFixture() {
   return {
     exe: join(privateRoot, 'AIMuse.exe'),
     profile: join(privateRoot, 'profile'),
+    trusted: join(privateRoot, 'trusted'),
     connection: join(privateRoot, 'connection.json'),
     manifest: join(privateRoot, 'session.json'),
   };
@@ -114,6 +115,7 @@ describe('owner-private coordinator roots', () => {
   it('allows qa-session start through a protected root before its injected launcher', async () => {
     const fixture = sessionFixture();
     const order = [];
+    const createdDirectories = [];
     let writtenManifest;
     const values = sessionValues({
       exe: fixture.exe,
@@ -123,12 +125,13 @@ describe('owner-private coordinator roots', () => {
       manifest: fixture.manifest,
       mode: 'headless',
       'launch-context': 'unsandboxed-gui',
+      'trust-folder': fixture.trusted,
     });
     await start(values, {
       assertPrivateRoot: async (options) => { order.push('acl'); return assertOwnerPrivateRoot(options, windowsAclDependencies()); },
       accessPath: async () => { order.push('access'); },
       hashExecutable: async () => 'C'.repeat(64),
-      mkdirPath: async () => undefined,
+      mkdirPath: async (path, options) => { createdDirectories.push({ path, options }); },
       now: () => Date.parse('2026-08-06T04:00:00.000Z'),
       spawnProcess: () => { order.push('spawn'); return { pid: 41001, unref() {} }; },
       waitForReady: async () => ({
@@ -139,7 +142,140 @@ describe('owner-private coordinator roots', () => {
       writeOutput: () => undefined,
     });
     expect(order).toEqual(['acl', 'access', 'spawn']);
+    expect(createdDirectories).toEqual([
+      { path: fixture.profile, options: { recursive: true, mode: 0o700 } },
+      { path: privateRoot, options: { recursive: true, mode: 0o700 } },
+      { path: privateRoot, options: { recursive: true, mode: 0o700 } },
+      { path: fixture.trusted, options: { recursive: true, mode: 0o700 } },
+    ]);
     expect(writtenManifest).toMatchObject({ pid: 41001, privateRoot, privateRootIdentity: { version: 1, canonicalPath: privateRoot }, profile: fixture.profile, connection: fixture.connection, mode: 'headless' });
+  });
+
+  it('verifies and persists an exact package subject before spawn and again at connection handoff', async () => {
+    const fixture = sessionFixture();
+    const packageSubjectManifest = resolve('out', 'formal-subjects', 'qa-session-fixture', 'package-subject.json');
+    const packageSubjectManifestSha256 = 'A'.repeat(64);
+    const packageSubjectIdentitySha256 = 'B'.repeat(64);
+    const order = [];
+    let writtenManifest;
+    const values = sessionValues({
+      exe: fixture.exe,
+      'private-root': privateRoot,
+      profile: fixture.profile,
+      connection: fixture.connection,
+      manifest: fixture.manifest,
+      mode: 'headless',
+      'launch-context': 'unsandboxed-gui',
+      'package-subject-manifest': packageSubjectManifest,
+      'package-subject-manifest-sha256': packageSubjectManifestSha256,
+    });
+    const verifyPackageSubject = vi.fn(async () => {
+      order.push('verify-subject');
+      return {
+        manifestPath: packageSubjectManifest,
+        manifestSha256: packageSubjectManifestSha256,
+        manifest: { subject: { identitySha256: packageSubjectIdentitySha256, files: { applicationExecutable: { path: relative(resolve('.'), fixture.exe) } } } },
+      };
+    });
+
+    await start(values, {
+      ...windowsAclDependencies(),
+      assertPrivateRoot: async (options) => { order.push('acl'); return assertOwnerPrivateRoot(options, windowsAclDependencies()); },
+      accessPath: async () => { order.push('access'); },
+      verifyPackageSubject,
+      hashExecutable: async () => 'C'.repeat(64),
+      mkdirPath: async () => undefined,
+      now: () => Date.parse('2026-08-09T12:00:00.000Z'),
+      spawnProcess: () => { order.push('spawn'); return { pid: 41002, unref() {} }; },
+      waitForReady: async () => ({
+        connection: { profileId: 'D'.repeat(64), instanceId: '22222222-2222-4222-8222-222222222222', url: 'http://127.0.0.1:41002/mcp' },
+        health: { url: 'http://127.0.0.1:41002/health' },
+      }),
+      writeManifest: async (_path, manifest) => { writtenManifest = manifest; },
+      writeOutput: () => undefined,
+      environment: {},
+    });
+
+    expect(order).toEqual(['acl', 'access', 'verify-subject', 'spawn', 'verify-subject']);
+    expect(verifyPackageSubject).toHaveBeenCalledTimes(2);
+    expect(writtenManifest).toMatchObject({
+      exe: fixture.exe,
+      packageSubjectManifest,
+      packageSubjectManifestSha256,
+      packageSubjectIdentitySha256,
+    });
+  });
+
+  it('rejects a package subject executable mismatch before spawning AIMuse', async () => {
+    const fixture = sessionFixture();
+    const spawnProcess = vi.fn();
+    const values = sessionValues({
+      exe: fixture.exe,
+      'private-root': privateRoot,
+      profile: fixture.profile,
+      connection: fixture.connection,
+      manifest: fixture.manifest,
+      mode: 'headless',
+      'launch-context': 'unsandboxed-gui',
+      'package-subject-manifest': resolve('out', 'formal-subjects', 'mismatch', 'package-subject.json'),
+      'package-subject-manifest-sha256': 'A'.repeat(64),
+    });
+
+    await expect(start(values, {
+      ...windowsAclDependencies(),
+      assertPrivateRoot: (options) => assertOwnerPrivateRoot(options, windowsAclDependencies()),
+      accessPath: async () => undefined,
+      verifyPackageSubject: async ({ manifestPath }) => ({
+        manifestPath,
+        manifestSha256: 'A'.repeat(64),
+        manifest: { subject: { identitySha256: 'B'.repeat(64), files: { applicationExecutable: { path: 'out/another/AIMuse.exe' } } } },
+      }),
+      spawnProcess,
+      environment: {},
+    })).rejects.toThrow('--exe does not match');
+    expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('rejects package subject identity drift at connection handoff', async () => {
+    const fixture = sessionFixture();
+    const packageSubjectManifest = resolve('out', 'formal-subjects', 'handoff-drift', 'package-subject.json');
+    const values = sessionValues({
+      exe: fixture.exe,
+      'private-root': privateRoot,
+      profile: fixture.profile,
+      connection: fixture.connection,
+      manifest: fixture.manifest,
+      mode: 'headless',
+      'launch-context': 'unsandboxed-gui',
+      'package-subject-manifest': packageSubjectManifest,
+      'package-subject-manifest-sha256': 'A'.repeat(64),
+    });
+    let verificationCount = 0;
+    const writeManifest = vi.fn();
+
+    await expect(start(values, {
+      ...windowsAclDependencies(),
+      assertPrivateRoot: (options) => assertOwnerPrivateRoot(options, windowsAclDependencies()),
+      accessPath: async () => undefined,
+      verifyPackageSubject: async () => ({
+        manifestPath: packageSubjectManifest,
+        manifestSha256: 'A'.repeat(64),
+        manifest: { subject: { identitySha256: (++verificationCount === 1 ? 'B' : 'C').repeat(64), files: { applicationExecutable: { path: relative(resolve('.'), fixture.exe) } } } },
+      }),
+      hashExecutable: async () => 'D'.repeat(64),
+      mkdirPath: async () => undefined,
+      now: () => Date.parse('2026-08-09T12:00:00.000Z'),
+      spawnProcess: () => ({ pid: 41003, unref() {} }),
+      waitForReady: async () => ({
+        connection: { profileId: 'E'.repeat(64), instanceId: '33333333-3333-4333-8333-333333333333', url: 'http://127.0.0.1:41003/mcp' },
+        health: { url: 'http://127.0.0.1:41003/health' },
+      }),
+      writeManifest,
+      writeOutput: () => undefined,
+      environment: {},
+    })).rejects.toThrow('drifted during QA session handoff');
+    expect(verificationCount).toBe(2);
+    expect(writeManifest).not.toHaveBeenCalled();
   });
 
   it('gates qa-mcp init before bearer read, request, or state write and preserves sentinels on rejection', async () => {

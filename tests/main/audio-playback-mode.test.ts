@@ -14,20 +14,20 @@ describe('audio playback mode contract', () => {
       effectivePlaybackMode: 'shared',
       realtimeBackendReady: true,
       driver: 'wasapi',
-    })).toEqual({ requestedPlaybackMode: 'shared', effectivePlaybackMode: 'shared' });
+    }, 'wasapi')).toEqual({ requestedPlaybackMode: 'shared', effectivePlaybackMode: 'shared' });
     expect(validateNativePlaybackModeReport('exclusive', {
       requestedPlaybackMode: 'exclusive',
       effectivePlaybackMode: 'exclusive',
       realtimeBackendReady: true,
       driver: 'wasapi',
-    })).toEqual({ requestedPlaybackMode: 'exclusive', effectivePlaybackMode: 'exclusive' });
+    }, 'wasapi')).toEqual({ requestedPlaybackMode: 'exclusive', effectivePlaybackMode: 'exclusive' });
     expect(validateNativePlaybackModeReport('shared', {
       requestedPlaybackMode: 'shared',
       effectivePlaybackMode: 'unavailable',
       realtimeBackendReady: false,
       driver: 'offline',
       diagnostic: 'WASAPI support is unavailable.',
-    })).toEqual({ requestedPlaybackMode: 'shared', effectivePlaybackMode: 'unavailable' });
+    }, 'wasapi')).toEqual({ requestedPlaybackMode: 'shared', effectivePlaybackMode: 'unavailable' });
   });
 
   it('fails closed on exclusive unavailability, mismatch, fallback, or malformed diagnostics', () => {
@@ -37,31 +37,31 @@ describe('audio playback mode contract', () => {
       realtimeBackendReady: false,
       driver: 'offline',
       diagnostic: 'Endpoint rejected exclusive initialization.',
-    })).toThrow('WASAPI exclusive output was requested but is unavailable: Endpoint rejected exclusive initialization.');
+    }, 'wasapi')).toThrow('WASAPI exclusive output was requested but is unavailable: Endpoint rejected exclusive initialization.');
     expect(() => validateNativePlaybackModeReport('exclusive', {
       requestedPlaybackMode: 'shared',
       effectivePlaybackMode: 'shared',
       realtimeBackendReady: true,
       driver: 'wasapi',
-    })).toThrow('playback request mismatch');
+    }, 'wasapi')).toThrow('playback request mismatch');
     expect(() => validateNativePlaybackModeReport('exclusive', {
       requestedPlaybackMode: 'exclusive',
       effectivePlaybackMode: 'shared',
       realtimeBackendReady: true,
       driver: 'wasapi',
-    })).toThrow('must not fall back');
+    }, 'wasapi')).toThrow('must not fall back');
     expect(() => validateNativePlaybackModeReport('shared', {
       requestedPlaybackMode: 'shared',
       effectivePlaybackMode: 'shared',
       realtimeBackendReady: false,
       driver: 'offline',
-    })).toThrow('while its real-time backend was unavailable');
+    }, 'wasapi')).toThrow('while its real-time backend was unavailable');
     expect(() => validateNativePlaybackModeReport('shared', {
       requestedPlaybackMode: undefined,
       effectivePlaybackMode: undefined,
       realtimeBackendReady: true,
       driver: 'wasapi',
-    })).toThrow('valid requested playback mode');
+    }, 'wasapi')).toThrow('valid requested playback mode');
   });
 
   it('accepts only truthful CoreAudio reports when the macOS driver contract is selected', () => {

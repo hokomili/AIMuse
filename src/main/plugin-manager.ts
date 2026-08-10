@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
+import { constants } from 'node:fs';
 import { access, readdir, readFile, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, extname, join, resolve } from 'node:path';
 import {
   HUMAN_ACTOR, createId, entityBase, nowIso,
@@ -15,30 +17,61 @@ interface ScannerOutput {
 interface QuarantineEntry { path: string; hash?: string; reason: string; occurredAt: string }
 interface PluginCatalogFile { version: 1; scannedAt: string; plugins: PluginDescriptor[]; quarantine: QuarantineEntry[] }
 
-function standardRoots(): string[] {
-  const values = [
-    join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Common Files', 'VST3'),
-    join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Common', 'VST3'),
-    join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Common Files', 'CLAP'),
-    join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Common', 'CLAP'),
-  ];
+export function standardPluginRoots(platform: NodeJS.Platform = process.platform, home = homedir(), environment: NodeJS.ProcessEnv = process.env): string[] {
+  const values = platform === 'darwin'
+    ? [
+        '/Library/Audio/Plug-Ins/VST3',
+        join(home, 'Library', 'Audio', 'Plug-Ins', 'VST3'),
+        '/Library/Audio/Plug-Ins/CLAP',
+        join(home, 'Library', 'Audio', 'Plug-Ins', 'CLAP'),
+      ]
+    : platform === 'win32'
+      ? [
+          join(environment.ProgramFiles ?? 'C:\\Program Files', 'Common Files', 'VST3'),
+          join(environment.LOCALAPPDATA ?? '', 'Programs', 'Common', 'VST3'),
+          join(environment.ProgramFiles ?? 'C:\\Program Files', 'Common Files', 'CLAP'),
+          join(environment.LOCALAPPDATA ?? '', 'Programs', 'Common', 'CLAP'),
+        ]
+      : [];
   return [...new Set(values.filter(Boolean).map((value) => resolve(value)))];
 }
 
 async function exists(path: string): Promise<boolean> { return access(path).then(() => true, () => false); }
-async function findCandidates(roots: string[]): Promise<string[]> {
+export async function findPluginCandidates(roots: string[], platform: NodeJS.Platform = process.platform): Promise<string[]> {
   const output: string[] = []; const pending = roots.map((value) => resolve(value)); let visited = 0;
   while (pending.length) {
     const folder = pending.pop()!; if (!(await exists(folder))) continue; let entries; try { entries = await readdir(folder, { withFileTypes: true }); } catch { continue; }
-    for (const entry of entries) { if (++visited > 100_000) throw new Error('Plug-in scan exceeded the filesystem entry limit.'); if (entry.isSymbolicLink()) continue; const path = join(folder, entry.name); const extension = extname(entry.name).toLowerCase(); if (extension === '.vst3' && entry.isDirectory()) output.push(path); else if (extension === '.clap' && entry.isFile()) output.push(path); else if (entry.isDirectory()) pending.push(path); }
+    for (const entry of entries) { if (++visited > 100_000) throw new Error('Plug-in scan exceeded the filesystem entry limit.'); if (entry.isSymbolicLink()) continue; const path = join(folder, entry.name); const extension = extname(entry.name).toLowerCase(); if (extension === '.vst3' && entry.isDirectory()) output.push(path); else if (extension === '.clap' && (entry.isFile() || (platform === 'darwin' && entry.isDirectory()))) output.push(path); else if (entry.isDirectory()) pending.push(path); }
   }
   return [...new Set(output)].sort();
 }
 
-async function binaryFor(path: string): Promise<string> {
-  const info = await stat(path); if (info.isFile()) return path;
-  const architecture = join(path, 'Contents', 'x86_64-win'); if (await exists(architecture)) { const files = await readdir(architecture); const module = files.find((name) => ['.vst3', '.dll'].includes(extname(name).toLowerCase())); if (module) return join(architecture, module); }
-  throw new Error('VST3 bundle has no x64 Windows module.');
+export async function pluginBinaryFor(path: string, platform: NodeJS.Platform = process.platform): Promise<string> {
+  const info = await stat(path); if (info.isFile()) {
+    if (platform === 'darwin' && (info.mode & 0o111) === 0) throw new Error('CLAP module is not executable on macOS.');
+    return path;
+  }
+  if (platform === 'darwin') {
+    const contents = join(path, 'Contents', 'MacOS');
+    if (await exists(contents)) {
+      const files = (await readdir(contents, { withFileTypes: true })).filter((entry) => entry.isFile()).sort((left, right) => left.name.localeCompare(right.name));
+      const expectedName = basename(path, extname(path));
+      const exact = files.find((entry) => entry.name === expectedName);
+      const module = exact ?? (files.length === 1 ? files[0] : undefined);
+      if (module) {
+        const modulePath = join(contents, module.name);
+        await access(modulePath, constants.X_OK).catch(() => { throw new Error('VST3/CLAP bundle module is not executable on macOS.'); });
+        return modulePath;
+      }
+      if (files.length > 1) throw new Error('VST3/CLAP bundle has ambiguous macOS modules and no bundle-named executable.');
+    }
+    throw new Error('VST3/CLAP bundle has no macOS module.');
+  }
+  if (platform === 'win32') {
+    const architecture = join(path, 'Contents', 'x86_64-win'); if (await exists(architecture)) { const files = await readdir(architecture); const module = files.find((name) => ['.vst3', '.dll'].includes(extname(name).toLowerCase())); if (module) return join(architecture, module); }
+    throw new Error('VST3 bundle has no x64 Windows module.');
+  }
+  throw new Error(`VST3/CLAP bundle modules are unsupported on ${platform}.`);
 }
 
 function runScanner(executable: string, pluginPath: string, timeoutMs: number): Promise<ScannerOutput[]> {
@@ -58,7 +91,7 @@ export class PluginManager {
   async initialize(): Promise<void> { try { const value = JSON.parse(await readFile(this.catalogPath, 'utf8')) as PluginCatalogFile; if (value.version === 1) { this.plugins = new Map(value.plugins.map((plugin) => [plugin.id, plugin])); this.quarantine = value.quarantine ?? []; } } catch { /* empty catalog */ } this.projects.setPlugins([...this.plugins.values()]); }
   list(): PluginDescriptor[] { return [...this.plugins.values()].map((value) => structuredClone(value)); }
 
-  scan(roots: string[] = standardRoots(), actor: Actor = HUMAN_ACTOR): { jobId: Id } {
+  scan(roots: string[] = standardPluginRoots(), actor: Actor = HUMAN_ACTOR): { jobId: Id } {
     const jobId = createId('plugin-scan'); const timestamp = nowIso(); this.projects.upsertJob({ id: jobId, ownerActorId: actor.id, projectId: this.projects.getActiveProjectId(), kind: 'plugin-scan', status: 'queued', progress: 0, message: 'Plug-in scan queued.', createdAt: timestamp, updatedAt: timestamp, cancellable: true }); void this.runScan(jobId, roots, actor); return { jobId };
   }
 
@@ -66,10 +99,10 @@ export class PluginManager {
     try {
       if (actor.kind === 'agent') for (const root of roots) { const decision = await this.authority.file(root, 'read', true); if (!decision.allowed) throw new Error(decision.reason); }
       if (!this.scannerExecutable || !(await exists(this.scannerExecutable))) throw new Error('The isolated native plug-in scanner is not built. Existing catalog remains available.');
-      this.projects.upsertJob({ ...this.projects.getJob(jobId)!, status: 'running', progress: 0.01, message: 'Discovering VST3 and CLAP modules…', updatedAt: nowIso() }); const candidates = await findCandidates(roots); const found = new Map<string, PluginDescriptor>(); const quarantine: QuarantineEntry[] = [];
+      this.projects.upsertJob({ ...this.projects.getJob(jobId)!, status: 'running', progress: 0.01, message: 'Discovering VST3 and CLAP modules…', updatedAt: nowIso() }); const candidates = await findPluginCandidates(roots); const found = new Map<string, PluginDescriptor>(); const quarantine: QuarantineEntry[] = [];
       for (let index = 0; index < candidates.length; index += 1) {
         const path = candidates[index]; const current = this.projects.getJob(jobId); if (current?.status === 'cancelled') return; this.projects.upsertJob({ ...current!, progress: 0.03 + 0.94 * index / Math.max(1, candidates.length), message: `Scanning ${basename(path)} (${index + 1}/${candidates.length})`, updatedAt: nowIso() });
-        let hash: string | undefined; try { const binary = await binaryFor(path); hash = (await sha256File(binary)).sha256; const format = extname(path).toLowerCase() === '.clap' ? 'clap' as const : 'vst3' as const; const outputs = await runScanner(this.scannerExecutable, path, 15_000); if (!outputs.length) throw new Error('Module reported no plug-in classes.');
+        let hash: string | undefined; try { const binary = await pluginBinaryFor(path); hash = (await sha256File(binary)).sha256; const format = extname(path).toLowerCase() === '.clap' ? 'clap' as const : 'vst3' as const; const outputs = await runScanner(this.scannerExecutable, path, 15_000); if (!outputs.length) throw new Error('Module reported no plug-in classes.');
           for (const output of outputs) { if (!output.pluginUid || !output.name) throw new Error('Module metadata has no stable class ID or name.'); const id = `${format}:${output.pluginUid}`; found.set(id, { id, format, name: output.name.slice(0, 500), vendor: (output.vendor ?? 'Unknown').slice(0, 500), version: (output.version ?? '0').slice(0, 100), path, sha256: hash, categories: (output.categories ?? []).slice(0, 100), instrument: Boolean(output.instrument), quarantined: false, parameters: (output.parameters ?? []).slice(0, 100_000) }); }
         } catch (error) { quarantine.push({ path, hash, reason: error instanceof Error ? error.message : String(error), occurredAt: nowIso() }); }
       }

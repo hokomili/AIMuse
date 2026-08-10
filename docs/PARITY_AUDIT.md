@@ -1,12 +1,12 @@
 # Human/agent parity audit
 
-Last audited: 2026-08-05
+Last audited: 2026-08-09
 
 ## Verdict
 
 AIMuse has practical parity for the current canonical alpha loop: an authenticated agent can create/configure a Song or SFX project, inspect exact state and attached-editor hints, apply granular revision-checked edits, audition bounded renders, manage jobs, checkpoint/branch, and undo/redo without an editor. A human can attach and edit the same project with priority locks and visible attribution.
 
-Parity does not imply v1 DAW completeness. Managed-preview WASAPI shared playback is available to both surfaces, while live-graph/exclusive playback, recording/MIDI, deep audio gestures, complete mixer/automation, SDK-backed plug-ins and several observation modalities remain incomplete or absent. Some asymmetries are intentional security or responsiveness boundaries.
+Parity does not imply v1 DAW completeness. Managed-preview WASAPI shared playback is available to both Windows surfaces, and the shared CoreAudio runtime now has bounded native development evidence on macOS. The exact macOS editor/MCP bidirectional workflow has not been independently certified. Live-graph/exclusive CoreAudio, recording/MIDI, deep audio gestures, complete mixer/automation, SDK-backed plug-ins and several observation modalities remain incomplete or absent. Some asymmetries are intentional security or responsiveness boundaries.
 
 ## Shared canonical boundary
 
@@ -22,7 +22,7 @@ Renderer IPC and MCP commit through `ProjectService`, the same operation schema/
 | Actor history | Selective undo/redo changes only values still matching that actor's edit and preserves later work by others. |
 | Checkpoints/variants | Agents and humans use the same immutable project checkpoints and named variant service. |
 | Auditory feedback | Bounded audition/stem renders are addressable MCP media resources with engine-owned asset metadata. The same real non-silent 32-bit-float audition is visible and playable in the packaged editor through the stream-enabled custom media scheme. |
-| Real-time transport | Editor IPC and MCP transport use the same background-prewarmed revision preview and native WASAPI play/pause/stop/seek/loop state. Preview rendering does not block Electron, revision swaps preserve cursor/play state, and both surfaces observe exact unsnapped ruler seeks. |
+| Real-time transport | Editor IPC and MCP transport use the same background-prewarmed revision preview and native playback state. Windows has packaged WASAPI cross-surface evidence; macOS has bounded native shared-CoreAudio callback evidence but not yet formal editor/MCP parity evidence. Preview rendering does not block Electron, revision swaps preserve cursor/play state, and both surfaces share the same transport contract. |
 | Throughput | Per-project serialized mutation tails prevent simultaneous UI/MCP lost updates; transactions are bounded and idempotent. |
 | Editor control integrity | Enabled renderer buttons are mechanically audited for an action, high-frequency draft controls serialize and rebase canonical commits, and action failures surface in the editor instead of looking inert. Headless Chrome covers the main toolbar, timeline tools, devices, mixer, automation, candidate audition and agent connection; exact packaged QA additionally covers Windows Escape normalization, tab-scoped search, global history after blur, native dirty Cancel/Save and real audition playback. Historical hash `E558…412` passed authorized disposable-project Discard; current hash `CFCC…30621` did not repeat that destructive action without action-time confirmation. |
 | Attribution/provenance | Server actor/client metadata is durable; generated provenance is engine-only and candidates remain outside the arrangement until acceptance. Human and authenticated-agent saves carry their actor through a separate durable destination-free `file.saved` audit without changing content revision or undo history. |
@@ -37,7 +37,7 @@ Renderer IPC and MCP commit through `ProjectService`, the same operation schema/
 | SONG-02–12 | Editor semantic completeness | Fold/split/MIDI draw, device insertion and initial automation-lane creation now commit through the canonical operation surface; deeper audio, piano-roll, mixer, automation and hierarchy workflows remain thinner or model-only. |
 | PLG-06/07 | Plug-in descriptors versus native UI | Agents will use stable parameters/presets by design; humans still need managed native editor windows. |
 | AUD-02/UX-02 | Live graph, exclusive endpoints and callback telemetry | Shared preview playback now refreshes revisions without blocking or rewinding; both surfaces still need endpoint controls, hot-plug behavior, true streaming graph updates, meters and xruns. |
-| QA-09/10 | Higher-level packaged certification | Independent Luna/high Level 1 passed for current exact hash `4CF335C1…B16EC7`, including exact-URI subscriptions, both cross-surface directions, native history, cleanup and redaction with no P0–P3 finding. Separate `58E232A3…ED476`, `CFCC482C…30621` and historical `E558EA35…EC412` PASS evidence remains retained and hash-scoped. Formal Levels 2/3 remain; provider generation stays an explicit unconfigured/no-paid-call exception. |
+| QA-09/10 | Higher-level packaged certification | Independent Luna/high Level 1 passed for Windows exact hash `4CF335C1…B16EC7`, including exact-URI subscriptions, both cross-surface directions, native history, cleanup and redaction with no P0–P3 finding. Separate Windows hashes remain retained and scoped. The local macOS package/headless evidence is not transferable certification; a fresh independent task must still prove human→agent and agent→human behavior with native Computer Use on the exact Mac package. Formal Levels 2/3 remain; provider generation stays an explicit unconfigured/no-paid-call exception. |
 
 ## Boundary asymmetries by design
 

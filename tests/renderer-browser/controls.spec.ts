@@ -18,7 +18,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => { await server.close(); });
 
-function snapshot(empty = false): WorkspaceSnapshot {
+function snapshot(empty = false, waitingApproval = false): WorkspaceSnapshot {
   const project = createProject('song', 'Control Surface QA');
   const timestamp = new Date().toISOString();
   project.assets.asset_audition_ui = {
@@ -35,21 +35,29 @@ function snapshot(empty = false): WorkspaceSnapshot {
       acceptedCandidateIds: [], rejectedCandidateIds: [],
     },
   };
+  const approvalJob: AsyncJob = {
+    id: 'approval-job_ui', ownerActorId: 'agent-ui', projectId: project.id, kind: 'render', status: 'waiting-for-user', progress: 0,
+    message: 'Export requires approval.', createdAt: timestamp, updatedAt: timestamp, cancellable: true,
+    approval: { kind: 'file-write', summary: 'Fixture agent requests a MIDI export.', request: { kind: 'midi' }, expiresAt: new Date(Date.now() + 60_000).toISOString() },
+  };
   return {
     projects: empty ? [] : [{ id: project.id, name: project.name, kind: project.kind, dirty: true, revision: project.revision }],
     activeProjectId: empty ? undefined : project.id,
     activeProject: empty ? undefined : project,
-    jobs: empty ? [] : [candidateJob], plugins: [], locks: [],
+    jobs: empty ? [] : [waitingApproval ? approvalJob : candidateJob], plugins: [], locks: [],
     mcp: { running: true, url: 'http://127.0.0.1:48000/mcp', port: 48_000, tokenHint: 'abcd', sessions: [] },
     transport: { status: 'stopped', tick: 0, sample: 0, loopEnabled: false, loopStartTick: 0, loopEndTick: 15_360, metronomeEnabled: true, cpuLoad: 0, xruns: 0, latencySamples: 256, graphRevision: 0 },
     selection: undefined, canUndo: true, canRedo: true,
   };
 }
 
-async function openEditor(page: Page, empty = false): Promise<void> {
-  const initial = snapshot(empty);
+interface ProviderFixture { configured?: boolean; failure?: string }
+
+async function openEditor(page: Page, empty = false, providerFixture: ProviderFixture = {}, waitingApproval = false): Promise<void> {
+  const initial = { state: snapshot(empty, waitingApproval), providerConfigured: providerFixture.configured ?? true, providerFailure: providerFixture.failure };
   await page.addInitScript((seed) => {
-    const state = structuredClone(seed);
+    const state = structuredClone(seed.state);
+    let providerConfigured = seed.providerConfigured;
     let eventListener: ((event: unknown) => void) | undefined;
     const calls: Array<{ name: string; args: unknown[] }> = [];
     Object.defineProperty(window, '__aimuseCalls', { value: calls, configurable: true });
@@ -61,6 +69,16 @@ async function openEditor(page: Page, empty = false): Promise<void> {
       if (operation.kind === 'track.update') { Object.assign(project.tracks[String(operation.trackId)], operation.changes); project.tracks[String(operation.trackId)].revision += 1; }
       if (operation.kind === 'track.add') { const track = structuredClone(operation.track) as Record<string, any>; project.tracks[track.id] = track; project.trackOrder.splice(Number(operation.index ?? project.trackOrder.length), 0, track.id); }
       if (operation.kind === 'clip.add') { const clip = structuredClone(operation.clip) as Record<string, any>; project.clips[clip.id] = clip; project.tracks[clip.trackId].clipIds.push(clip.id); }
+      if (operation.kind === 'clip.move') { const clip = project.clips[String(operation.clipId)]; clip.startTick = Number(operation.startTick); clip.revision += 1; }
+      if (operation.kind === 'clip.trim') { const clip = project.clips[String(operation.clipId)]; clip.startTick = Number(operation.startTick); clip.durationTicks = Number(operation.durationTicks); clip.revision += 1; }
+      if (operation.kind === 'clip.split') { const clip = project.clips[String(operation.clipId)]; const right = structuredClone(operation.rightClip) as Record<string, any>; const leftDuration = Number(operation.tick) - clip.startTick; right.startTick = Number(operation.tick); right.durationTicks = clip.durationTicks - leftDuration; clip.durationTicks = leftDuration; clip.revision += 1; project.clips[right.id] = right; project.tracks[clip.trackId].clipIds.push(right.id); }
+      if (operation.kind === 'marker.add') { const marker = structuredClone(operation.marker) as Record<string, any>; project.markers[marker.id] = marker; project.markerOrder.push(marker.id); }
+      if (operation.kind === 'marker.update') { Object.assign(project.markers[String(operation.markerId)], operation.changes); project.markers[String(operation.markerId)].revision += 1; }
+      if (operation.kind === 'marker.delete') { delete project.markers[String(operation.markerId)]; project.markerOrder = project.markerOrder.filter((id: string) => id !== operation.markerId); }
+      if (operation.kind === 'section.add') { const section = structuredClone(operation.section) as Record<string, any>; project.sections[section.id] = section; project.sectionOrder.push(section.id); }
+      if (operation.kind === 'section.update') { Object.assign(project.sections[String(operation.sectionId)], operation.changes); project.sections[String(operation.sectionId)].revision += 1; }
+      if (operation.kind === 'section.delete') { delete project.sections[String(operation.sectionId)]; project.sectionOrder = project.sectionOrder.filter((id: string) => id !== operation.sectionId); }
+      if (operation.kind === 'lyrics.set') project.lyrics = String(operation.lyrics);
       if (operation.kind === 'device.add') { const device = structuredClone(operation.device) as Record<string, any>; project.devices[device.id] = device; project.tracks[device.trackId].deviceIds.push(device.id); }
       if (operation.kind === 'automation.lane.add') { const lane = structuredClone(operation.lane) as Record<string, any>; project.automationLanes[lane.id] = lane; project.tracks[lane.trackId].automationLaneIds.push(lane.id); }
       project.revision += 1; state.projects[0].revision = project.revision;
@@ -73,9 +91,12 @@ async function openEditor(page: Page, empty = false): Promise<void> {
       undo: async (projectId?: string) => { record('undo', projectId); return { status: 'committed' }; },
       redo: async (projectId?: string) => { record('redo', projectId); return { status: 'committed' }; },
       openProjects: async () => { record('openProjects'); return { opened: [], warnings: [] }; },
-      saveProject: async () => ({ saved: true, warnings: [] }), saveProjectAs: async () => ({ saved: true, warnings: [] }),
+      saveProject: async (projectId?: string) => { record('saveProject', projectId); return { saved: true, warnings: [] }; }, saveProjectAs: async (projectId?: string) => { record('saveProjectAs', projectId); return { saved: true, projectPath: '/fixture/Control Surface QA copy.aimuse', warnings: [] }; },
       closeProject: async (projectId: string) => { record('closeProject', projectId); return { closed: true }; },
-      acquireHumanLock: async () => ({ acquired: true, lockId: 'lock_ui' }), refreshHumanLock: async () => ({ refreshed: true }), releaseHumanLock: async () => undefined,
+      acquireHumanLock: async (request: unknown) => { record('acquireHumanLock', request); return { acquired: true, lockId: 'lock_ui' }; },
+      refreshHumanLock: async (lockId: string) => { record('refreshHumanLock', lockId); return { refreshed: true, expiresAt: new Date(Date.now() + 10_000).toISOString() }; },
+      holdHumanLock: async (lockId: string) => { record('holdHumanLock', lockId); return { held: true, expiresAt: new Date(Date.now() + 15_000).toISOString() }; },
+      releaseHumanLock: async (lockId: string) => { record('releaseHumanLock', lockId); },
       updateSelection: async (selection: unknown) => { record('updateSelection', selection); state.selection = structuredClone(selection) as never; },
       transport: async (action: string, options?: Record<string, unknown>) => { record('transport', action, options); if (action === 'loop') state.transport.loopEnabled = Boolean(options?.loopEnabled); if (action === 'seek') state.transport.tick = Number(options?.tick ?? 0); state.transport.status = action === 'play' ? 'playing' : action === 'pause' ? 'paused' : action === 'stop' ? 'stopped' : state.transport.status; eventListener?.({ type: 'transport', state: structuredClone(state.transport) }); return structuredClone(state.transport); },
       stopAgents: async () => 0,
@@ -91,8 +112,8 @@ async function openEditor(page: Page, empty = false): Promise<void> {
       createCheckpoint: async () => ({ checkpointId: 'checkpoint_ui' }), restoreCheckpoint: async () => ({ status: 'committed' }),
       scanPlugins: async () => ({ jobId: 'scan_ui' }), generationStart: async () => ({ jobId: 'generation_ui' }),
       generationAccept: async () => ({ status: 'committed' }), generationReject: async () => undefined,
-      setProviderCredential: async () => ({ saved: true }),
-      getProviderCapabilities: async () => [{ provider: 'elevenlabs', configured: true, experimental: false, models: [{ id: 'music_v1', label: 'Music v1', capabilities: ['text-to-music'], minDurationMs: 3_000, maxDurationMs: 600_000, formats: ['mp3'], costKnownBeforeRequest: false }] }],
+      setProviderCredential: async (provider: string, value: string) => { record('setProviderCredential', provider, value); if (seed.providerFailure) throw new Error(seed.providerFailure); providerConfigured = Boolean(value); return { saved: true }; },
+      getProviderCapabilities: async () => { record('getProviderCapabilities'); return [{ provider: 'elevenlabs', configured: providerConfigured, experimental: false, models: [{ id: 'music_v1', label: 'Music v1', capabilities: ['text-to-music'], minDurationMs: 3_000, maxDurationMs: 600_000, formats: ['mp3'], costKnownBeforeRequest: false }] }]; },
       installAuthorityPolicy: async () => ({ installed: true }), replayTrace: async () => ({ replaying: true }),
       onEvent: (callback: (event: unknown) => void) => { eventListener = callback; return () => { eventListener = undefined; }; },
       onNewProjectRequested: () => () => undefined,
@@ -112,6 +133,10 @@ async function openEditor(page: Page, empty = false): Promise<void> {
 
 async function callNames(page: Page): Promise<string[]> {
   return page.evaluate(() => (window as unknown as { __aimuseCalls: Array<{ name: string }> }).__aimuseCalls.map((entry) => entry.name));
+}
+
+async function calls(page: Page, name: string): Promise<Array<{ name: string; args: unknown[] }>> {
+  return page.evaluate((target) => (window as unknown as { __aimuseCalls: Array<{ name: string; args: unknown[] }> }).__aimuseCalls.filter((entry) => entry.name === target), name);
 }
 
 async function transactionLabels(page: Page): Promise<string[]> {
@@ -196,4 +221,115 @@ test('previews generation candidates and opens agent connection without a projec
   await expect.poll(() => callNames(page)).toContain('configureAgentClient');
   await page.getByRole('button', { name: 'Reveal token' }).click();
   await expect(page.getByText('fixture-token')).toBeVisible();
+});
+
+test('exposes distinct Save As, clip move/trim/split, and song-structure workflows', async ({ page }) => {
+  await openEditor(page);
+
+  await page.getByTitle('Save As').click();
+  await expect.poll(() => callNames(page)).toContain('saveProjectAs');
+  await expect(page.getByText(/Project saved as .*Control Surface QA copy\.aimuse/)).toBeVisible();
+
+  await page.getByRole('button', { name: 'MIDI clip', exact: true }).click();
+  await expect.poll(() => transactionLabels(page)).toContain('Create MIDI clip');
+  await expect(page.locator('.arrangement-clip').first()).toBeVisible();
+  await page.locator('.arrangement-clip').first().click();
+  const start = page.getByLabel('Clip start tick');
+  await start.fill('240');
+  await start.press('Enter');
+  const length = page.getByLabel('Clip length ticks');
+  await length.fill('7680');
+  await length.press('Enter');
+  await page.getByRole('button', { name: /Split New idea at midpoint/ }).click();
+  await expect.poll(() => transactionLabels(page)).toEqual(expect.arrayContaining(['Move “New idea”', 'Trim “New idea”', 'Split “New idea” at midpoint']));
+
+  await page.locator('.right-tabs').getByRole('button', { name: 'Song', exact: true }).click();
+  await page.getByRole('button', { name: '＋ At selection' }).click();
+  await page.getByRole('button', { name: '＋ From selection' }).click();
+  await expect(page.getByLabel(/Marker name Marker 1/)).toBeVisible();
+  await expect(page.getByLabel(/Section name Section 1/)).toBeVisible();
+  await page.getByLabel('Lyrics').fill('Certifiable native lyrics checkpoint');
+  await page.getByRole('button', { name: 'Save lyrics' }).click();
+  await expect.poll(() => transactionLabels(page)).toEqual(expect.arrayContaining(['Add Marker 1', 'Add Section 1', 'Set song lyrics']));
+});
+
+test('holds a completed clip gesture for a visible bounded agent-conflict window', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('button', { name: 'MIDI clip', exact: true }).click();
+  const clip = page.locator('.arrangement-clip').first();
+  await expect(clip).toBeVisible();
+  const box = await clip.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + 20, box!.y + 20);
+  await page.mouse.down();
+  const lockStatus = page.locator('.human-lock-status');
+  await expect(lockStatus).toContainText('Human edit lock active');
+  await page.mouse.move(box!.x + 45, box!.y + 20, { steps: 3 });
+  await page.mouse.up();
+
+  await expect(lockStatus).toContainText(/Human edit protected · \d+s/);
+  await expect.poll(() => callNames(page)).toEqual(expect.arrayContaining(['acquireHumanLock', 'holdHumanLock']));
+  await expect(clip).toHaveClass(/human-protected/);
+  await page.getByRole('button', { name: 'Release human edit lock now' }).click();
+  await expect.poll(() => callNames(page)).toContain('releaseHumanLock');
+  await expect(lockStatus).toHaveCount(0);
+});
+
+test('renders one admitted human approval request with one decision surface', async ({ page }) => {
+  await openEditor(page, false, {}, true);
+  await expect(page.locator('.right-toggle em')).toHaveText('1');
+  await page.locator('.right-tabs').getByRole('button', { name: /^Jobs/ }).click();
+  await expect(page.locator('.job-card.waiting-for-user')).toHaveCount(1);
+  await expect(page.locator('.approval-card')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Deny' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Allow once' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Allow for session' })).toHaveCount(1);
+});
+
+test('configures, rotates, removes, and safely rejects provider credentials through the renderer setter', async ({ page, context }) => {
+  const first = 'fixture-renderer-provider-v1-never-persist';
+  const rotated = 'fixture-renderer-provider-v2-never-persist';
+  await openEditor(page, false, { configured: false });
+  await page.getByRole('button', { name: 'Generate' }).first().click();
+  await expect(page.getByText('Add a provider credential before generating.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Configure' }).click();
+  const credential = page.getByPlaceholder('elevenlabs API key');
+  await credential.fill(first);
+  await page.locator('.provider-credential').getByRole('button', { name: 'Save' }).click();
+  await expect.poll(() => calls(page, 'setProviderCredential')).toEqual([{ name: 'setProviderCredential', args: ['elevenlabs', first] }]);
+  await expect(credential).toBeHidden();
+  await expect(page.getByText('Credential stored in operating-system protected storage.')).toBeVisible();
+  await expect(page.locator('body')).not.toContainText(first);
+
+  await page.getByRole('button', { name: 'Manage' }).click();
+  await page.getByPlaceholder('elevenlabs API key').fill(rotated);
+  await page.locator('.provider-credential').getByRole('button', { name: 'Save' }).click();
+  await expect.poll(() => calls(page, 'setProviderCredential')).toHaveLength(2);
+  expect((await calls(page, 'setProviderCredential'))[1]?.args).toEqual(['elevenlabs', rotated]);
+  await expect(page.locator('body')).not.toContainText(rotated);
+
+  await page.getByRole('button', { name: 'Manage' }).click();
+  await page.getByRole('button', { name: 'Remove' }).click();
+  await expect.poll(() => calls(page, 'setProviderCredential')).toHaveLength(3);
+  expect((await calls(page, 'setProviderCredential'))[2]?.args).toEqual(['elevenlabs', '']);
+  await expect(page.getByText('Add a provider credential before generating.')).toBeVisible();
+
+  const denial = 'macOS Keychain-backed protected storage is unavailable.';
+  const rejected = 'fixture-renderer-denied-provider-never-persist';
+  const deniedPage = await context.newPage();
+  try {
+    await openEditor(deniedPage, false, { configured: false, failure: denial });
+    await deniedPage.getByRole('button', { name: 'Generate' }).first().click();
+    await deniedPage.getByRole('button', { name: 'Configure' }).click();
+    const deniedCredential = deniedPage.getByPlaceholder('elevenlabs API key');
+    await deniedCredential.fill(rejected);
+    await deniedPage.locator('.provider-credential').getByRole('button', { name: 'Save' }).click();
+    await expect(deniedCredential).toHaveValue('');
+    await expect(deniedPage.getByText(denial)).toBeVisible();
+    await expect(deniedPage.locator('body')).not.toContainText(rejected);
+    await expect(deniedPage.getByText('Add a provider credential before generating.')).toBeVisible();
+  } finally {
+    await deniedPage.close();
+  }
 });

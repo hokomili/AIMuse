@@ -12,7 +12,7 @@ describe('desktop platform seams', () => {
     expect(profileIdForPath('/Users/AIMuse', 'darwin')).not.toBe(profileIdForPath('/Users/aimuse', 'darwin'));
   });
 
-  it('declares CoreAudio and Keychain boundaries without claiming an implementation', () => {
+  it('declares CoreAudio and Keychain platform boundaries', () => {
     expect(nativeAudioDriverForPlatform('win32')).toBe('wasapi');
     expect(nativeAudioDriverForPlatform('darwin')).toBe('coreaudio');
     expect(nativeAudioBackendLabel('darwin')).toBe('CoreAudio');

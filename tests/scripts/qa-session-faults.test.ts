@@ -247,7 +247,7 @@ describe('QA session fail-closed identity and redaction', () => {
       expect(result.status).toBe(1);
       expect(status.processAlive).toBe(false);
       expect(status.processInspection).toBe('performed');
-      expect(status.health).toEqual({ skipped: 'process not alive' });
+      expect(status.health).toEqual({ skipped: 'process absent' });
       expect(requests).toEqual([]);
       expect(await readFile(fixture.manifest, 'utf8')).toBe(fixture.manifestText);
       expect(await readFile(fixture.connection, 'utf8')).toBe(fixture.connectionText);

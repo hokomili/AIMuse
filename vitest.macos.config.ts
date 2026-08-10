@@ -17,7 +17,9 @@ export default defineConfig({
       'tests/renderer/**/*.test.ts',
       'tests/native/audio-playback-mode-source.test.ts',
       'tests/scripts/portability.test.mjs',
+      'tests/scripts/platform-test-routing.test.ts',
       'tests/scripts/macos-structure.test.mjs',
+      'tests/scripts/macos-coreaudio-smoke.test.mjs',
     ],
   },
 });

@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { assertCredentialFreeEvidence, assertPrivateWindowsAcl, validateRestartIdentity } from '../../scripts/qa-headless-restart.mjs';
+import { relative, resolve } from 'node:path';
+import { assertCredentialFreeEvidence, assertPackageSubjectEvidence, assertPrivateWindowsAcl, parseDarwinRelevantProcesses, resolvePackageSubjectRequest, reverifyHeadlessPackageSubjectAtRestart, validateRestartIdentity, verifyHeadlessPackageSubject } from '../../scripts/qa-headless-restart.mjs';
 
 const USER = 'S-1-5-21-111-222-333-1001';
 const PROFILE = 'A'.repeat(64);
+const SUBJECT_MANIFEST = resolve('test-results', 'formal-package-subject.json');
+const SUBJECT_DIGEST = 'A'.repeat(64);
+const SUBJECT_IDENTITY = 'B'.repeat(64);
+const SUBJECT_EXE = resolve('out', 'formal-fixture', 'AIMuse');
 
 describe('AGT-04 isolated headless restart evidence guards', () => {
+  it('finds AIMuse macOS app, helper and native processes without matching the Node coordinator', () => {
+    expect(parseDarwinRelevantProcesses([
+      '  101 /Applications/AIMuse.app/Contents/MacOS/AIMuse',
+      '  102 /Applications/AIMuse.app/Contents/Frameworks/AIMuse Helper (Renderer).app/Contents/MacOS/AIMuse Helper (Renderer)',
+      '  103 /Applications/AIMuse.app/Contents/Resources/native/aimuse-audio',
+      '  104 /usr/local/bin/node',
+    ].join('\n'))).toEqual([
+      { name: 'AIMuse', pid: 101 },
+      { name: 'AIMuse Helper (Renderer)', pid: 102 },
+      { name: 'aimuse-audio', pid: 103 },
+    ]);
+  });
   it('accepts only an owner-protected Windows root without broad principals', () => {
     expect(assertPrivateWindowsAcl({
       protected: true,
@@ -43,5 +60,40 @@ describe('AGT-04 isolated headless restart evidence guards', () => {
     expect(() => assertCredentialFreeEvidence({ nested: { token: 'fixture-secret' } }, 'fixture')).toThrow('credential-bearing keys');
     expect(() => assertCredentialFreeEvidence({ message: 'Bearer fixture-secret-value' }, 'fixture')).toThrow('bearer value');
   });
-});
 
+  it('requires a complete manifest/digest pair from flags or the formal environment', () => {
+    expect(resolvePackageSubjectRequest(new Map(), {})).toBeUndefined();
+    expect(resolvePackageSubjectRequest(new Map(), {
+      AIMUSE_PACKAGE_SUBJECT_MANIFEST: SUBJECT_MANIFEST,
+      AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256: SUBJECT_DIGEST,
+    })).toEqual({ manifestPath: SUBJECT_MANIFEST, expectedManifestSha256: SUBJECT_DIGEST });
+    expect(() => resolvePackageSubjectRequest(new Map([['package-subject-manifest', SUBJECT_MANIFEST]]), {})).toThrow('requires both');
+    expect(() => resolvePackageSubjectRequest(new Map([['package-subject-manifest-sha256', 'invalid']]), {})).toThrow('requires both');
+  });
+
+  it('binds the declared executable and retained evidence to the verified package subject', async () => {
+    const request = { manifestPath: SUBJECT_MANIFEST, expectedManifestSha256: SUBJECT_DIGEST };
+    const verifySubject = async () => ({
+      manifestPath: SUBJECT_MANIFEST,
+      manifestSha256: SUBJECT_DIGEST,
+      manifest: { subject: { identitySha256: SUBJECT_IDENTITY, files: { applicationExecutable: { path: relative(resolve('.'), SUBJECT_EXE) } } } },
+    });
+    const binding = await verifyHeadlessPackageSubject({ exe: SUBJECT_EXE, request, verifySubject });
+    expect(binding).toEqual({ manifestPath: SUBJECT_MANIFEST, manifestSha256: SUBJECT_DIGEST, subjectIdentitySha256: SUBJECT_IDENTITY });
+    await expect(reverifyHeadlessPackageSubjectAtRestart({ exe: SUBJECT_EXE, request, before: binding, verifySubject })).resolves.toEqual(binding);
+    await expect(reverifyHeadlessPackageSubjectAtRestart({
+      exe: SUBJECT_EXE,
+      request,
+      before: binding,
+      verifySubject: async () => ({
+        manifestPath: SUBJECT_MANIFEST,
+        manifestSha256: SUBJECT_DIGEST,
+        manifest: { subject: { identitySha256: 'C'.repeat(64), files: { applicationExecutable: { path: relative(resolve('.'), SUBJECT_EXE) } } } },
+      }),
+    })).rejects.toThrow('does not match');
+    expect(assertPackageSubjectEvidence(binding, binding)).toBe(true);
+    expect(assertPackageSubjectEvidence(undefined, undefined)).toBe(true);
+    await expect(verifyHeadlessPackageSubject({ exe: resolve('out', 'other', 'AIMuse'), request, verifySubject })).rejects.toThrow('does not match');
+    expect(() => assertPackageSubjectEvidence({ ...binding, subjectIdentitySha256: 'C'.repeat(64) }, binding)).toThrow('does not match');
+  });
+});

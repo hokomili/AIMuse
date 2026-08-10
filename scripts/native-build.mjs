@@ -5,12 +5,20 @@ import { fileURLToPath } from 'node:url';
 
 const workspace = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = join(workspace, 'native');
-const buildRuntimeBinaries = process.platform === 'win32';
-const build = join(source, process.platform === 'win32' ? 'build' : `build-${process.platform}-${process.arch}`);
+const buildRuntimeBinaries = process.platform === 'win32' || process.platform === 'darwin';
+const architectureArgument = process.argv.find((value) => value.startsWith('--arch='));
+const requestedArchitecture = architectureArgument?.slice('--arch='.length) || process.env.AIMUSE_TARGET_ARCH || process.arch;
+const supportedArchitectures = process.platform === 'darwin' ? ['arm64', 'x64', 'universal'] : process.platform === 'win32' ? ['x64'] : [process.arch];
+if (!supportedArchitectures.includes(requestedArchitecture)) {
+  throw new Error(`Native ${process.platform} builds support ${supportedArchitectures.join(', ')}, received ${requestedArchitecture}.`);
+}
+const cmakeArchitecture = requestedArchitecture === 'universal' ? 'arm64;x86_64' : requestedArchitecture === 'x64' ? 'x86_64' : requestedArchitecture;
+const build = join(source, process.platform === 'win32' ? 'build' : `build-${process.platform}-${requestedArchitecture}`);
 const distribution = join(source, 'dist', 'native');
 const action = process.argv[2] ?? 'build';
 const enableWasapi = process.platform === 'win32' && process.env.AIMUSE_ENABLE_WASAPI !== '0';
-const enableCoreAudio = false;
+const enableCoreAudio = process.platform === 'darwin' && process.env.AIMUSE_ENABLE_COREAUDIO !== '0';
+const fetchAudioDependencies = enableWasapi || enableCoreAudio;
 
 function executable(candidates) {
   for (const candidate of candidates) {
@@ -45,7 +53,7 @@ function run(program, arguments_) {
 function configure() {
   const arguments_ = [
     '--fresh', '-S', source, '-B', build, '-DCMAKE_BUILD_TYPE=RelWithDebInfo',
-    `-DAIMUSE_FETCH_AUDIO_DEPS=${enableWasapi ? 'ON' : 'OFF'}`,
+    `-DAIMUSE_FETCH_AUDIO_DEPS=${fetchAudioDependencies ? 'ON' : 'OFF'}`,
     `-DAIMUSE_ENABLE_WASAPI=${enableWasapi ? 'ON' : 'OFF'}`,
     `-DAIMUSE_ENABLE_COREAUDIO=${enableCoreAudio ? 'ON' : 'OFF'}`,
     `-DAIMUSE_BUILD_RUNTIME_BINARIES=${buildRuntimeBinaries ? 'ON' : 'OFF'}`,
@@ -58,6 +66,7 @@ function configure() {
   } else if (ninja && existsSync(ninja)) {
     arguments_.push('-G', 'Ninja', `-DCMAKE_MAKE_PROGRAM=${ninja}`);
   }
+  if (process.platform === 'darwin') arguments_.push(`-DCMAKE_OSX_ARCHITECTURES=${cmakeArchitecture}`);
   run(cmake, arguments_);
 }
 
@@ -65,13 +74,13 @@ function hasExpectedConfiguration() {
   const cachePath = join(build, 'CMakeCache.txt');
   if (!existsSync(cachePath) || (!existsSync(join(build, 'build.ninja')) && !existsSync(join(build, 'ALL_BUILD.vcxproj')))) return false;
   const cache = readFileSync(cachePath, 'utf8');
-  const expected = enableWasapi ? 'ON' : 'OFF';
-  return cache.includes(`AIMUSE_FETCH_AUDIO_DEPS:BOOL=${expected}`) &&
-    cache.includes(`AIMUSE_ENABLE_WASAPI:BOOL=${expected}`) &&
-    cache.includes('AIMUSE_ENABLE_COREAUDIO:BOOL=OFF') &&
+  return cache.includes(`AIMUSE_FETCH_AUDIO_DEPS:BOOL=${fetchAudioDependencies ? 'ON' : 'OFF'}`) &&
+    cache.includes(`AIMUSE_ENABLE_WASAPI:BOOL=${enableWasapi ? 'ON' : 'OFF'}`) &&
+    cache.includes(`AIMUSE_ENABLE_COREAUDIO:BOOL=${enableCoreAudio ? 'ON' : 'OFF'}`) &&
     cache.includes(`AIMUSE_BUILD_RUNTIME_BINARIES:BOOL=${buildRuntimeBinaries ? 'ON' : 'OFF'}`) &&
     cache.includes('AIMUSE_ENABLE_PLUGIN_SDKS:BOOL=OFF') &&
-    cache.includes('AIMUSE_BUILD_QA_PRIVATE_ROOT_PROVIDER:BOOL=OFF');
+    cache.includes('AIMUSE_BUILD_QA_PRIVATE_ROOT_PROVIDER:BOOL=OFF') &&
+    (process.platform !== 'darwin' || cache.includes(`CMAKE_OSX_ARCHITECTURES:STRING=${cmakeArchitecture}`));
 }
 
 function stageRuntime() {
@@ -85,9 +94,12 @@ function stageRuntime() {
   }
 }
 
-if (!['configure', 'build', 'test'].includes(action)) {
-  console.error('usage: node scripts/native-build.mjs [configure|build|test]');
+if (!['configure', 'build', 'test', 'plan'].includes(action)) {
+  console.error('usage: node scripts/native-build.mjs [configure|build|test|plan] [--arch=arm64|x64|universal]');
   process.exit(2);
+}
+if (action === 'plan') {
+  process.stdout.write(`${JSON.stringify({ platform: process.platform, hostArchitecture: process.arch, requestedArchitecture, cmakeArchitecture, build, distribution }, null, 2)}\n`);
 }
 if (action === 'configure') configure();
 if (action === 'build' || action === 'test') {

@@ -1,12 +1,14 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Midi } from '@tonejs/midi';
 import { strFromU8, unzipSync } from 'fflate';
+import yauzl from 'yauzl';
 import {
   HUMAN_ACTOR, createId, createTrack, entityBase, nowIso,
-  type AsyncJob, type MidiClip, type ProjectTransaction, type SfxDeliverable,
+  type Actor, type AsyncJob, type AudioClip, type MediaAsset, type MidiClip, type ProjectOperation, type ProjectTransaction, type SfxDeliverable,
 } from '@aimuse/core';
 import type { ExportReport } from '../../src/main/export-manager';
 import { AudioEngineController } from '../../src/main/audio-engine';
@@ -70,6 +72,47 @@ describe('export pipeline', () => {
     throw new Error('Export job did not finish.');
   }
 
+  async function centralDirectoryNames(path: string): Promise<string[]> {
+    return new Promise((resolvePromise, reject) => {
+      yauzl.open(path, { lazyEntries: true }, (error, archive) => {
+        if (error || !archive) return reject(error ?? new Error('ZIP central directory could not be opened.'));
+        const names: string[] = [];
+        archive.once('error', reject);
+        archive.once('end', () => resolvePromise(names));
+        archive.on('entry', (entry) => { names.push(entry.fileName); archive.readEntry(); });
+        archive.readEntry();
+      });
+    });
+  }
+
+  async function addContentAddressedAudio(leftBytes: Buffer, rightBytes: Buffer): Promise<{ archivePath: string }> {
+    const project = projects.getActiveProject()!;
+    const master = project.tracks[project.trackOrder.at(-1)!];
+    const track = createTrack('audio', 'Content-addressed audio', '#06b6d4', HUMAN_ACTOR);
+    track.routing.outputTrackId = master.id;
+    const declaredSha256 = createHash('sha256').update(leftBytes).digest('hex');
+    const sources = [join(root, 'source-a.wav'), join(root, 'source-b.wav')];
+    await Promise.all([writeFile(sources[0], leftBytes), writeFile(sources[1], rightBytes)]);
+    const assets: MediaAsset[] = sources.map((sourcePath, index) => ({
+      ...entityBase('asset', HUMAN_ACTOR), kind: 'audio', name: `Source ${index + 1}.wav`, mimeType: 'audio/wav', sha256: declaredSha256,
+      byteLength: index ? rightBytes.length : leftBytes.length, storage: 'managed-cache', externalPath: sourcePath,
+      sampleRate: 48_000, channels: 2, durationSamples: 48_000, source: 'import',
+    }));
+    const clips: AudioClip[] = assets.map((asset, index) => ({
+      ...entityBase('clip', HUMAN_ACTOR), kind: 'audio', trackId: track.id, assetId: asset.id, name: `Reference ${index + 1}`, color: track.color,
+      startTick: index * 960, durationTicks: 960, muted: false, gainDb: 0, fadeIn: { durationTicks: 0, curve: 'equal-power' }, fadeOut: { durationTicks: 0, curve: 'equal-power' }, loopEnabled: false,
+      sourceStartSample: 0, sourceDurationSamples: 48_000, transposeSemitones: 0, stretchMode: 'stretch', reverse: false, warpMarkers: [],
+    }));
+    const operations: ProjectOperation[] = [
+      ...assets.map((asset) => ({ kind: 'asset.add' as const, asset })),
+      { kind: 'track.add', track, index: project.trackOrder.length - 1 },
+      ...clips.map((clip) => ({ kind: 'clip.add' as const, clip })),
+    ];
+    expect(await projects.apply({ id: createId('tx'), clientOperationId: createId('audio-fixture'), projectId: project.id, actor: HUMAN_ACTOR, label: 'Add content-addressed audio fixtures', createdAt: nowIso(), operations, checkpointPolicy: 'none' }, HUMAN_ACTOR)).toMatchObject({ status: 'committed' });
+    assets.forEach((asset, index) => projects.registerAssetSource(asset.id, sources[index]));
+    return { archivePath: `audio/${declaredSha256}.wav` };
+  }
+
   it('exports Standard MIDI with tempo, notes, and normalized pitch bend intact', async () => {
     const destination = join(root, 'song-midi');
     const job = await terminal(exports.start({ projectId: projects.getActiveProjectId()!, kind: 'midi', destination }).jobId);
@@ -81,6 +124,21 @@ describe('export pipeline', () => {
     const track = midi.tracks.find((value) => value.name === 'Fixture Lead')!;
     expect(track.notes[0]).toMatchObject({ ticks: 480, durationTicks: 480, midi: 69 });
     expect(track.pitchBends[0]).toMatchObject({ ticks: 720, value: 0.25 });
+  });
+
+  it('does not resurrect a queued agent export after cancellation during approval preflight', async () => {
+    const actor: Actor = { id: 'agent-export-cancel', kind: 'agent', name: 'Export cancellation agent', color: '#06b6d4' };
+    const reservation = projects.reserveApproval(actor.id)!;
+    const destination = join(root, 'cancelled-before-approval');
+    const { jobId } = exports.start({ projectId: projects.getActiveProjectId()!, kind: 'midi', destination }, actor, reservation.reservationId);
+    expect(projects.cancelJob(jobId)).toMatchObject({ status: 'cancelled' });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    expect(projects.getJob(jobId)).toMatchObject({ status: 'cancelled' });
+    expect(projects.getJob(jobId)).not.toHaveProperty('approval');
+    await expect(stat(`${destination}.mid`)).rejects.toThrow();
+    const next = projects.reserveApproval('agent-after-cancel');
+    expect(next).toEqual({ reservationId: expect.stringMatching(/^approval-reservation_/) });
+    projects.releaseApprovalReservation(next!.reservationId);
   });
 
   it('produces deterministic loudness-normalized WAV renders and a DAWproject fallback report', async () => {
@@ -99,6 +157,33 @@ describe('export pipeline', () => {
     expect(Object.keys(archive).sort()).toEqual(['fallback-report.json', 'metadata.xml', 'project.xml']);
     expect(strFromU8(archive['project.xml'])).toContain('<Project version="1.0">');
     expect(JSON.parse(strFromU8(archive['fallback-report.json']))).toMatchObject({ format: 'AIMuse DAWproject fallback report', warnings: [] });
+  });
+
+  it('writes one central-directory member for identical content-addressed DAWproject media while retaining every XML reference', async () => {
+    const payload = Buffer.from('identical controlled DAWproject media');
+    const { archivePath } = await addContentAddressedAudio(payload, payload);
+    const destination = join(root, 'deduplicated.dawproject');
+    const job = await terminal(exports.start({ projectId: projects.getActiveProjectId()!, kind: 'dawproject', destination }).jobId);
+    expect(job).toMatchObject({ status: 'completed', result: { warnings: [] } });
+
+    const names = await centralDirectoryNames(destination);
+    expect(names).toHaveLength(new Set(names).size);
+    expect(names.filter((name) => name === archivePath)).toEqual([archivePath]);
+    expect(names.sort()).toEqual(['fallback-report.json', 'metadata.xml', 'project.xml', archivePath].sort());
+    const extracted = unzipSync(await readFile(destination));
+    const projectXml = strFromU8(extracted['project.xml']);
+    expect(projectXml.split(`path="${archivePath}"`)).toHaveLength(3);
+    expect(Buffer.from(extracted[archivePath])).toEqual(payload);
+  });
+
+  it('fails before writing a DAWproject when one archive member path resolves to different payloads', async () => {
+    const { archivePath } = await addContentAddressedAudio(Buffer.from('left'), Buffer.from('rift'));
+    const destination = join(root, 'conflicting.dawproject');
+    const job = await terminal(exports.start({ projectId: projects.getActiveProjectId()!, kind: 'dawproject', destination }).jobId);
+    expect(job).toMatchObject({ status: 'failed', error: { code: 'export-failed' } });
+    expect(job.message).toBe(`DAWproject archive member ${archivePath} resolves to different payloads.`);
+    await expect(stat(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(root)).filter((name) => name.startsWith('conflicting.dawproject'))).toEqual([]);
   });
 
   it('checks the effective extension for collisions and refuses codec substitution', async () => {

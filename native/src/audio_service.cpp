@@ -39,13 +39,32 @@ std::string_view effective_playback_mode_name(const aimuse::audio::RealtimePlayb
 }
 
 std::string state_json(const EngineState& state, const aimuse::audio::RealtimePlayback& playback) {
+  const auto telemetry = playback.telemetry();
   return "{\"status\":\"" + state.status + "\",\"tick\":" + std::to_string(state.tick) +
     ",\"sample\":" + std::to_string(state.sample) + ",\"loopEnabled\":" + (state.loop_enabled ? "true" : "false") +
     ",\"loopStartTick\":" + std::to_string(state.loop_start) + ",\"loopEndTick\":" + std::to_string(state.loop_end) +
     ",\"cpuLoad\":0,\"xruns\":0,\"latencySamples\":" + std::to_string(playback.latency_samples()) +
     ",\"graphRevision\":" + std::to_string(state.graph_revision) + ",\"requestedPlaybackMode\":\"" +
     std::string(aimuse::audio::playback_mode_name(playback.requested_mode())) + "\",\"effectivePlaybackMode\":\"" +
-    std::string(effective_playback_mode_name(playback)) + "\"}";
+    std::string(effective_playback_mode_name(playback)) + "\",\"realtimeBackendReady\":" + (playback.ready() ? "true" : "false") +
+    ",\"callbackCount\":" + std::to_string(telemetry.callback_count) +
+    ",\"callbackFrames\":" + std::to_string(telemetry.callback_frames) +
+    ",\"renderedFrames\":" + std::to_string(telemetry.rendered_frames) +
+    ",\"deviceReroutes\":" + std::to_string(telemetry.device_reroutes) +
+    ",\"deviceInterruptions\":" + std::to_string(telemetry.device_interruptions) +
+    ",\"deviceUnexpectedStops\":" + std::to_string(telemetry.device_unexpected_stops) +
+    ",\"deviceInterruptionActive\":" + (telemetry.device_interruption_active ? "true" : "false") +
+    ",\"deviceDiagnostic\":\"" + aimuse::protocol::escape(playback.diagnostic()) + "\"}";
+}
+
+std::string playback_features_json() {
+#ifdef _WIN32
+  return "[\"graph-prepare\",\"graph-commit\",\"transport-ack\",\"dsp-kernel\",\"managed-preview-playback\",\"wasapi-exclusive-opt-in\"]";
+#elif defined(__APPLE__)
+  return "[\"graph-prepare\",\"graph-commit\",\"transport-ack\",\"dsp-kernel\",\"managed-preview-playback\",\"coreaudio-shared-playback\"]";
+#else
+  return "[\"graph-prepare\",\"graph-commit\",\"transport-ack\",\"dsp-kernel\"]";
+#endif
 }
 
 std::filesystem::path path_from_utf8(const std::string& value) {
@@ -92,8 +111,7 @@ int main(const int argc, char* argv[]) {
         std::string(effective_playback_mode_name(playback)) + "\",\"sampleFormat\":\"float32\",\"realtimeBackendReady\":" +
         (playback.ready() ? "true" : "false") + ",\"sampleRate\":" + std::to_string(playback.sample_rate()) +
         ",\"latencySamples\":" + std::to_string(playback.latency_samples()) + ",\"diagnostic\":\"" +
-        aimuse::protocol::escape(playback.diagnostic()) +
-        "\",\"features\":[\"graph-prepare\",\"graph-commit\",\"transport-ack\",\"dsp-kernel\",\"managed-preview-playback\",\"wasapi-exclusive-opt-in\"]}";
+        aimuse::protocol::escape(playback.diagnostic()) + "\",\"features\":" + playback_features_json() + "}";
       std::cout << aimuse::protocol::success(id, result) << '\n' << std::flush;
       continue;
     }

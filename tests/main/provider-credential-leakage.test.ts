@@ -25,6 +25,11 @@ const PLAINTEXT_SENTINEL = 'GEN06_PROVIDER_PLAINTEXT_MUST_NEVER_REACH_A_CLIENT_7
 const CIPHERTEXT_BYTES = Buffer.from('GEN06_ENCRYPTED_PROVIDER_SENTINEL_MUST_STAY_ON_DISK_65cbb5c2');
 const ENCRYPTED_SENTINEL = CIPHERTEXT_BYTES.toString('base64');
 const PROVIDER_SECRET_MEMBER = /provider.*(?:credential|secret|key)|(?:credential|secret|key).*provider/i;
+const expectedProtectedStorageLabel = process.platform === 'win32'
+  ? 'Windows protected storage'
+  : process.platform === 'darwin'
+    ? 'macOS Keychain-backed protected storage'
+    : 'Operating-system protected storage';
 
 function memberName(member: ts.TypeElement | ts.ObjectLiteralElementLike, source: ts.SourceFile): string | undefined {
   const named = member as { name?: ts.PropertyName };
@@ -144,7 +149,7 @@ describe('provider credential renderer and public-surface isolation', () => {
 
     encryptionThrows = true;
     const storageFailure = await credentials.set('elevenlabs', PLAINTEXT_SENTINEL).then(() => undefined, (error: unknown) => error as Error);
-    expect(storageFailure?.message).toBe('Windows protected storage could not encrypt the credential.');
+    expect(storageFailure?.message).toBe(`${expectedProtectedStorageLabel} could not encrypt the credential.`);
     expect(await readFile(credentialPath, 'utf8')).toBe(persisted);
 
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);

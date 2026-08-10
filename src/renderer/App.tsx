@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Activity, AudioLines, Bot, ChevronDown, Circle, Cpu, FolderOpen, Gauge, HardDriveDownload,
-  KeyboardMusic, Layers3, ListMusic, Menu, Pause, Play, Plus, Radio, Redo2, Save,
+  KeyboardMusic, Layers3, ListMusic, Menu, Pause, Play, Plus, Radio, Redo2, Save, SaveAll,
   SkipBack, SlidersHorizontal, Sparkles, Square, Undo2, Volume2, X, Zap,
 } from 'lucide-react';
 import type { BuiltinDeviceKind, ProjectKind, SfxDeliverable, Track, TrackKind } from '@aimuse/core';
@@ -233,10 +233,11 @@ export function App() {
     if (!saved?.saved) return false;
     const next = await perform(() => window.aimuse.getProviderCapabilities());
     if (next) setCapabilities(next);
-    workspace.notify(`${provider} credential saved securely`, 'success'); return true;
+    workspace.notify(value ? `${provider} credential saved securely` : `${provider} credential removed`, 'success'); return true;
   };
   const openProjects = () => void perform(() => window.aimuse.openProjects(), (result) => { if (result.warnings[0]) workspace.notify(result.warnings.join(' '), 'warning'); });
   const saveActiveProject = () => void perform(() => window.aimuse.saveProject(project?.id), (result) => { if (result.saved) workspace.notify('Project saved', 'success'); else if (result.warnings[0]) workspace.notify(result.warnings.join(' '), 'warning'); });
+  const saveActiveProjectAs = () => void perform(() => window.aimuse.saveProjectAs(project?.id), (result) => { if (result.saved) workspace.notify(`Project saved as ${result.projectPath ?? 'a new working folder'}`, 'success'); else if (result.warnings[0]) workspace.notify(result.warnings.join(' '), 'warning'); });
   const closeProject = (projectId: string) => void perform(() => window.aimuse.closeProject(projectId), (result) => { if (!result.closed && result.reason && !/cancelled/i.test(result.reason)) workspace.notify(result.reason, 'warning'); });
   const importMedia = () => { if (project) void perform(() => window.aimuse.importMedia(project.id), (result) => { if (result.imported) workspace.notify(`Imported ${result.imported} media file${result.imported === 1 ? '' : 's'}`, 'success'); if (result.warnings[0]) workspace.notify(result.warnings.join(' '), 'warning'); }); };
   const transport = (action: 'play' | 'pause' | 'stop' | 'seek' | 'loop', options?: { tick?: number; loopEnabled?: boolean }) => void perform(() => window.aimuse.transport(action, options));
@@ -245,7 +246,7 @@ export function App() {
     <header className="titlebar">
       <div className="app-brand"><span className="brand-mark"><AudioLines size={18} /></span><strong>AIMuse</strong><small>alpha</small></div>
       <nav className="document-tabs" aria-label="Open projects" role="tablist">{snapshot.projects.map((tab) => <div key={tab.id} className={`document-tab ${snapshot.activeProjectId === tab.id ? 'active' : ''}`}><button className="tab-activate" role="tab" aria-selected={snapshot.activeProjectId === tab.id} onClick={() => void perform(() => window.aimuse.activateProject(tab.id))}><span className={`project-kind ${tab.kind}`}><Music2Icon kind={tab.kind} /></span><span>{tab.name}</span>{tab.dirty && <i />}</button><button className="tab-close" aria-label={`Close ${tab.name}`} onClick={() => closeProject(tab.id)}><X size={12} /></button></div>)}<button className="new-tab" onClick={() => setNewDialog('song')} title="New project"><Plus size={15} /></button></nav>
-      <div className="title-actions"><button onClick={openProjects} title="Open"><FolderOpen size={15} /></button><button onClick={saveActiveProject} disabled={!project} title="Save"><Save size={15} /></button><button onClick={() => { if (project) { setRightVisible(true); setRightTab('agents'); } else setAgentDialog(true); }} className={snapshot.mcp.sessions.length ? 'agents-active' : ''}><Bot size={15} /><span>{snapshot.mcp.sessions.length || 'Agents'}</span></button><button onClick={() => void perform(() => window.aimuse.showApplicationMenu())} title="Application menu"><Menu size={16} /></button></div>
+      <div className="title-actions"><button onClick={openProjects} title="Open"><FolderOpen size={15} /></button><button onClick={saveActiveProject} disabled={!project} title="Save"><Save size={15} /></button><button onClick={saveActiveProjectAs} disabled={!project} title="Save As" aria-label="Save As"><SaveAll size={15} /></button><button onClick={() => { if (project) { setRightVisible(true); setRightTab('agents'); } else setAgentDialog(true); }} className={snapshot.mcp.sessions.length ? 'agents-active' : ''}><Bot size={15} /><span>{snapshot.mcp.sessions.length || 'Agents'}</span></button><button onClick={() => void perform(() => window.aimuse.showApplicationMenu())} title="Application menu"><Menu size={16} /></button></div>
     </header>
 
     <section className="transport-bar" aria-label="Transport">

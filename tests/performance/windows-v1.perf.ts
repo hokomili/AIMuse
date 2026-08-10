@@ -7,7 +7,7 @@ import { applyProjectTransaction, createProject, createTrack, entityBase, HUMAN_
 
 function elapsed(action: () => void): number { const started = performance.now(); action(); return performance.now() - started; }
 
-describe('Windows v1 machine-readable performance evidence', () => {
+describe('cross-platform canonical-model performance evidence', () => {
   it('gates large canonical-model interaction and sustained transaction integrity', async () => {
     const project = createProject('song', 'Performance fixture');
     const masterId = project.trackOrder.find((id) => project.tracks[id].kind === 'master')!;
@@ -52,7 +52,7 @@ describe('Windows v1 machine-readable performance evidence', () => {
       limitations: ['This source-level gate does not substitute for packaged pointer/frame pacing, real-time callback/xrun, eight-hour soak, or pinned-reference-machine evidence.'],
     };
     await mkdir(join('test-results', 'performance'), { recursive: true });
-    await writeFile(join('test-results', 'performance', 'windows-v1.json'), `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
+    await writeFile(join('test-results', 'performance', `canonical-model-${platform()}.json`), `${JSON.stringify(evidence, null, 2)}\n`, 'utf8');
 
     expect(project.trackOrder).toHaveLength(200); expect(Object.keys(project.clips)).toHaveLength(10_000);
     expect(sustained.revision).toBe(20_000); expect(sustained.activity).toHaveLength(MAX_RECENT_ACTIVITY_ENTRIES); expect(sustained.name).toBe('Autonomous 19999');

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,8 @@ import { MediaManager } from '../../src/main/media-manager';
 import { PluginManager } from '../../src/main/plugin-manager';
 import { ProjectService } from '../../src/main/project-service';
 import { TransactionTraceStore } from '../../src/main/trace-store';
+import { sha256Json } from '../../src/main/trace-replay-audit';
+import type { WorkspaceEvent } from '../../src/common/contracts';
 
 interface RpcResponse { jsonrpc: '2.0'; id?: string | number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown>; error?: Record<string, unknown> }
 interface NotificationStream { messages: RpcResponse[]; done: Promise<void>; abort: () => void; failure: () => unknown }
@@ -250,7 +252,9 @@ describe('authenticated localhost MCP contract', () => {
     const sessions = JSON.parse((await readResource('aimuse://sessions')).text!) as { presence: unknown[]; jobs: Array<{ id: string }> };
     expect(sessions).toMatchObject({ presence: [expect.objectContaining({ actor: expect.objectContaining({ id: actorId }) })], jobs: [expect.objectContaining({ id: job.id })] });
     expect(JSON.parse((await readResource('aimuse://plugins')).text!)).toEqual([]);
-    expect((await readResource('aimuse://guide')).text).toContain('a human must allow or deny');
+    const guide = (await readResource('aimuse://guide')).text!;
+    expect(guide).toContain('a human must allow or deny');
+    expect(guide).toContain('trace_replay');
 
     const manifest = JSON.parse((await readResource(`aimuse://projects/${project.id}/manifest`)).text!) as Record<string, unknown>;
     expect(manifest).toMatchObject({ id: project.id, revision: 1, assets: 1 });
@@ -271,12 +275,13 @@ describe('authenticated localhost MCP contract', () => {
     const { sessionId, message } = await initialize();
     expect(String(message.result?.instructions)).toContain('Call aimuse_help(getting-started)');
     expect(String(message.result?.instructions)).toContain('Human approvals cannot be granted through MCP');
+    expect(String(message.result?.instructions)).toContain('trace_replay');
 
     const listed = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/list', params: {} }, sessionId);
     expect(listed.message?.error).toBeUndefined();
-    type ToolContract = { name: string; description?: string; inputSchema: Record<string, unknown>; outputSchema?: Record<string, unknown> };
+    type ToolContract = { name: string; description?: string; inputSchema: Record<string, unknown>; outputSchema?: Record<string, unknown>; annotations?: Record<string, boolean> };
     const tools = listed.message?.result?.tools as ToolContract[];
-    expect(tools).toHaveLength(12);
+    expect(tools).toHaveLength(13);
     for (const tool of tools) {
       expect(tool.description?.length).toBeGreaterThan(30);
       expect(tool.inputSchema).toMatchObject({ type: 'object' });
@@ -295,6 +300,8 @@ describe('authenticated localhost MCP contract', () => {
     expect(branch('job_manage', 'wait').required).toEqual(['action', 'jobId']);
     expect((contract('project_manage').inputSchema.properties as Record<string, { description?: string }>).destination.description).toContain('authority');
     expect((contract('project_apply').inputSchema.properties as Record<string, { description?: string }>).clientOperationId.description).toContain('idempotency');
+    expect(contract('trace_replay').inputSchema).toMatchObject({ required: ['projectId', 'transactionId'] });
+    expect(contract('trace_replay').annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     expect(JSON.stringify(contract('job_manage').inputSchema)).not.toContain('approve');
 
     const help = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'aimuse_help', arguments: { topic: 'jobs-and-approvals' } } }, sessionId);
@@ -388,13 +395,13 @@ describe('authenticated localhost MCP contract', () => {
     }
   });
 
-  it('publishes the twelve tool-first contracts and applies edits with server-authenticated attribution', async () => {
+  it('publishes the thirteen tool-first contracts and applies edits with server-authenticated attribution', async () => {
     const { sessionId, message } = await initialize();
     expect(message.result).toMatchObject({ protocolVersion: LATEST_PROTOCOL_VERSION, serverInfo: { name: 'aimuse', version: 'test' } });
 
     const listed = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/list', params: {} }, sessionId);
     const tools = (listed.message?.result?.tools as Array<{ name: string }>).map((tool) => tool.name).sort();
-    expect(tools).toEqual(['aimuse_help', 'export_manage', 'generation_manage', 'history_manage', 'job_manage', 'media_manage', 'plugin_manage', 'project_apply', 'project_manage', 'project_observe', 'session_manage', 'transport_manage']);
+    expect(tools).toEqual(['aimuse_help', 'export_manage', 'generation_manage', 'history_manage', 'job_manage', 'media_manage', 'plugin_manage', 'project_apply', 'project_manage', 'project_observe', 'session_manage', 'trace_replay', 'transport_manage']);
 
     const joined = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'session_manage', arguments: { action: 'join', name: 'Composer Agent', client: { product: 'contract-test', model: 'fixture' } } } }, sessionId);
     const joinPayload = JSON.parse((((joined.message?.result?.content as Array<{ text: string }>)[0]).text)) as { actor: { id: string } };
@@ -406,6 +413,103 @@ describe('authenticated localhost MCP contract', () => {
 
     const duplicate = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'project_apply', arguments: { projectId: project.id, clientOperationId: 'contract-rename-1', label: 'Rename through MCP', operations: [{ kind: 'project.rename', name: 'MCP Song' }], commitMode: 'direct' } } }, sessionId);
     expect(JSON.parse((((duplicate.message?.result?.content as Array<{ text: string }>)[0]).text))).toMatchObject({ status: 'duplicate', revision: 1 });
+  });
+
+  it('replays a selected durable trace through authenticated MCP with a deterministic non-mutating receipt', async () => {
+    const { sessionId } = await initialize();
+    const callTool = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
+      const response = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name, arguments: args } }, sessionId);
+      expect(response.message?.error).toBeUndefined();
+      const content = response.message?.result?.content as Array<{ text: string }>;
+      expect(content).toHaveLength(1);
+      return JSON.parse(content[0].text) as T;
+    };
+    await callTool('session_manage', { action: 'join', name: 'Trace Replay Agent' });
+    const project = projects.getActiveProject()!;
+    const applied = await callTool<{ status: string; revision: number; transactionId: string }>('project_apply', {
+      projectId: project.id,
+      clientOperationId: 'public-trace-replay-fixture',
+      label: 'Rename for public trace replay',
+      operations: [{ kind: 'project.rename', name: 'Replay receipt song' }],
+      commitMode: 'direct',
+    });
+    expect(applied).toMatchObject({ status: 'committed', revision: 1, transactionId: expect.stringMatching(/^tx_/) });
+    const canonicalBefore = projects.getProject(project.id)!;
+    const replayEvents: WorkspaceEvent[] = [];
+    const onEvent = (event: WorkspaceEvent) => { if (event.type === 'trace-replay') replayEvents.push(structuredClone(event)); };
+    projects.on('event', onEvent);
+
+    try {
+      const replay = await callTool<{
+        version: number; status: string; projectId: string; transactionId: string; auditSha256: string;
+        source: { resource: string; revision: number; outcome: string; operationCount: number; operationKinds: string[]; entrySha256: string; transactionSha256: string };
+        replay: { mode: string; appliedOperations: number; progressEventCount: number; steps: Array<Record<string, unknown>> };
+        canonical: { beforeRevision: number; afterRevision: number; beforeSha256: string; afterSha256: string; unchanged: boolean };
+      }>('trace_replay', { projectId: project.id, transactionId: applied.transactionId });
+      expect(replay).toMatchObject({
+        version: 1,
+        status: 'completed',
+        projectId: project.id,
+        transactionId: applied.transactionId,
+        source: {
+          resource: `aimuse://projects/${project.id}/trace`, revision: 1, outcome: 'committed',
+          operationCount: 1, operationKinds: ['project.rename'], entrySha256: expect.stringMatching(/^[0-9a-f]{64}$/), transactionSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        },
+        replay: {
+          mode: 'non-mutating-visualization', appliedOperations: 0, progressEventCount: 2,
+          steps: [{ index: 0, kind: 'project.rename', progressStart: 0, progressEnd: 1 }],
+        },
+        canonical: { beforeRevision: 1, afterRevision: 1, unchanged: true },
+        auditSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      });
+      expect(replay.canonical.beforeSha256).toBe(replay.canonical.afterSha256);
+      expect(JSON.stringify(replay)).not.toContain('Replay receipt song');
+      const { auditSha256, ...audit } = replay;
+      expect(auditSha256).toBe(sha256Json(audit));
+      expect(projects.getProject(project.id)).toEqual(canonicalBefore);
+      const repeated = await callTool<typeof replay>('trace_replay', { projectId: project.id, transactionId: applied.transactionId });
+      expect(repeated).toEqual(replay);
+      expect(projects.getProject(project.id)).toEqual(canonicalBefore);
+      expect(replayEvents).toEqual([
+        { type: 'trace-replay', projectId: project.id, transactionId: applied.transactionId, progress: 0, status: 'playing' },
+        { type: 'trace-replay', projectId: project.id, transactionId: applied.transactionId, progress: 1, status: 'completed' },
+        { type: 'trace-replay', projectId: project.id, transactionId: applied.transactionId, progress: 0, status: 'playing' },
+        { type: 'trace-replay', projectId: project.id, transactionId: applied.transactionId, progress: 1, status: 'completed' },
+      ]);
+
+      const missing = await callTool<{ error: string; projectId: string; transactionId: string }>('trace_replay', { projectId: project.id, transactionId: 'tx_missing_trace' });
+      expect(missing).toMatchObject({ error: 'trace_transaction_not_found', projectId: project.id, transactionId: 'tx_missing_trace' });
+      expect(replayEvents).toHaveLength(4);
+      const closed = await callTool<{ error: string; projectId: string }>('trace_replay', { projectId: 'project_not_open', transactionId: applied.transactionId });
+      expect(closed).toEqual({ error: 'no_open_project', projectId: 'project_not_open', next: { tool: 'project_manage', arguments: { action: 'list' }, guidance: 'List projects, then activate, open, or create one before retrying.' } });
+
+      const invalid = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'trace_replay', arguments: { projectId: project.id, transactionId: applied.transactionId, action: 'hidden-route' } } }, sessionId);
+      expect(invalid.message?.error).toBeUndefined();
+      expect(invalid.message?.result?.isError).toBe(true);
+      expect(projects.getProject(project.id)).toEqual(canonicalBefore);
+
+      replayEvents.length = 0;
+      const findTrace = projects.findTrace.bind(projects);
+      let traceReads = 0;
+      const findSpy = vi.spyOn(projects, 'findTrace').mockImplementation(async (projectId, transactionId) => {
+        const found = await findTrace(projectId, transactionId);
+        traceReads += 1;
+        return traceReads === 3 && found ? { ...found, label: 'injected trace drift' } : found;
+      });
+      try {
+        const drifted = await callTool<{ error: string; projectId: string; transactionId: string }>('trace_replay', { projectId: project.id, transactionId: applied.transactionId });
+        expect(drifted).toEqual({ error: 'trace_changed_during_replay', projectId: project.id, transactionId: applied.transactionId });
+      } finally {
+        findSpy.mockRestore();
+      }
+      expect(replayEvents).toEqual([
+        { type: 'trace-replay', projectId: project.id, transactionId: applied.transactionId, progress: 0, status: 'playing' },
+        { type: 'trace-replay', projectId: project.id, transactionId: applied.transactionId, progress: 1, status: 'completed' },
+      ]);
+      expect(projects.getProject(project.id)).toEqual(canonicalBefore);
+    } finally {
+      projects.off('event', onEvent);
+    }
   });
 
   it('enforces human entity and time-range locks across authenticated sessions without blocking unrelated work', async () => {
@@ -443,8 +547,13 @@ describe('authenticated localhost MCP contract', () => {
     const rangeLock = projects.acquireLock({ projectId: project.id, range: { trackId: timelineTrack.id, startTick: 960, endTick: 1_920 } });
     expect(entityLock).toMatchObject({ acquired: true, lockId: expect.any(String) });
     expect(rangeLock).toMatchObject({ acquired: true, lockId: expect.any(String) });
+    expect(projects.holdLock(rangeLock.lockId!)).toMatchObject({ held: true, expiresAt: expect.any(String) });
 
     try {
+      const observed = await callTool(first.sessionId, 'project_observe', { projectId: project.id, includeEditor: true }) as { editor: { locks: Array<Record<string, unknown>> } };
+      expect(observed.editor.locks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: rangeLock.lockId, projectId: project.id, phase: 'grace', range: { trackId: timelineTrack.id, startTick: 960, endTick: 1_920 }, expiresAt: expect.any(String) }),
+      ]));
       const entityConflict = await callTool(first.sessionId, 'project_apply', {
         projectId: project.id, clientOperationId: 'mcp-entity-lock-conflict', label: 'Conflicting master edit', commitMode: 'direct',
         operations: [{ kind: 'track.update', trackId: masterTrack.id, changes: { gainDb: -3 }, expectedRevision: masterTrack.revision }],
@@ -480,6 +589,8 @@ describe('authenticated localhost MCP contract', () => {
       projects.releaseLock(entityLock.lockId!);
       projects.releaseLock(rangeLock.lockId!);
     }
+    const afterRelease = await callTool(first.sessionId, 'session_manage', { action: 'inspect' }) as { locks: unknown[] };
+    expect(afterRelease.locks).toEqual([]);
   });
 
   it('keeps job payloads and cancellation authority scoped to the owning session', async () => {
@@ -622,6 +733,68 @@ describe('authenticated localhost MCP contract', () => {
     expect(projects.listJobs()).toEqual([expect.objectContaining({ id: jobId, ownerActorId: firstActorId, status: 'waiting-for-user' })]);
     await expect(access(outsideTarget)).rejects.toThrow();
     await expect(access(`${outsideTarget}.aimuse`)).rejects.toThrow();
+  });
+
+  it('serializes approval-capable requests across actors without creating or leaking a competing job', async () => {
+    const first = await initialize();
+    const second = await initialize();
+    const callTool = async (sessionId: string, name: string, args: Record<string, unknown>) => {
+      const response = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name, arguments: args } }, sessionId);
+      expect(response.message?.error).toBeUndefined();
+      const content = response.message?.result?.content as Array<{ text: string }>;
+      return JSON.parse(content[0].text) as Record<string, unknown>;
+    };
+    await callTool(first.sessionId, 'session_manage', { action: 'join', name: 'Approval Owner A' });
+    await callTool(second.sessionId, 'session_manage', { action: 'join', name: 'Approval Requester B' });
+    const projectId = projects.getActiveProjectId()!;
+    const firstDestination = join(root, 'approval-owner-private-midi');
+    const rejectedDestination = join(root, 'approval-requester-private-dawproject');
+    const laterDestination = join(root, 'approval-later-dawproject');
+    const finalDestination = join(root, 'approval-final-stems');
+    let maxWaiting = 0;
+    projects.on('event', (event: WorkspaceEvent) => { if (event.type === 'job') maxWaiting = Math.max(maxWaiting, projects.listJobs().filter((job) => job.status === 'waiting-for-user').length); });
+
+    const started = await callTool(first.sessionId, 'export_manage', { projectId, kind: 'midi', destination: firstDestination, overwrite: false });
+    const firstJobId = String(started.jobId);
+    expect(firstJobId).toMatch(/^export-/);
+    const beforeRejectedCount = projects.listJobs().length;
+    const rejected = await callTool(second.sessionId, 'export_manage', { projectId, kind: 'dawproject', destination: rejectedDestination, overwrite: false });
+    expect(rejected).toMatchObject({ error: 'approval_pending', retryable: true, next: { humanRequired: true } });
+    expect(rejected).not.toHaveProperty('jobId');
+    expect(projects.listJobs()).toHaveLength(beforeRejectedCount);
+    expect(JSON.stringify(rejected)).not.toContain(firstJobId);
+    expect(JSON.stringify(rejected)).not.toContain(firstDestination);
+    expect(JSON.stringify(rejected)).not.toContain(rejectedDestination);
+    const crossToolRejected = await callTool(second.sessionId, 'transport_manage', { action: 'record', recordingSource: 'microphone' });
+    expect(crossToolRejected).toMatchObject({ error: 'approval_pending', retryable: true, next: { humanRequired: true } });
+    expect(crossToolRejected).not.toHaveProperty('jobId');
+    expect(projects.listJobs()).toHaveLength(beforeRejectedCount);
+    expect(JSON.stringify(crossToolRejected)).not.toContain(firstJobId);
+    expect(JSON.stringify(crossToolRejected)).not.toContain(firstDestination);
+
+    const waiting = await callTool(first.sessionId, 'job_manage', { action: 'wait', jobId: firstJobId, timeoutMs: 5_000 });
+    expect(waiting).toMatchObject({ id: firstJobId, status: 'waiting-for-user', dependency: { type: 'user-approval' } });
+    expect(projects.listJobs().filter((job) => job.status === 'waiting-for-user')).toHaveLength(1);
+    expect(maxWaiting).toBe(1);
+
+    expect(projects.resolveJob(firstJobId, 'allow-once')).toMatchObject({ status: 'queued' });
+    const completed = await callTool(first.sessionId, 'job_manage', { action: 'wait', jobId: firstJobId, timeoutMs: 5_000 });
+    expect(completed).toMatchObject({ id: firstJobId, status: 'completed' });
+    await expect(access(`${firstDestination}.mid`)).resolves.toBeUndefined();
+
+    const later = await callTool(second.sessionId, 'export_manage', { projectId, kind: 'dawproject', destination: laterDestination, overwrite: false });
+    const laterJobId = String(later.jobId);
+    expect(await callTool(second.sessionId, 'job_manage', { action: 'wait', jobId: laterJobId, timeoutMs: 5_000 })).toMatchObject({ id: laterJobId, status: 'waiting-for-user' });
+    expect(await callTool(second.sessionId, 'job_manage', { action: 'cancel', jobId: laterJobId })).toMatchObject({ id: laterJobId, status: 'cancelled' });
+    await expect(access(laterDestination)).rejects.toThrow();
+    await expect(access(`${laterDestination}.dawproject`)).rejects.toThrow();
+
+    const afterCancellation = await callTool(first.sessionId, 'export_manage', { projectId, kind: 'stems', destination: finalDestination, overwrite: false });
+    const finalJobId = String(afterCancellation.jobId);
+    expect(await callTool(first.sessionId, 'job_manage', { action: 'wait', jobId: finalJobId, timeoutMs: 5_000 })).toMatchObject({ id: finalJobId, status: 'waiting-for-user' });
+    expect(await callTool(first.sessionId, 'job_manage', { action: 'cancel', jobId: finalJobId })).toMatchObject({ id: finalJobId, status: 'cancelled' });
+    expect(maxWaiting).toBe(1);
+    await expect(access(finalDestination)).rejects.toThrow();
   });
 
   it('caps concurrent sessions at 32 and releases capacity on MCP DELETE', async () => {

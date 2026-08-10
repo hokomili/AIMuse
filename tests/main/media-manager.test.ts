@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,6 +10,7 @@ import { RecoveryJournal } from '../../src/main/journal';
 import { MediaManager } from '../../src/main/media-manager';
 import { ProjectService } from '../../src/main/project-service';
 import { TransactionTraceStore } from '../../src/main/trace-store';
+import { encodeFloat32Wav } from '../../src/main/wav';
 
 describe('MediaManager MIDI import', () => {
   let root: string;
@@ -65,5 +67,30 @@ describe('MediaManager MIDI import', () => {
     expect(Object.values(clip.controls)[0]).toMatchObject({ tick: 480, controller: 1, channel: 2 });
     expect(Object.values(clip.pitchBends)[0]).toMatchObject({ tick: 240, value: 0.25, channel: 2 });
     expect(clip.durationTicks).toBeGreaterThanOrEqual(3_840);
+  });
+
+  it.skipIf(process.platform !== 'darwin' || process.env.AIMUSE_RUN_MACOS_CODEC_SMOKE !== '1')('admits a real AudioToolbox AAC/M4A file for metadata while keeping compressed decode fail-closed', async () => {
+    const projects = new ProjectService({
+      appVersion: 'test',
+      checkpointRoot: join(root, 'checkpoints'),
+      journal: new RecoveryJournal(join(root, 'recovery')),
+      trace: new TransactionTraceStore(join(root, 'traces')),
+      audio,
+    });
+    await projects.initialize();
+    const project = projects.getActiveProject()!;
+    const samples = new Float32Array(12_000);
+    for (let index = 0; index < samples.length; index += 1) samples[index] = Math.sin(2 * Math.PI * 220 * index / 48_000) * 0.01;
+    const wavPath = join(root, 'synthetic.wav');
+    const m4aPath = join(root, 'synthetic.m4a');
+    await writeFile(wavPath, encodeFloat32Wav([samples, samples], 48_000));
+    const converted = spawnSync('/usr/bin/afconvert', [wavPath, '-o', m4aPath, '-f', 'm4af', '-d', 'aac ', '-b', '128000'], { encoding: 'utf8', shell: false });
+    expect(converted.status, converted.stderr).toBe(0);
+
+    const media = new MediaManager(join(root, 'managed'), projects, new AuthorityManager());
+    const result = await media.importPaths(project.id, [m4aPath]);
+    expect(result.warnings).toEqual([]);
+    expect(result.imported[0].asset).toMatchObject({ kind: 'audio', mimeType: 'audio/mp4', sampleRate: 48_000, channels: 2, source: 'import' });
+    await expect(media.analyze(project.id, result.imported[0].asset.id)).rejects.toThrow('Compressed-media analysis requires the native audio service');
   });
 });

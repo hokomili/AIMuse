@@ -1,6 +1,6 @@
 # AIMuse testing workflow
 
-Last updated: 2026-08-07
+Last updated: 2026-08-10
 
 This workflow is adapted directly from AIDraw and defines three formal test levels for AIMuse. Every formal run uses a **new independent Codex task configured as `gpt-5.6-luna` with `high` reasoning**. The implementation task does not certify its own work.
 
@@ -8,7 +8,7 @@ Passing automated tests alone is insufficient. Every formal level includes:
 
 1. source-level automated checks;
 2. authenticated isolated MCP behavior;
-3. native Windows UI interaction through the Computer Use plugin; and
+3. native desktop UI interaction on the platform under test through the Computer Use plugin; and
 4. at least one assertion in each direction: MCP change visibly verified in the UI, and Computer Use UI change verified through MCP.
 
 Playwright is valuable automated coverage, but it does not replace Computer Use. Computer Use targets the real AIMuse window and exercises native menus, dialogs, focus, pointer placement, transport/editing controls and visible rendering.
@@ -18,13 +18,18 @@ Playwright is valuable automated coverage, but it does not replace Computer Use.
 - The primary task implements changes, updates `FEATURE_TRACKER.md`, and selects the required level.
 - A **new** Luna/high task performs each formal run. Do not reuse the implementation task as tester.
 - On Codex desktop, the primary task is only the mechanical launch coordinator: it starts/shows/stops the tester's declared isolated package outside the filesystem sandbox and does not judge cases.
-- The tester is read-only for production source. It may write ignored reports and evidence below its run root, but must not fix code, soften assertions or change tracker status.
+- The tester is read-only for production source. It may write ignored reports and evidence below its formal run root, while Playwright may write only to its separately declared, disjoint output child below `test-results/playwright/`; it must not fix code, soften assertions or change tracker status.
 - Test projects use `QA L<level> · <UTC run ID> · <description>`. Never mutate, overwrite, close or discard a pre-existing user project.
-- Every level uses the exact newly packaged executable and isolated profile. A convenient pre-existing AIMuse window is not a formal subject.
-- Packaging and formal QA use Node 24.x. Runtime preflight and post-package executable/native/fuse verification must pass; a Forge exit code without verified artifacts is failure.
+- Before automation, record source, branch, index, dirty-worktree and toolchain identity as inputs only. A pre-existing package is not the formal UI subject when the required command intentionally packages.
+- Formal Levels 1 and 2 package exactly once before declaring their subject. The immutable post-package manifest binds the application executable, ASAR, all three native helpers, architecture, bundle/signature identity and hardened fuses; a convenient pre-existing AIMuse window or pre-package hash is not a formal subject. Level 3 additionally requires its separately checksummed release artifacts and may not weaken this identity rule.
+- Packaging and formal QA use Node 24.x. For Levels 1/2 the manifest-bound verifier must pass around packaged E2E when present and again at coordinator handoff; a Forge exit code without verified artifacts is failure.
+- `AIMUSE_FORMAL_RUN_ROOT` must be the fresh protected `test-results/luna-high/<run>` root. `AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR` must be a run-scoped strict child below `test-results/playwright/` and disjoint from the formal root and its parent. `AIMUSE_PACKAGE_SUBJECT_MANIFEST` may explicitly select `<formal-run-root>/package-subject.json`; otherwise that path is derived from the formal root.
 - Paid provider requests are forbidden. Generation is tested with mocks, preflight rejection, cancellation or denial.
 - A missing window, unavailable Computer Use helper, unavailable MCP connection or unknown/mismatched build identity is `BLOCKED`, not Pass.
+- The tester owns the sandboxed `qa-session status` result; the coordinator may not replace it with an unsandboxed status call. Status exposes `processAlive`, `processInspection`, `processInspectionSupported`, `processInspectionDenied`, `processInspectionStatus`, `processIdentityMatches` and `inspectionFallbackVerified` so permission denial cannot be collapsed into absence. A supported inspection that reports `ESRCH` or an absent process is a blocker even if a stale endpoint answers. A sandbox `EPERM` is not proof of life and is acceptable only through the narrow composite identity rule in the preflight below.
 - Confirmation-required destructive actions require explicit authorization. Without it, stop at the confirmation boundary. An authorized Discard check may target only a disposable run-owned dirty project; never overwrite, close, discard or delete pre-existing user data for a test.
+- A successful close, including `force:true` for a dirty disposable project, is not complete until its recovery subject has been durably removed. If removal fails, the close must reject and the project must remain open. A same-profile restart must not restore the discarded ID, while a separate unclosed dirty run-owned control must still recover with identical canonical state.
+- At most one human approval may be in request preparation or `waiting-for-user` state across the exact engine. Formal QA is stricter than the product reservation: submit only one approval-capable call, resolve it through the native UI, wait for that job to become terminal, prove the global/native pending count is zero, and only then submit the next. Any observed overlap is a historical protocol failure that cancellation cannot repair within that run.
 
 ## Level overview
 
@@ -37,6 +42,18 @@ Playwright is valuable automated coverage, but it does not replace Computer Use.
 The `:auto` commands are only the automated portion. The independent MCP + Computer Use report remains mandatory.
 
 ## Current formal evidence
+
+The newest independent Luna/high Level 2 attempt, [`20260810T041234Z-macos-level2`](../test-results/luna-high/20260810T041234Z-macos-level2/report.md), is a strict `FAIL` at HEAD `470cbe51b5633144687c06cff3bccbb85910e30a`; its immutable 22,187-byte report is SHA-256 `9AADEEC0C34849B3AFA1AEB94A9B2CCFD67E01E43E1D8F997996EAE19658B7E7`. The exact automated command passed 76 Vitest files plus 1 skipped / 322 tests plus 3 skipped, renderer 5/5, native CTest 1/1, the manifest-bound package verifier and packaged E2E 2/2. Manifest `825E590C285C9B0D4CE15AF1516A833FDBEBC9E24FF148A78279A0D4C3D1A663`, subject identity `1E69FE63C873F265552F0DA9EC9D46BE771734C43F91DC1ABB3DA6217B6B2758` and executable `816039824B431E34F0B842F0774CF0EEF479635BAF71E81C0B6CE594C964AB8A` stayed exact. The repaired sandbox status, authenticated public trace replay, Computer Use drag/grace-lock conflict, distinct native Save As/edit/structure workflows, DAWproject member deduplication, both cross-surface directions, same-profile attach, editor reattach and cleanup all passed. Level 2 nevertheless failed because two dirty disposable projects explicitly closed with `force:true` reappeared after the same-profile headless restart, and the tester briefly created three simultaneous pending approval jobs before cancelling two untouched jobs and continuing serially. Cancellation and later successful artifacts cannot repair either historical violation inside the same root. The next run must use the durable discard and strictly serial approval procedures below.
+
+The post-FAIL recovery/approval remediation now has local nonformal evidence, not Computer Use certification. Focused main-process coverage passes 5 files / 42 tests, including a same-profile `ProjectService` reconstruction in which the force-discarded dirty ID stays absent and a separate unclosed dirty control recovers unchanged. TypeScript, scoped ESLint and diff checks pass. The ordinary workflow passes 76 files plus 1 skipped / 329 tests plus 3 skipped and renderer 6/6; the Darwin lane passes portability 248 files / 290 imports, 65 files / 198 tests plus 1 skipped and native CTest 1/1. Performance 1/1 and the real bounded CoreAudio probe also pass without claiming a physical device event.
+
+The retained arm64 nonformal package is bound by manifest [`out/formal-subjects/20260810-recovery-approval-nonformal/package-subject.json`](../out/formal-subjects/20260810-recovery-approval-nonformal/package-subject.json), SHA-256 `342CE7BE5D6CE424D72E8C996ECD459D245A80886F29C88BD89E8465526FFCE9`, subject identity `AEB0EA86FE730B910D1A30C03524CEAAEDE682BEFC554FC0D1173A3BAE52D198` and executable `60E9538868C7D68D7D6E9AEB4A6EBA4BEF8BEAACB9D90FC5A4AAB7FBC40680DC`. Package verification, manifest-bound packaged E2E 2/2 and post-E2E manifest verification pass; packaged E2E covers concurrent approval rejection, no second job, cancellation and successful retry. The exact-manifest two-cycle headless report at [`20260810-recovery-approval-headless`](../test-results/remediation/20260810-recovery-approval-headless/report.md), SHA-256 `F8D1DD3EB947887C03BB6076D8C1613C48877D30FFB24521DCED7C4D5DE9C971`, retains the profile while changing PID/instance and ends gracefully with no survivor, live credential, provider file or force termination. That generic harness does not perform the discard/control project case; only the focused service reconstruction currently supplies that evidence. A wholly fresh independent exact-build Level 2 remains required.
+
+The earlier independent Luna/high Level 2 attempt, [`20260809T160329Z-macos-level2`](../test-results/luna-high/20260809T160329Z-macos-level2/report.md), is `BLOCKED`, not FAIL, before MCP at the same HEAD; the finalized 18,390-byte report is SHA-256 `2822DBBD09D6BE6607B9105D19CA807A42E3F9B47A8AB23771F17029BA366A96`. The exact automated command passed 75 Vitest files plus 1 skipped / 305 tests plus 3 skipped, renderer 3/3, native CTest 1/1, the manifest-bound package verifier and packaged E2E 2/2. Its 0700 formal root survived, and manifest `40D80CB50E2390E3C9FE89C6DC2B9FD60BC10B4275936AEB81F97F4812587CA1` / subject identity `60CB06E03EFAAF9312725A30CE9AF028316480F678D82FA84EFD3F7E44E55CA1` remained unchanged through verifier, E2E, handoff and cleanup. The coordinator launched that exact arm64 subject, but the required tester-owned sandboxed status gate collapsed `ps`/`kill -0` `EPERM` into `processAlive: false` and skipped health, so the tester correctly stopped without MCP initialization, product mutation or an unsandboxed status substitute. A separate read-only diagnosis found the loopback health identity still matched the connection PID 39274, instance, profile and URL, confirming a status-contract gap rather than proving the blocked run passed. Cleanup completed `stopped-redacted` without force termination or retained credential material. Checkout bytes matched the frozen inputs through the tester's first post-stop snapshot; after the coordinator explicitly resumed implementation, concurrent tracked-worktree remediation changed the source identity while branch, HEAD, index, status-path set, stash and untracked hashes remained stable. Those later bytes were not tester mutation and are not certified by this pre-remediation manifest, so no final all-parties checkout-preservation claim is made. The permission-denied composite is now implemented with deterministic EPERM, ESRCH, unsupported, identity-drift, authenticated-health and redaction coverage. The later strict run above independently passed that status contract; this historical attempt remains blocked.
+
+The prior independent Luna/high Level 2 attempt at [`20260809T150538Z-macos-level2`](../test-results/luna-high/20260809T150538Z-macos-level2/report.md) is separately `BLOCKED`, not FAIL, at the same HEAD. Its exact automated command passed 71 Vitest files plus 1 skipped / 286 tests plus 3 skipped, renderer 3/3, native CTest 1/1, the package verifier and packaged E2E 2/2. UI and MCP certification were correctly not started: packaged Playwright used its former repository-wide default output and deleted the fresh run root, immutable preflight and `tee` log; the retained report is a forensic recreation. The old preflight also treated executable `3066FE2DE491440C5E85A14FD9F72158FC2ABEC07192139EB717E0095C285D3B` as the subject even though the required package stage intentionally replaced it with verified `F9E4F3B4B57894693220C46E8610377393945D7577B39F94DC23A4F1D902B7C7`. No process, mount or credential leak was observed and the checkout remained preserved, but neither root identity nor a stable exact subject survived the checkpoint. Later workflow remediation does not retroactively certify those bytes.
+
+Local implementation evidence at [`20260809T155318Z-formal-workflow-final`](../test-results/remediation/20260809T155318Z-formal-workflow-final/preflight.json) now proves the repaired automated boundary without claiming independent certification. The stabilized exact `node scripts/npm-node24.mjs run test:level2:auto` passed 75 Vitest files plus 1 skipped / 305 tests plus 3 skipped, renderer 3/3, native CTest 1/1, the manifest-bound package verifier and packaged E2E 2/2. It packaged once, retained its 0700 evidence root and disjoint Playwright output, and froze manifest SHA-256 `013E5957EB9B7A2E37B6A51501EA7F3F5332E739345099BF0FB28F6F5FDB2242` / subject identity `12807E1382A6FAB02BE79EB0186F0B34FEFC2800F0425B61471E7C76BDB25C37`. Final component hashes are executable `41E557B975732019F1146E380A21AE0F1D2B5A8EC00C6C86F1C1CDC03FEDF329`, ASAR `0FC81F760CF3288AD3811153B1681E2A5198C9AD779AB3DEF1D82AEAE8B7B07B`, audio `06D744D8C99D09DAB31F164E22C824892E41670B72F50EECB7014B5CB8960DD9`, scanner `5854936F8CCB3525804A0F2C49659BE2E50293754DD93923780F1593997C3A78` and bridge `A700E43B29859BB10AF49AD5E4E221F7191447D3A3F7611020FA734DAE528CFF`. Separate handoff verification, exact-hash headless restart/MCP, performance and CoreAudio smoke passed; no AIMuse survivor, mounted image or retained runtime secret pattern was found. This is implementation-task evidence only. Fresh Luna/high Computer Use plus both UI/MCP directions remains pending.
 
 The newest independent Luna/high Level 1 run at [`20260806T025127Z-post-gen06-safe-storage-level1`](../test-results/luna-high/20260806T025127Z-post-gen06-safe-storage-level1/report.md) is `BLOCKED`, not FAIL, for exact executable SHA-256 `9F82CC2C52E5188B636237165B5F849F879CB540F6131227A3CFF736F6AA758C`. Launch-free Node/renderer 162/162 plus 2/2, native CTest 1/1 and exact package/layout/fuses passed; the coordinator then launched the isolated profile and verified PID 492, instance/profile/health/native-audio identity and an exact AIMuse window handle. Computer Use exact-handle rehydration failed before MCP initialization, input, mutation or any test credential, so real provider `safeStorage`/DPAPI, setter/capability refresh and live Electron leakage remain unearned rather than failed. No P0–P3 product finding occurred. Cleanup completed `stopped-redacted`: PID/exact-package process count zero, connection/session credentials redacted, hash unchanged, no force termination and the Computer Use lease revoked.
 
@@ -138,18 +155,55 @@ AGT-04 has separate real headless evidence at [`20260806T032946Z-bootstrap-resta
 
 `npm run verify` also runs `test:renderer:headless`, a Chrome-based renderer control suite with a canonical desktop-API mock. It is safe for non-interactive development sessions and writes only below `test-results/renderer-headless`; it catches inert controls and transaction-wiring regressions but does not replace packaged Electron or Computer Use acceptance.
 
-## Exact-build and engine identity preflight
+## Formal automation invocation and evidence roots
+
+Create one new protected run root before automation. Keep the automation log, preflight, immutable package-subject manifest and report there. Packaged Playwright results and its HTML report use a separately validated run-scoped target below `test-results/playwright/`; Playwright refuses the repository root, `test-results` itself, its reserved output parent, non-canonical/symlink aliases and any path overlapping the formal root or its parent. Never place a `tee` target, report or subject manifest below the Playwright output target.
+
+On macOS or another POSIX shell, use `pipefail` so `tee` cannot hide the automation exit:
+
+```sh
+LEVEL=2
+RUN_ID=<NEW_UTC_RUN_ID>
+FORMAL_RUN_ROOT="$PWD/test-results/luna-high/${RUN_ID}-level${LEVEL}"
+PLAYWRIGHT_OUTPUT="$PWD/test-results/playwright/${RUN_ID}-level${LEVEL}"
+mkdir -p "$FORMAL_RUN_ROOT"
+chmod 700 "$FORMAL_RUN_ROOT"
+set -o pipefail
+AIMUSE_FORMAL_RUN_ROOT="$FORMAL_RUN_ROOT" \
+AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR="$PLAYWRIGHT_OUTPUT" \
+AIMUSE_PACKAGE_SUBJECT_MANIFEST="$FORMAL_RUN_ROOT/package-subject.json" \
+node scripts/npm-node24.mjs run "test:level${LEVEL}:auto" 2>&1 | tee "$FORMAL_RUN_ROOT/automation.log"
+```
+
+On Windows, create and protect the new root with the owner-private ACL procedure before running the equivalent command. Preserve the native exit immediately after `Tee-Object`:
+
+```powershell
+$Level = 2
+$RunId = '<NEW_UTC_RUN_ID>'
+$env:AIMUSE_FORMAL_RUN_ROOT = "E:\AIMuse\test-results\luna-high\$RunId-level$Level"
+$env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR = "E:\AIMuse\test-results\playwright\$RunId-level$Level"
+$env:AIMUSE_PACKAGE_SUBJECT_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\package-subject.json"
+node scripts/npm-node24.mjs run "test:level${Level}:auto" 2>&1 | Tee-Object -LiteralPath "$env:AIMUSE_FORMAL_RUN_ROOT\automation.log"
+$AutomationExit = $LASTEXITCODE
+if ($AutomationExit -ne 0) { exit $AutomationExit }
+```
+
+The formal Level 1 and Level 2 runners capture source inputs, run verification/native tests, invoke Forge packaging exactly once, require source inputs to remain unchanged, exclusively publish the post-package manifest, run its bound verifier and re-hash every declared component. Level 2 additionally hands that same manifest and its internally bound `AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256` to packaged E2E, then verifies it again. Do not substitute `npm run test:e2e`, which intentionally packages for standalone developer use.
+
+## Level 1/2 exact-build and engine identity preflight
 
 Formal QA never assumes a registered AIMuse MCP endpoint and visible window belong to the same engine. Multiple builds/profiles can coexist.
 
-1. Run the automated level through `scripts/npm-node24.mjs`.
-2. The independent tester records the verified executable path/SHA-256 and planned isolated profile, connection and manifest paths, then returns `AUTOMATION_COMPLETE_AWAITING_COORDINATOR_LAUNCH`. It does not spawn Electron.
-3. The primary coordinator checks every artifact path lies under the declared `test-results` run root and invokes `qa-session start` with explicit shell escalation and `--launch-context unsandboxed-gui`.
-4. Resume the same tester. It runs `qa-session status` and requires `okay: true`, live PID, matching connection PID/URL and unchanged executable hash.
-5. The tester initializes Computer Use, reads its guidance/confirmation rules and enumerates Windows apps without input.
-6. It selects the process-backed AIMuse window matching the manifest executable. The Agents/Activity surface must display the same isolated MCP URL.
-7. It initializes `scripts/qa-mcp.mjs` from the isolated connection. The globally registered/user-profile MCP is forbidden.
-8. Only after executable/hash/PID/URL/window assertions agree may it create a QA project. A mismatch is `BLOCKED` before mutation.
+1. Before automation, record source revision, branch, index/dirty input identity, toolchain and the planned disjoint evidence/output paths. A hash of an older package is input-artifact context only.
+2. Run the automated level once through `scripts/npm-node24.mjs` with the formal environment above and preserve its real exit. Do not rerun a package phase or use a narrower retry to manufacture a subject.
+3. Read the automation result after its final manifest verification. Record the subject-manifest path and SHA-256, subject-identity SHA-256, executable/ASAR/helper hashes, architecture, signature/bundle identity, planned isolated profile/connection/session paths and proof that the original formal root and log survived. Return `AUTOMATION_COMPLETE_AWAITING_COORDINATOR_LAUNCH`; do not spawn Electron.
+4. Immediately before launch, re-run `node scripts/package-subject.mjs verify --manifest <path> --expected-manifest-sha256 <sha256>`. The primary coordinator checks every QA artifact path lies under the declared formal root, checks that Playwright output is disjoint, confirms the executable equals the subject-manifest path, and invokes `qa-session start` with explicit shell escalation and `--launch-context unsandboxed-gui`.
+5. Resume the same tester. It runs sandboxed `qa-session status` and requires `okay: true`; the coordinator must not supply an unsandboxed tester-status substitute. The normal path requires `processInspection: "performed"`, `processInspectionSupported: true`, `processInspectionDenied: false`, `processInspectionStatus: "alive"` and `processAlive: true`. `processInspectionStatus: "absent"` (including `ESRCH`), `"identity-mismatch"` or an explicit false liveness result is `BLOCKED` and health cannot override it. Only sandbox `EPERM` may enter the alternate path, which must report `processInspection: "denied"`, `processInspectionSupported: false`, `processInspectionDenied: true`, `processInspectionStatus: "permission-denied"` and `processAlive: null`. That path succeeds only with `packageSubjectVerified: true`, the exact manifest digest/subject identity and unchanged executable hash, exact connection/session PID-instance-profile-URL agreement, exact health identity, `mcpAuthentication: { "verified": true, "httpStatus": 400, "result": "initialization_required" }`, and final `inspectionFallbackVerified: true`. `processInspection: "unsupported"`, missing/failed health, failed authentication, `inspectionFallbackVerified: false`, connection/subject drift, `ESRCH` or any identity mismatch is `BLOCKED` before Computer Use or MCP.
+6. The tester initializes Computer Use, reads its guidance/confirmation rules and enumerates desktop apps without input.
+7. It selects the process-backed AIMuse window matching the subject-manifest and session executable. The Agents/Activity surface must display the same isolated MCP URL.
+8. It initializes `scripts/qa-mcp.mjs` from the isolated connection. The globally registered/user-profile MCP is forbidden.
+9. Only after manifest/executable/hash/PID/URL/window assertions agree may it create a QA project. A mismatch is `BLOCKED` before mutation.
+10. After MCP/UI work and graceful coordinator stop, reverify the immutable subject manifest and record unchanged bytes/components in the final report.
 
 Credential-bearing connection and MCP state files remain below ignored `test-results/`, are never printed or pasted into reports, and are redacted during cleanup.
 
@@ -166,7 +220,13 @@ Preserve all four pre-diagnostic infrastructure FAIL roots, the historical expli
 Example coordinator bootstrap:
 
 ```powershell
-node scripts/npm-node24.mjs run test:level1:auto
+$env:AIMUSE_FORMAL_RUN_ROOT = 'E:\AIMuse\test-results\luna-high\<run-id>-level1'
+$env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR = 'E:\AIMuse\test-results\playwright\<run-id>-level1'
+$env:AIMUSE_PACKAGE_SUBJECT_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\package-subject.json"
+node scripts/npm-node24.mjs run test:level1:auto 2>&1 | Tee-Object -LiteralPath "$env:AIMUSE_FORMAL_RUN_ROOT\automation.log"
+$AutomationExit = $LASTEXITCODE
+if ($AutomationExit -ne 0) { exit $AutomationExit }
+node scripts/package-subject.mjs verify --manifest $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST --expected-manifest-sha256 <sha256-from-automation>
 node scripts/qa-session.mjs start --exe E:\AIMuse\out\AIMuse-win32-x64\AIMuse.exe --private-root E:\AIMuse\test-results\luna-high\<run-id>-level1 --profile E:\AIMuse\test-results\luna-high\<run-id>-level1\profile --connection E:\AIMuse\test-results\luna-high\<run-id>-level1\connection.json --manifest E:\AIMuse\test-results\luna-high\<run-id>-level1\session.json --mode interactive --launch-context unsandboxed-gui
 node scripts/qa-session.mjs status --private-root E:\AIMuse\test-results\luna-high\<run-id>-level1 --manifest E:\AIMuse\test-results\luna-high\<run-id>-level1\session.json
 node scripts/qa-mcp.mjs init --private-root E:\AIMuse\test-results\luna-high\<run-id>-level1 --connection E:\AIMuse\test-results\luna-high\<run-id>-level1\connection.json --state E:\AIMuse\test-results\luna-high\<run-id>-level1\mcp-state.json --actor-name "QA Luna high L1 <run-id>" --actor-color "#7C3AED" --model "gpt-5.6-luna" --effort "high" --task-id "<task-id>"
@@ -176,16 +236,16 @@ The coordinator owns native `qa-session start`, `show` and `stop`. The tester ow
 
 ## Common run protocol
 
-1. **Identify subject.** Record level, UTC run ID, source revision/dirty state if available, Node/npm, executable path/hash, package verification output, isolated profile and initial active project.
-2. **Run automation.** Preserve complete command and exit status. A narrower retry cannot turn a failed level command into Pass.
-3. **Pause for launch.** Return the exact automation checkpoint; the coordinator starts the declared process outside the sandbox.
+1. **Identify inputs.** Record level, UTC run ID, source revision/branch/index/dirty state, Node/npm, planned protected formal root, separate Playwright output, isolated profile and initial active project. Do not promote an old package hash to subject identity.
+2. **Run automation once.** Preserve the complete environment, command, `pipefail`/`tee` log and exit status. The runner packages exactly once, publishes the immutable post-package manifest and verifies it around verifier/E2E. A narrower retry cannot turn a failed level command into Pass.
+3. **Declare and hand off the subject.** Record the manifest path/digest, subject identity, executable/ASAR/helper hashes, architecture/signature and surviving evidence-root identity. Reverify it immediately before the coordinator starts the declared process outside the sandbox.
 4. **Select native window safely.** Initialize Computer Use and prove executable/window/MCP identity before mutation.
 5. **Join isolated MCP.** Use a distinct actor/color/model/effort/task ID; observe before mutation and record project IDs/revisions.
 6. **Exercise UI with Computer Use.** Observe, perform one state-derived action, refresh and verify. Re-observe after layout/modal/focus changes; use real pointer input for timeline, piano-roll or mixer gestures.
 7. **Cross-check both directions.** Verify an MCP-created change in that exact window and a Computer-Use-created change in MCP snapshot/diff.
 8. **Record failures immediately.** Include expected/actual, reproduction, project/revision, window/focus state, visual/log evidence, severity and tracker IDs.
-9. **Clean safely.** Restore the initial isolated tab, close/redact MCP state, save only QA projects to new run-root paths and return `TEST_COMPLETE_AWAITING_COORDINATOR_STOP`. The coordinator stops the engine; the tester resumes to prove PID exit/redaction.
-10. **Finalize report.** Use [testing/REPORT_TEMPLATE.md](testing/REPORT_TEMPLATE.md). Overall values are only `PASS`, `FAIL` or `BLOCKED`.
+9. **Clean safely.** Restore the initial isolated tab, close/redact MCP state, and save QA projects only to new formal-root paths. An authorized force-discard may affect only a recorded run-owned disposable ID; prove that ID absent after the required same-profile restart and at final cleanup. Preserve the separate dirty recovery-control project through the decisive restart, verify its recovery, then save or force-close it safely. Return `TEST_COMPLETE_AWAITING_COORDINATOR_STOP`; the coordinator stops the engine and the tester resumes to prove PID exit/redaction.
+10. **Reverify and finalize.** Re-hash the manifest and all declared package components after stop, prove the formal root/log/report survived and use [testing/REPORT_TEMPLATE.md](testing/REPORT_TEMPLATE.md). Overall values are only `PASS`, `FAIL` or `BLOCKED`.
 
 Reports belong at:
 
@@ -200,6 +260,8 @@ Automated command:
 ```powershell
 node scripts/npm-node24.mjs run test:level1:auto
 ```
+
+Run it only with the formal-root, Playwright-output and optional explicit subject-manifest environment described above. It packages once and declares the subject after packaging; it does not run packaged E2E at Level 1.
 
 Required MCP cases:
 
@@ -231,22 +293,72 @@ Automated command:
 node scripts/npm-node24.mjs run test:level2:auto
 ```
 
+Run it only with the formal-root, Playwright-output and optional explicit subject-manifest environment described above. It packages once, freezes and verifies the manifest, runs packaged E2E against that exact subject, then verifies the manifest and every bound component again.
+
 Level 2 includes Level 1 plus:
+
+Fresh independent Level 2 [`20260810T041234Z-macos-level2`](../test-results/luna-high/20260810T041234Z-macos-level2/report.md) is the newest immutable strict `FAIL` for its frozen subject. Its report SHA-256 is `9AADEEC0C34849B3AFA1AEB94A9B2CCFD67E01E43E1D8F997996EAE19658B7E7`. It independently passed the public replay, bounded-lock, distinct native workflow and DAWproject-member checkpoints remediated after the earlier [`20260809T165936Z-macos-level2`](../test-results/luna-high/20260809T165936Z-macos-level2/report.md) strict `FAIL`, then exposed dirty force-discard resurrection and a tester-created overlap of pending approvals. Neither failed root may be reused or partially rerun; only a wholly fresh exact-build run may decide Level 2.
 
 ### MCP and collaboration
 
 - read every public resource and exercise every tool action without paid requests or real recording;
 - two sessions, attribution, actor undo, duplicate IDs, stale revisions, human time-range lock conflict, cancellation, checkpoint restore, branch compare/merge/discard and trace replay;
 - headless engine → attach → close editor while health stays live → reattach → explicit quit;
-- disposable-root read/write approval, denial, timeout, exact overwrite and out-of-root rejection;
-- save/reopen recovery and explicit close/discard behavior.
+- disposable-root read/write approval, denial, timeout, exact overwrite and out-of-root rejection, with approval-capable calls submitted strictly one at a time;
+- save/reopen recovery plus durable explicit close/discard behavior across a same-profile restart.
+
+#### Certifying durable force-discard without weakening crash recovery
+
+Use only newly created run-owned disposable projects. Record both project IDs and complete canonical snapshots before the decisive restart.
+
+1. Create and dirty a discard subject. Call `project_manage close` with `force:false` and require exactly `{ closed: false, reason: "Project has unsaved changes." }`; the project must remain open and unchanged.
+2. Call close for the same ID with `force:true`. Require `{ closed: true }`, then require that ID to be absent from the project list and native tab strip. A successful close means recovery removal completed durably before the in-memory close. A recovery-removal error must reject the call and leave the project open; it may never report `closed:true`.
+3. Separately create and dirty an unclosed crash-recovery control. Record its ID, revision and canonical snapshot, and leave it open. Gracefully stop the exact engine and start the same profile through the normal coordinator boundary.
+4. After the tester-owned status gate and fresh MCP initialization, require the force-discarded ID to remain absent from both MCP project list and native tabs. Require the unclosed dirty control to reappear with the same ID, revision and complete canonical state. This proves discard invalidation and legitimate crash recovery together.
+5. After retaining the decisive evidence, save or explicitly force-close the recovery control and recheck the final isolated project set. Never use a pre-existing project as either subject.
+
+Retain both pre-restart snapshots, both close responses, the restart PID/instance/profile identity, post-restart project list and native tab evidence. Resurrection of the discarded ID or loss/drift of the recovery control is `FAIL`, not a cleanup issue.
+
+#### Certifying one approval at a time
+
+The product reserves one global approval-capable request slot before request preparation. If a request races while another is being prepared or is `waiting-for-user`, it must perform no I/O, publish no second job and return exactly:
+
+```json
+{
+  "error": "approval_pending",
+  "retryable": true,
+  "message": "Another approval-capable request is being prepared or awaits human review. No job was created."
+}
+```
+
+That rejection must not include a `jobId`, incumbent actor, path or request details. The central job store also rejects any second `waiting-for-user` publication as `approval_pending`; this is a defense-in-depth invariant, not permission for the formal tester to race calls.
+
+For formal coverage, use one actor for approval-capable export/file work and keep the second actor read-only during this checkpoint. Before each request, require the native Jobs surface to show zero pending approvals and require the owner's `job_manage list` to contain zero `waiting-for-user` jobs. Submit exactly one request, require exactly one waiting approval, resolve it through Computer Use, poll that exact job until terminal and re-prove the global/native pending count is zero. Only then submit the next request. Exercise stems, MIDI and DAWproject in this serial order; never start them with parallel promises or back-to-back unawaited calls.
+
+Retain requested, resolved and terminal timestamps for each job and report the maximum observed pending count. Any count above one, or any next request sent before the previous job is terminal and pending count is zero, is an immediate historical `FAIL`; cancelling untouched jobs and continuing cannot repair the run.
+
+#### Certifying the human time-range lock conflict
+
+This case is intentionally certifiable with the atomic Computer Use `drag` gesture; do not attempt to simulate a separately held pointer and do not substitute Playwright/DOM input. Before the drag, initialize two isolated authenticated actors, observe the disposable clip/revision/range, confirm there are no existing locks and prepare (but do not send) both `project_observe` with `includeEditor: true` and a colliding `project_apply` with a unique operation ID and the observed revision.
+
+1. Through Computer Use, perform one real arrangement drag on the disposable clip and wait for the visible **Human edit protected · Ns** status. The drag creates a server-owned, non-refreshable 15-second grace lock; **Release now** may end it early.
+2. While that countdown is visibly nonzero, immediately issue the prepared authenticated observation. Require one lock with the exact project, clip entity/range, `phase: "grace"` and future `expiresAt`.
+3. Immediately issue the prepared colliding mutation from the other actor. It must return `status: "locked"`, the fixed human-edit message and `conflict.retryable: true` even when its entity revision is now stale. Prove the project revision and clip state did not change. A non-colliding operation remains eligible but is not required for this checkpoint.
+4. Click **Release now** or let the visible countdown expire. Re-observe and require the matching lock to be absent. Reissue the same stale transaction with a fresh operation ID and require the ordinary non-mutating revision `conflict`, not `locked`; this proves precedence during grace and bounded cleanup afterward.
+
+Retain the before/after project revisions, exact observed lock metadata, both MCP responses and native screenshot evidence of the nonzero countdown. Failure to overlap steps 2–3 with the visible grace interval is `BLOCKED`, not a pass.
+
+#### Certifying public transaction-trace replay
+
+Trace replay must use the authenticated public MCP tool; the desktop preload method is not a certifiable substitute. Read `aimuse://projects/<projectId>/trace`, select a committed transaction ID, observe the canonical project, and call `trace_replay` with exactly `projectId` and `transactionId`. Require `status: "completed"`, `replay.mode: "non-mutating-visualization"`, `appliedOperations: 0`, the expected ordered operation kinds/steps, stable entry/transaction/audit SHA-256 values, and identical canonical before/after revisions and hashes with `unchanged: true`. Re-observe the project and prove the complete canonical snapshot is unchanged. A missing/closed/drifted trace must fail explicitly; `concurrent-change-observed` is truthful evidence of interference, not a replay pass.
 
 ### Computer Use Song workflows
 
-- native File Open/Save As/Close and keyboard equivalents using only new disposable paths;
+- native File Open/Save As/Close and keyboard equivalents using only new disposable paths. Exercise the visible title-bar **Save As** control or the distinct **File → Save As…** action, retain the native destination dialog checkpoint and prove the resulting project path through MCP;
 - add audio/instrument/MIDI/folder/aux tracks and verify hierarchy/routing surfaces;
-- arrangement selection, move, trim/split controls, fades/gain/reverse/transpose/stretch metadata where exposed;
+- arrangement selection plus the Inspector's explicit **Clip start tick** move, **Clip length ticks** trim and **Split at midpoint** actions. After each action, re-observe the expected transaction label/revision/clip geometry through MCP, then use attributed undo/redo or a disposable clip rather than leaving the canonical project damaged. Fades/gain/reverse/transpose/stretch remain required only where exposed;
 - piano-roll notes, velocity/semantic buttons, mixer mute/solo/arm/pan/gain, device insertion, automation dock, markers/sections/lyrics surfaces;
+- in the right-side **Song** tab, create a marker with **＋ At selection**, a section with **＋ From selection**, edit their named/tick/range/energy fields, save the visible **Lyrics** textarea, and cross-observe every attributed operation through MCP;
 - checkpoint, Activity actor history, Stop agents and reconnect state.
 
 ### Computer Use SFX workflows
@@ -297,7 +409,7 @@ Level 3 includes Levels 1 and 2 plus the complete selected-v1 acceptance:
 - AUD-02 preview shutdown has two deliberately launch-free contracts. `tests/main/audio-preview-lifecycle.node.mjs` passes 2/2 and proves all owned refresh/build work settles before teardown. `tests/main/audio-child-lifecycle.node.mjs` passes 4/4 and proves an acknowledged shutdown waits for the exact child's natural exit, the fallback is unavailable before the 1,500 ms grace deadline, a lost response still permits natural exit, listeners are removed, and the controller source awaits that policy. Both exact commands use pinned Node's strip-types/test runner and import only their pure helpers plus fixed Node built-ins; neither imports child-process, native, audio/device, Vitest, app or package runtime code. Typecheck and exact-file lint also pass.
 - The dedicated [AUD-02 native teardown checkpoint](AUD02_NATIVE_TEARDOWN_CHECKPOINT.md) retains all attempts separately. Retry 2 is immutable conclusive FAIL evidence for the premature fallback race. Corrected retry 3 passed at immutable `test-results/20260807T072744Z-aud02-native-teardown-retry3`: exact identities, 48 kHz WASAPI shared output, bounded preview, pending refresh, natural PID exit code 0/no signal without fallback, retained-cache rename plus 2,000 ms quiet-window stability, unchanged endpoint, zero relevant/unexpected entries and no cleanup/sensitive authority all passed. This closes the prior `ENOTEMPTY` and premature-fallback classes only for the exact frozen source/helper/controller/audio binary and scenario; package/app/UI/scanner, exclusive mode, hot-plug and wider audio acceptance remain unearned.
 - The bounded exclusive-mode source contract keeps `--stdio` as the unchanged shared-mode launch, adds only explicit `--playback-mode=exclusive`, maps that request directly to miniaudio shared/exclusive configuration with no fallback retry, and reports `requestedPlaybackMode` plus `effectivePlaybackMode` in hello and transport state. The exact launch-free pair passes 2 files / 5 tests and is independently accepted. Its [two-phase native checkpoint](AUD02_EXCLUSIVE_NATIVE_CHECKPOINT.md) then completed PASS under retained root `test-results/20260807T194500Z-aud02-exclusive-native-acceptance`: plan `3F3F85F8…55E6C7`, build summary `BE465730…EA547`, exact audio `651BF50F…4FD1A7` (1,275,904 bytes), native CTest 1/1, then one unchanged default endpoint with matching shared and effective-exclusive hello/transport/playback, two fixed 180 ms/48 kHz/peak-0.02 probes, natural code-0/no-signal exits, zero fallback/force/survivor/unexpected entries and no cleanup. Device summary is `558B04F0…1211E`; case evidence is `D3E3600F…B451F`. This is exact executable/endpoint/scenario acceptance, not contention/rejection, hot-plug, package/app/UI, release or macOS evidence.
-- macOS verification is intentionally separate. `npm run verify:macos` is defined for a real Darwin host and covers the allowlisted portability check, explicit-root TypeScript/ESLint, headless source contracts and CMake DSP/playback/parser tests with runtime binaries disabled. It has not run on macOS. CoreAudio, Keychain, native lifecycle/device, Electron UI, signing, entitlements, notarization and package verification remain unearned.
+- macOS verification is intentionally separate. On the current Darwin arm64 development host, `npm test` now routes only the exact sealed Windows partition away while retaining the unchanged Windows suite, and `npm run verify:macos` covers portability, TypeScript/ESLint, the Darwin source contract and CMake/CTest. Separate local evidence covers a five-second real shared-CoreAudio soak with restart, injected fail-closed device-notification handling, target-aware arm64 runtime/package plus x64 and universal package composition, harmless VST3 bundle scanning, AAC/M4A metadata admission, a hardened/ad-hoc `AIMuse.app`, packaged synthetic provider configure/restart/rotate/remove and exact-hash headless authenticated-MCP restart with no survivor. This earns development evidence only. Physical endpoint/hot-plug/interruption and locked/denied Keychain states require external subjects; recording/MIDI, SDK hosting and compressed decode/export remain product-wide incomplete; x64-hardware/universal per-slice runtime, Developer ID signing, notarization/stapling and the formal fresh independent Computer Use workflow in both UI→MCP and MCP→UI directions remain unearned; see [the macOS gate matrix](MACOS_GATE_MATRIX.md).
 - WASAPI shared/exclusive, audio/MIDI recording, monitoring, punch/loop/takes, latency/PDC, real-time/offline match and recovery;
 - native DSP golden/null corpus and synthetic VST3/CLAP success/malformed/crash/hang/latency/state/missing/sidechain/automation matrix;
 - maintained WAV/FLAC/MP3/AAC/OGG/MIDI/DAWproject/ZIP64 fixtures, explicit losses and >4 GiB pack;

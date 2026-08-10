@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GenerationRequest } from '../../src/common/generation';
@@ -12,13 +12,22 @@ import { atomicWriteFile } from '../../src/main/persistence';
 import { ProjectService } from '../../src/main/project-service';
 import { TransactionTraceStore } from '../../src/main/trace-store';
 
-interface StorageFaults { available: boolean; encryptionThrows?: boolean; decryptionThrows?: boolean }
+interface StorageFaults { available: boolean; availabilityThrows?: boolean; encryptionThrows?: boolean; decryptionThrows?: boolean }
+
+const expectedProtectedStorageLabel = process.platform === 'win32'
+  ? 'Windows protected storage'
+  : process.platform === 'darwin'
+    ? 'macOS Keychain-backed protected storage'
+    : 'Operating-system protected storage';
 
 function protectedStorageMock(faults: StorageFaults): ProtectedStorage {
   const plaintext = new Map<string, string>();
   let sequence = 0;
   return {
-    isEncryptionAvailable: () => faults.available,
+    isEncryptionAvailable: () => {
+      if (faults.availabilityThrows) throw new Error('Injected protected-storage access denial.');
+      return faults.available;
+    },
     encryptString: (value) => {
       if (faults.encryptionThrows) throw new Error(`Injected encryption failure echoed ${value}`);
       const cipher = Buffer.from(`test-cipher-${sequence += 1}`);
@@ -83,6 +92,30 @@ describe('protected provider credential lifecycle', () => {
     expect(await readdir(join(root, 'credentials'))).toEqual(['providers.json']);
   });
 
+  it('persists setter, rotation, and removal across fresh store instances with owner-only POSIX storage', async () => {
+    const first = 'fixture-restart-secret-v1-never-persist';
+    const rotated = 'fixture-restart-secret-v2-never-persist';
+    await new ProviderCredentialStore(path, storage).set('elevenlabs', first);
+
+    let restarted = new ProviderCredentialStore(path, storage);
+    expect(await restarted.get('elevenlabs')).toBe(first);
+    expect(await restarted.status()).toEqual({ elevenlabs: true, stability: false, lyria: false });
+    await restarted.set('elevenlabs', rotated);
+
+    restarted = new ProviderCredentialStore(path, storage);
+    expect(await restarted.get('elevenlabs')).toBe(rotated);
+    await restarted.set('elevenlabs', '');
+    expect(await new ProviderCredentialStore(path, storage).status()).toEqual({ elevenlabs: false, stability: false, lyria: false });
+
+    const persisted = await readFile(path, 'utf8');
+    expect(persisted).not.toContain(first);
+    expect(persisted).not.toContain(rotated);
+    if (process.platform !== 'win32') {
+      expect((await stat(join(root, 'credentials'))).mode & 0o777).toBe(0o700);
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+    }
+  });
+
   it.each([
     ['rotation', 'fixture-interrupted-rotation-secret'],
     ['removal', ''],
@@ -125,8 +158,8 @@ describe('protected provider credential lifecycle', () => {
     const rotationError = await store.set('elevenlabs', replacement).then(() => undefined, (error: unknown) => error as Error);
     const removalError = await store.set('elevenlabs', '').then(() => undefined, (error: unknown) => error as Error);
 
-    expect(rotationError?.message).toBe('Windows protected storage is unavailable.');
-    expect(removalError?.message).toBe('Windows protected storage is unavailable.');
+    expect(rotationError?.message).toBe(`${expectedProtectedStorageLabel} is unavailable.`);
+    expect(removalError?.message).toBe(`${expectedProtectedStorageLabel} is unavailable.`);
     expect(`${rotationError?.message}${removalError?.message}`).not.toContain(original);
     expect(`${rotationError?.message}${removalError?.message}`).not.toContain(replacement);
     expect(await readFile(path)).toEqual(before);
@@ -136,6 +169,22 @@ describe('protected provider credential lifecycle', () => {
     const persisted = await readFile(path, 'utf8');
     expect(persisted).not.toContain(original);
     expect(persisted).not.toContain(replacement);
+  });
+
+  it('sanitizes a protected-storage availability denial without touching the credential file', async () => {
+    const store = new ProviderCredentialStore(path, storage);
+    const original = 'fixture-denied-known-good-never-persist';
+    const rejected = 'fixture-denied-replacement-never-persist';
+    await store.set('elevenlabs', original);
+    const before = await readFile(path);
+    faults.availabilityThrows = true;
+
+    const error = await store.set('elevenlabs', rejected).then(() => undefined, (failure: unknown) => failure as Error);
+
+    expect(error?.message).toBe(`${expectedProtectedStorageLabel} is unavailable.`);
+    expect(error?.message).not.toContain(original);
+    expect(error?.message).not.toContain(rejected);
+    expect(await readFile(path)).toEqual(before);
   });
 
   it('sanitizes encryption failure and does not configure or stage the rejected provider', async () => {
@@ -148,7 +197,7 @@ describe('protected provider credential lifecycle', () => {
 
     const error = await store.set('elevenlabs', rejected).then(() => undefined, (failure: unknown) => failure as Error);
 
-    expect(error?.message).toBe('Windows protected storage could not encrypt the credential.');
+    expect(error?.message).toBe(`${expectedProtectedStorageLabel} could not encrypt the credential.`);
     expect(error?.message).not.toContain(rejected);
     expect(await readFile(path)).toEqual(before);
     expect(await store.status()).toEqual({ elevenlabs: false, stability: true, lyria: false });

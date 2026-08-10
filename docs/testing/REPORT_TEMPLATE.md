@@ -12,11 +12,18 @@
 
 ## Subject and environment
 
-- Test subject/change:
-- Source revision and dirty/untracked summary:
+- Source/input change under test:
+- Source revision, branch, index and dirty/untracked input identity:
+- Frozen package-input identity versus final checkout identity; authorized concurrent drift, if any:
+- Pre-existing package identity, if observed, explicitly labeled non-subject:
 - Node/npm versions:
-- Windows/display/audio/MIDI details:
-- Executable path and SHA-256:
+- Platform/display/audio/MIDI details:
+- Formal evidence root and retained filesystem identity:
+- Playwright output and HTML-report paths, disjoint from formal evidence:
+- Package-subject manifest path and SHA-256:
+- Subject identity SHA-256:
+- Executable, ASAR and native-helper paths/bytes/SHA-256:
+- Architecture, bundle and signature identity:
 - App version/window title:
 - Isolated profile:
 - Initially active project ID/name:
@@ -26,19 +33,37 @@
 | Assertion | Result | Evidence without credentials |
 | --- | --- | --- |
 | Node runtime is 24.x | | |
-| Post-package executable/native/fuse verifier passed | | |
+| Source/branch/index/dirty identity captured before packaging | | |
+| Frozen source inputs remained stable through packaging and subject publication | | |
+| Final checkout identity matches frozen inputs, or later authorized drift is retained and scoped out | | |
+| Package ran exactly once before subject declaration | | |
+| Immutable manifest was published once below the formal root | | |
+| Manifest-bound executable/ASAR/native/fuse/signature verifier passed | | |
+| Manifest/component reverify passed after verifier and packaged E2E | | |
+| Formal root, preflight and automation log survived Playwright cleanup | | |
+| Playwright output and HTML report are disjoint from formal evidence | | |
+| Manifest/component reverify passed at coordinator handoff | | |
 | Native process launched outside filesystem sandbox | | |
 | QA session status is `okay: true` | | |
-| Manifest PID equals connection PID and live process | | |
-| Manifest hash equals current executable hash | | |
-| Computer Use app path equals manifest executable | | |
-| Agents/Activity MCP URL equals manifest/client URL | | |
+| `processAlive`, `processInspection`, supported/denied/status/identity fields recorded | | |
+| Normal path is performed/supported/not-denied/alive with `processAlive: true` | | |
+| No `ESRCH`, absent, unsupported or process-identity-mismatch result | | |
+| Alternate path, if used, is sandbox `EPERM` and denied/not-supported/permission-denied/alive-null | | |
+| Alternate path has `packageSubjectVerified: true` and exact manifest/subject/executable fields | | |
+| Connection/session and health PID/instance/profile/URL identity matches exactly | | |
+| `mcpAuthentication` is verified / HTTP 400 / `initialization_required` | | |
+| Alternate path has `inspectionFallbackVerified: true` | | |
+| No coordinator/unsandboxed tester-status substitution occurred | | |
+| Session executable/hash equals package-subject executable/hash | | |
+| Computer Use app path equals package-subject executable | | |
+| Agents/Activity MCP URL equals session manifest/client URL | | |
 
 ## Automated gate
 
 | Command | Result | Duration | Evidence/notes |
 | --- | --- | ---: | --- |
-| `node scripts/npm-node24.mjs run test:levelN:auto` | Pass/Fail/Blocked | | |
+| Formal environment plus `node scripts/npm-node24.mjs run test:levelN:auto` with preserved `pipefail`/`tee` exit | Pass/Fail/Blocked | | |
+| Post-automation `package-subject.mjs verify` at handoff | Pass/Fail/Blocked | | |
 
 ## MCP cases
 
@@ -48,6 +73,10 @@
 | Observe/resources | | | |
 | Apply/idempotency | | | |
 | Actor undo/redo | | | |
+| Public authenticated `trace_replay`: selected durable transaction, entry/transaction/audit digests, zero applied operations and unchanged canonical before/after state | | | |
+| Human drag grace lock: exact observed range/phase/expiry, colliding `locked`, unchanged revision, then zero lock + stale conflict after release/expiry | | | |
+| Durable discard/recovery: dirty `force:false` refusal, successful `force:true`, discarded ID absent after same-profile restart, separate dirty control recovered without canonical drift | | | |
+| Serialized approvals: maximum pending count, per-job request/resolution/terminal timestamps, zero overlap and zero second-job publication | | | |
 | Level-specific cases | | | |
 
 ## Computer Use UI cases
@@ -56,7 +85,12 @@
 | --- | --- | --- | --- |
 | Window selection/render health | | | |
 | Native menu/dialog/focus | | | |
+| Distinct native Save As destination and MCP-observed project path | | | |
 | Timeline/piano-roll/mixer/SFX pointer action | | | |
+| Inspector clip move/trim/split transaction labels and geometry | | | |
+| Song marker/section/lyrics surfaces and MCP-observed attributed state | | | |
+| Disposable-project discard confirmation, pre-restart absence and post-restart native-tab absence; recovery-control tab present | | | |
+| Native Jobs surface showed at most one pending approval and returned to zero before each next request | | | |
 | Panels/tabs/transport/status | | | |
 | Level-specific cases | | | |
 
@@ -66,6 +100,7 @@
 | --- | --- | --- |
 | MCP → visible UI | | |
 | Computer Use UI → MCP state | | |
+| Computer Use clip drag → visible nonzero grace countdown → authenticated MCP `locked` → bounded cleanup | | |
 
 ## Findings
 
@@ -91,12 +126,17 @@ List every skipped, unavailable, confirmation-blocked or environment-dependent r
 - MCP session left and state credentials redacted:
 - Engine connection credentials redacted after stop:
 - Initially active isolated project restored:
-- QA projects saved/closed safely:
+- Force-discarded run-owned project IDs absent before and after same-profile restart and at final cleanup:
+- Separate dirty crash-recovery control restored with exact ID/revision/canonical state, then saved or closed safely:
+- Other QA projects saved/closed safely:
+- Maximum observed pending approval count and evidence that every approval job became terminal before the next request:
 - Isolated engine stopped and PID absent:
 - Remaining QA and pre-existing processes listed separately:
-- Evidence retained and cleanup warnings:
+- Package-subject manifest and every component reverified after stop:
+- Frozen source-input identity versus final checkout; concurrent remediation attribution and evidence:
+- Original formal-root identity, preflight, automation log and report retained:
+- Playwright output remained isolated; evidence and cleanup warnings:
 
 ## Final gate decision
 
 State why the level passed, failed or was blocked and name the exact next action.
-

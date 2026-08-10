@@ -23,6 +23,7 @@ const pathDirectories = (process.env.PATH ?? '').split(delimiter).filter(Boolean
 const npmCandidates = [
   process.env.AIMUSE_NPM_CLI,
   join(dirname(node24), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  join(dirname(dirname(node24)), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
   'C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js',
   ...pathDirectories.map((directory) => join(directory, 'node_modules', 'npm', 'bin', 'npm-cli.js')),
 ].filter(Boolean).map((candidate) => resolve(candidate));
@@ -39,4 +40,3 @@ const result = spawnSync(node24, [npmCli, ...args], {
 });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
-

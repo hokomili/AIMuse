@@ -27,9 +27,11 @@ export function normalizeProfileId(value, label = 'AIMuse profile ID') {
   return value.toUpperCase();
 }
 
-export function profileIdForPath(path) {
+export function profileIdForPath(path, platform = process.platform) {
   if (typeof path !== 'string' || !path) throw new Error('Invalid AIMuse profile path.');
-  return createHash('sha256').update(resolve(path).toLowerCase()).digest('hex').toUpperCase();
+  const resolved = resolve(path);
+  const identityInput = platform === 'win32' ? resolved.toLowerCase() : resolved.normalize('NFC');
+  return createHash('sha256').update(identityInput).digest('hex').toUpperCase();
 }
 
 function normalizeExecutableHash(value, label) {

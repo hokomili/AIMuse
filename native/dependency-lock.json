@@ -28,7 +28,7 @@
     }
   },
   "notes": [
-    "Revisions are immutable inputs. The Windows native/package script fetches the pinned miniaudio revision for WASAPI; macOS structural tests fetch no audio SDK and runtime packaging remains blocked pending CoreAudio. Plug-in SDKs and Signalsmith remain opt-in.",
+    "Revisions are immutable inputs. The native build fetches the pinned miniaudio revision for WASAPI on Windows and shared CoreAudio playback on macOS. Plug-in SDKs and Signalsmith remain opt-in; macOS packaging remains separately gated.",
     "The separately licensed ASIO bridge is intentionally absent from this repository.",
     "Release engineering must change reviewStatus to audited only after source, license, and SBOM review."
   ]

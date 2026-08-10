@@ -17,6 +17,11 @@ const REQUESTED_AT = '2026-08-05T04:00:00.000Z';
 const REQUESTED_AT_MS = Date.parse(REQUESTED_AT);
 const EVIDENCE_SENTINEL = '{"sentinel":"known-good-manifest"}\n';
 
+it('matches platform-specific profile identity semantics', () => {
+  expect(profileIdForPath('/Users/AIMuse', 'darwin')).not.toBe(profileIdForPath('/Users/aimuse', 'darwin'));
+  expect(profileIdForPath('C:\\Users\\AIMuse', 'win32')).toBe(profileIdForPath('C:\\Users\\aimuse', 'win32'));
+});
+
 function baseManifest(overrides = {}) {
   return {
     version: 1,

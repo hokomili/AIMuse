@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { atomicWriteJsonEvidence, buildRedactedConnection, validateRedactedConnection } from './qa-evidence.mjs';
 import { buildStopManifest, coordinateShow, coordinateStop, normalizeInstanceId, normalizeProfileId, profileIdForPath, validateHealthIdentity, waitForConnectionReadiness, waitForStopCompletion } from './qa-lifecycle.mjs';
+import { resolveSubjectPath, verifyPackageSubject } from './package-subject.mjs';
 import { assertOwnerPrivateRoot, assertPrivateRootDeclaration, normalizePrivateRootIdentity } from './qa-private-root.mjs';
 
 const LEGACY_CERTIFIED_EXECUTABLES = new Set([
@@ -16,7 +17,7 @@ const LEGACY_CERTIFIED_EXECUTABLES = new Set([
 const HELP = `AIMuse isolated QA session
 
 Usage:
-  node scripts/qa-session.mjs start --exe <AIMuse.exe> --private-root <dir> --profile <dir> --connection <json> --launch-context unsandboxed-gui [--manifest <json>] [--mode interactive|headless] [--authority-policy <json>] [--trust-folder <dir> ...]
+  node scripts/qa-session.mjs start --exe <AIMuse.exe> --private-root <dir> --profile <dir> --connection <json> --launch-context unsandboxed-gui [--manifest <json>] [--mode interactive|headless] [--authority-policy <json>] [--trust-folder <dir> ...] [--package-subject-manifest <json> --package-subject-manifest-sha256 <sha256>]
   node scripts/qa-session.mjs show --private-root <dir> --manifest <json>
   node scripts/qa-session.mjs status --private-root <dir> --manifest <json>
   node scripts/qa-session.mjs stop --private-root <dir> --manifest <json>
@@ -62,6 +63,59 @@ function assertPrivateManifestPaths(manifestPath, privateRoot, paths) {
   if (privateRoot === evidenceRoot || !within(evidenceRoot, privateRoot)) throw new Error(`QA session private root must be a child below ${evidenceRoot}: ${privateRoot}`);
   for (const path of [manifestPath, ...paths]) if (!within(privateRoot, path)) throw new Error(`QA session path must stay below persisted private root ${privateRoot}: ${path}`);
 }
+function packageSubjectRequest(values, environment = process.env) {
+  const manifestValue = optional(values, 'package-subject-manifest') ?? environment.AIMUSE_PACKAGE_SUBJECT_MANIFEST;
+  const digestValue = optional(values, 'package-subject-manifest-sha256') ?? environment.AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256;
+  if (!manifestValue && !digestValue) return undefined;
+  if (!manifestValue || !digestValue) throw new Error('Package subject binding requires both --package-subject-manifest/AIMUSE_PACKAGE_SUBJECT_MANIFEST and --package-subject-manifest-sha256/AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256.');
+  if (!/^[a-f\d]{64}$/iu.test(digestValue)) throw new Error('Package subject manifest SHA-256 must be 64 hexadecimal characters.');
+  return { manifestPath: resolve(manifestValue), expectedManifestSha256: digestValue.toUpperCase() };
+}
+function persistedPackageSubject(manifestPath, value) {
+  const fields = ['packageSubjectManifest', 'packageSubjectManifestSha256', 'packageSubjectIdentitySha256'];
+  const present = fields.filter((field) => value[field] !== undefined);
+  if (!present.length) return undefined;
+  if (present.length !== fields.length || typeof value.packageSubjectManifest !== 'string' || !isAbsolute(value.packageSubjectManifest) ||
+      typeof value.packageSubjectManifestSha256 !== 'string' || !/^[a-f\d]{64}$/iu.test(value.packageSubjectManifestSha256) ||
+      typeof value.packageSubjectIdentitySha256 !== 'string' || !/^[a-f\d]{64}$/iu.test(value.packageSubjectIdentitySha256)) {
+    throw new Error(`Invalid QA session package subject binding: ${manifestPath}`);
+  }
+  return {
+    manifestPath: resolve(value.packageSubjectManifest),
+    expectedManifestSha256: value.packageSubjectManifestSha256.toUpperCase(),
+    expectedSubjectIdentitySha256: value.packageSubjectIdentitySha256.toUpperCase(),
+  };
+}
+async function verifySubjectBinding(request, exe, dependencies = {}) {
+  if (!request) return undefined;
+  const workspace = resolve(dependencies.workspace ?? '.');
+  const verifySubject = dependencies.verifyPackageSubject ?? verifyPackageSubject;
+  const result = await verifySubject({ workspace, manifestPath: request.manifestPath, expectedManifestSha256: request.expectedManifestSha256, platform: dependencies.platform ?? process.platform });
+  const identity = result?.manifest?.subject?.identitySha256;
+  const declaredExecutable = result?.manifest?.subject?.files?.applicationExecutable?.path;
+  if (typeof identity !== 'string' || !/^[a-f\d]{64}$/iu.test(identity) || typeof declaredExecutable !== 'string') throw new Error('Verified package subject did not return a complete subject identity.');
+  const subjectExecutable = resolveSubjectPath(workspace, declaredExecutable);
+  if (resolve(exe) !== subjectExecutable) throw new Error(`QA session --exe does not match the verified package subject executable: ${exe}`);
+  const binding = {
+    manifestPath: resolve(result.manifestPath),
+    manifestSha256: String(result.manifestSha256).toUpperCase(),
+    subjectIdentitySha256: identity.toUpperCase(),
+  };
+  if (binding.manifestPath !== resolve(request.manifestPath) || binding.manifestSha256 !== request.expectedManifestSha256) throw new Error('Verified package subject result does not match the requested manifest binding.');
+  if (request.expectedSubjectIdentitySha256 && binding.subjectIdentitySha256 !== request.expectedSubjectIdentitySha256) throw new Error('Verified package subject identity does not match the persisted QA session binding.');
+  return binding;
+}
+function assertSubjectBindingStable(before, after) {
+  if (!before && !after) return;
+  if (!before || !after || before.manifestPath !== after.manifestPath || before.manifestSha256 !== after.manifestSha256 || before.subjectIdentitySha256 !== after.subjectIdentitySha256) throw new Error('Package subject identity drifted during QA session handoff.');
+}
+function subjectManifestFields(binding) {
+  return binding ? {
+    packageSubjectManifest: binding.manifestPath,
+    packageSubjectManifestSha256: binding.manifestSha256,
+    packageSubjectIdentitySha256: binding.subjectIdentitySha256,
+  } : {};
+}
 function normalizeManifest(manifestPath, value) {
   if (!value || typeof value !== 'object' || value.version !== 1) throw new Error(`Invalid QA session manifest: ${manifestPath}`);
   for (const key of ['exe', 'privateRoot', 'profile', 'connection']) {
@@ -78,7 +132,8 @@ function normalizeManifest(manifestPath, value) {
   if (profileId !== undefined && profileIdForPath(profile) !== profileId) throw new Error(`QA session manifest profile identity does not match its profile path: ${manifestPath}`);
   if (profileId === undefined && !LEGACY_CERTIFIED_EXECUTABLES.has(exeSha256)) throw new Error(`QA session manifest profile identity is required for this executable: ${manifestPath}`);
   const privateRoot = resolve(value.privateRoot);
-  const manifest = { ...value, exe: resolve(value.exe), privateRoot, privateRootIdentity: normalizePrivateRootIdentity(value.privateRootIdentity, 'QA session private root identity'), profile, connection: resolve(value.connection), pid: Number(value.pid), exeSha256, mcpUrl: mcpUrl.toString(), instanceId: normalizeInstanceId(value.instanceId, 'QA session engine instance ID'), profileId };
+  const packageSubject = persistedPackageSubject(manifestPath, value);
+  const manifest = { ...value, exe: resolve(value.exe), privateRoot, privateRootIdentity: normalizePrivateRootIdentity(value.privateRootIdentity, 'QA session private root identity'), profile, connection: resolve(value.connection), pid: Number(value.pid), exeSha256, mcpUrl: mcpUrl.toString(), instanceId: normalizeInstanceId(value.instanceId, 'QA session engine instance ID'), profileId, ...(packageSubject ? subjectManifestFields({ manifestPath: packageSubject.manifestPath, manifestSha256: packageSubject.expectedManifestSha256, subjectIdentitySha256: packageSubject.expectedSubjectIdentitySha256 }) : {}) };
   assertEvidencePath(manifest.profile); assertEvidencePath(manifest.connection);
   assertPrivateManifestPaths(manifestPath, privateRoot, [manifest.profile, manifest.connection]);
   assertSeparateConnectionAndManifest(manifest.connection, manifestPath);
@@ -105,6 +160,102 @@ async function health(url, expectedPid, expectedInstanceId, expectedProfileId) {
   return { ...probe, ...validateHealthIdentity(probe.body, expectedPid, expectedInstanceId, expectedProfileId) };
 }
 function isProcessAlive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
+
+function statusProcessInspection(pid) {
+  process.kill(pid, 0);
+  return { alive: true, pid };
+}
+
+function inspectionErrorCode(error) {
+  return error && typeof error === 'object' && typeof error.code === 'string' ? error.code.toUpperCase() : undefined;
+}
+
+function normalizeStatusProcessInspection(value, expectedPid) {
+  if (typeof value === 'boolean') return { alive: value, supported: true, denied: false, status: value ? 'alive' : 'absent', identityMatches: null };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Status process inspection must return a boolean or object.');
+  if (value.pid !== undefined && (!Number.isSafeInteger(Number(value.pid)) || Number(value.pid) !== Number(expectedPid))) {
+    return { alive: value.alive === true ? true : null, supported: true, denied: false, status: 'identity-mismatch', identityMatches: false };
+  }
+  if (value.identityMatches === false || value.status === 'identity-mismatch') {
+    return { alive: value.alive === true ? true : null, supported: value.supported !== false, denied: false, status: 'identity-mismatch', identityMatches: false };
+  }
+  if (value.status === 'permission-denied' || value.denied === true) return { alive: null, supported: false, denied: true, status: 'permission-denied', identityMatches: null };
+  if (value.status === 'unsupported' || value.supported === false) return { alive: null, supported: false, denied: false, status: 'unsupported', identityMatches: null };
+  if (value.status === 'absent' || value.alive === false) return { alive: false, supported: true, denied: false, status: 'absent', identityMatches: value.identityMatches ?? null };
+  if (value.status === 'alive' || value.alive === true) return { alive: true, supported: true, denied: false, status: 'alive', identityMatches: value.identityMatches ?? null };
+  throw new Error('Status process inspection did not report a supported tri-state result.');
+}
+
+function statusInspectionFromError(error) {
+  const code = inspectionErrorCode(error);
+  if (code === 'ESRCH') return { alive: false, supported: true, denied: false, status: 'absent', identityMatches: null };
+  if (code === 'EPERM') return { alive: null, supported: false, denied: true, status: 'permission-denied', identityMatches: null };
+  if (['ENOSYS', 'ENOTSUP'].includes(code)) return { alive: null, supported: false, denied: false, status: 'unsupported', identityMatches: null };
+  throw error;
+}
+
+function expectedHealthUrl(mcpUrl) {
+  const url = new globalThis.URL(mcpUrl);
+  url.pathname = '/health';
+  url.search = '';
+  return url.toString();
+}
+
+function exactStatusHealth(value, manifest) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !value.body || typeof value.body !== 'object' || Array.isArray(value.body)) throw new Error('Status health probe did not return an exact response body.');
+  const expectedUrl = expectedHealthUrl(manifest.mcpUrl);
+  if (value.url !== expectedUrl) throw new Error(`Status health URL mismatch: expected ${expectedUrl}, received ${String(value.url)}.`);
+  const body = value.body;
+  validateHealthIdentity(body, manifest.pid, manifest.instanceId, manifest.profileId);
+  if (typeof body.pid !== 'number' || !Number.isSafeInteger(body.pid) || body.pid !== Number(manifest.pid)) throw new Error('Status health PID is missing or not exact.');
+  if (normalizeInstanceId(body.instanceId, 'status health engine instance ID') !== manifest.instanceId) throw new Error('Status health instance identity is missing or not exact.');
+  if (normalizeProfileId(body.profileId, 'status health profile ID') !== manifest.profileId) throw new Error('Status health profile identity is missing or not exact.');
+  return value;
+}
+
+function normalizeStatusHealth(value, manifest) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Status health probe must return an object.');
+  const body = value.body && typeof value.body === 'object' && !Array.isArray(value.body) ? value.body : value;
+  const identity = validateHealthIdentity(body, manifest.pid, manifest.instanceId, manifest.profileId);
+  return value.body ? { ...value, ...identity } : identity;
+}
+
+function statusConnectionIdentity(manifest, connection) {
+  const pidMatches = typeof connection.pid === 'number' && Number.isSafeInteger(connection.pid) && connection.pid === Number(manifest.pid);
+  const urlMatches = typeof connection.url === 'string' && connection.url === manifest.mcpUrl;
+  let instanceId; let instanceMatches = false; let profileId; let profileMatches = false;
+  try { instanceId = normalizeInstanceId(connection.instanceId, 'QA connection engine instance ID'); instanceMatches = instanceId === manifest.instanceId; } catch { /* invalid instance remains a static mismatch */ }
+  try { profileId = normalizeProfileId(connection.profileId, 'QA connection profile ID'); profileMatches = profileId === manifest.profileId; } catch { /* invalid profile remains a static mismatch */ }
+  return { pidMatches, urlMatches, instanceId, instanceMatches, profileId, profileMatches, matches: pidMatches && urlMatches && instanceMatches && profileMatches };
+}
+
+async function probeAuthenticatedMcp(url, token) {
+  if (typeof token !== 'string' || !token) return { verified: false, httpStatus: null, result: 'missing-credential' };
+  let response;
+  try {
+    response = await globalThis.fetch(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+      redirect: 'error',
+      signal: globalThis.AbortSignal.timeout(1_500),
+    });
+  } catch {
+    return { verified: false, httpStatus: null, result: 'probe-failed' };
+  }
+  let body;
+  try { body = await response.json(); } catch { return { verified: false, httpStatus: response.status, result: 'invalid-response' }; }
+  const exactBody = body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 1 && body.error === 'initialization_required';
+  if (response.status !== 400 || !exactBody) return { verified: false, httpStatus: response.status, result: response.status === 401 ? 'invalid-token' : 'unexpected-response' };
+  return { verified: true, httpStatus: 400, result: 'initialization_required' };
+}
+
+function normalizeAuthenticationProof(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { verified: false, httpStatus: null, result: 'invalid-proof' };
+  const httpStatus = Number.isInteger(value.httpStatus) ? value.httpStatus : null;
+  if (value.verified === true && httpStatus === 400 && value.result === 'initialization_required') return { verified: true, httpStatus, result: value.result };
+  const allowedResults = new Set(['invalid-proof', 'missing-credential', 'probe-failed', 'invalid-response', 'invalid-token', 'unexpected-response']);
+  return { verified: false, httpStatus, result: allowedResults.has(value.result) ? value.result : 'invalid-proof' };
+}
 
 async function waitForConnection(connectionPath, expectedPid, expectedProfileId, startedAt) {
   return waitForConnectionReadiness({ connectionPath, expectedPid, expectedProfileId, startedAt }, {
@@ -138,6 +289,8 @@ async function loadManifest(values, dependencies = {}) {
   assertPrivateRootDeclaration(privateRoot, manifest.privateRoot, manifest.privateRootIdentity, initial, privateRootPlatform(dependencies));
   const context = { privateRoot, manifestPath, manifest, paths: [manifestPath, manifest.profile, manifest.connection], dependencies };
   await revalidatePrivateContext(context);
+  const request = persistedPackageSubject(manifestPath, manifest);
+  if (request) context.packageSubjectBinding = await verifySubjectBinding(request, manifest.exe, dependencies);
   return context;
 }
 async function writeManifest(manifestPath, manifest) {
@@ -181,6 +334,7 @@ export async function start(values, dependencies = {}) {
   const mode = optional(values, 'mode') ?? 'interactive';
   const launchContext = optional(values, 'launch-context');
   const authorityPolicy = optional(values, 'authority-policy');
+  const subjectRequest = packageSubjectRequest(values, dependencies.environment ?? process.env);
   const trustedFolders = (values.get('trust-folder') ?? []).map((folder) => resolve(folder));
   assertEvidencePath(profile); assertEvidencePath(connection); assertEvidencePath(manifestPath);
   assertSeparateConnectionAndManifest(connection, manifestPath);
@@ -192,10 +346,12 @@ export async function start(values, dependencies = {}) {
   const hashExecutable = dependencies.hashExecutable ?? sha256;
   const mkdirPath = dependencies.mkdirPath ?? mkdir;
   await accessPath(exe); if (authorityPolicy) await accessPath(authorityPolicy);
+  const initialSubjectBinding = await verifySubjectBinding(subjectRequest, exe, dependencies);
   const exeSha256 = await hashExecutable(exe);
   const expectedProfileId = LEGACY_CERTIFIED_EXECUTABLES.has(exeSha256) ? undefined : profileIdForPath(profile);
-  await mkdirPath(profile, { recursive: true }); await mkdirPath(dirname(connection), { recursive: true }); await mkdirPath(dirname(manifestPath), { recursive: true });
-  for (const folder of trustedFolders) await mkdirPath(folder, { recursive: true });
+  const privateDirectoryOptions = { recursive: true, mode: 0o700 };
+  await mkdirPath(profile, privateDirectoryOptions); await mkdirPath(dirname(connection), privateDirectoryOptions); await mkdirPath(dirname(manifestPath), privateDirectoryOptions);
+  for (const folder of trustedFolders) await mkdirPath(folder, privateDirectoryOptions);
 
   const startedAtMs = (dependencies.now ?? Date.now)();
   const args = [`--user-data-dir=${profile}`, ...(mode === 'headless' ? ['--headless'] : []), `--write-mcp-connection=${connection}`, ...(authorityPolicy ? [`--authority-policy=${resolve(authorityPolicy)}`] : []), ...trustedFolders.map((folder) => `--trust-folder=${folder}`)];
@@ -204,7 +360,9 @@ export async function start(values, dependencies = {}) {
   if (!child.pid) throw new Error('AIMuse did not return a process ID.');
   const waitForReady = dependencies.waitForReady ?? waitForConnection;
   const ready = await waitForReady(connection, child.pid, expectedProfileId, startedAtMs);
-  const manifest = { version: 1, startedAt: new Date(startedAtMs).toISOString(), exe, exeSha256, privateRoot, privateRootIdentity: normalizePrivateRootIdentity(observedPrivateRoot.identity), profile, profileId: ready.connection.profileId, connection, mode, launchContext, authorityPolicy: authorityPolicy ? resolve(authorityPolicy) : undefined, pid: child.pid, instanceId: ready.connection.instanceId, mcpUrl: ready.connection.url, healthUrl: ready.health.url, trustedFolders, windowRequested: mode === 'interactive' };
+  const handoffSubjectBinding = await verifySubjectBinding(subjectRequest, exe, dependencies);
+  assertSubjectBindingStable(initialSubjectBinding, handoffSubjectBinding);
+  const manifest = { version: 1, startedAt: new Date(startedAtMs).toISOString(), exe, exeSha256, privateRoot, privateRootIdentity: normalizePrivateRootIdentity(observedPrivateRoot.identity), profile, profileId: ready.connection.profileId, connection, mode, launchContext, authorityPolicy: authorityPolicy ? resolve(authorityPolicy) : undefined, pid: child.pid, instanceId: ready.connection.instanceId, mcpUrl: ready.connection.url, healthUrl: ready.health.url, trustedFolders, windowRequested: mode === 'interactive', ...subjectManifestFields(handoffSubjectBinding) };
   await (dependencies.writeManifest ?? writeManifest)(manifestPath, manifest);
   (dependencies.writeOutput ?? ((text) => process.stdout.write(text)))(`${JSON.stringify({ manifestPath, ...manifest }, null, 2)}\n`);
 }
@@ -223,9 +381,17 @@ async function guardedInspectProcess(context, pid) {
   await revalidatePrivateContext(context);
   return (context.dependencies.inspectProcess ?? ((value) => ({ alive: isProcessAlive(value) })))(pid);
 }
+async function guardedInspectStatusProcess(context, pid) {
+  await revalidatePrivateContext(context);
+  return (context.dependencies.inspectProcess ?? statusProcessInspection)(pid);
+}
 async function guardedProbeHealth(context, url, pid, instanceId, profileId) {
   await revalidatePrivateContext(context);
   return (context.dependencies.probeHealth ?? health)(url, pid, instanceId, profileId);
+}
+async function guardedProbeMcpAuthentication(context, url, token) {
+  await revalidatePrivateContext(context);
+  return (context.dependencies.probeMcpAuthentication ?? probeAuthenticatedMcp)(url, token);
 }
 async function guardedWriteManifest(context, manifest) {
   await revalidatePrivateContext(context);
@@ -266,22 +432,86 @@ export async function status(values, dependencies = {}) {
   const currentHash = await guardedHashExecutable(context);
   const connection = await readGuardedConnection(context);
   const hashMatches = currentHash === manifest.exeSha256;
-  const pidMatches = Number(connection.pid) === Number(manifest.pid);
-  const urlMatches = connection.url === manifest.mcpUrl;
-  let connectionInstanceId; let instanceMatches = false; let connectionProfileId; let profileMatches = false;
-  try { connectionInstanceId = normalizeInstanceId(connection.instanceId, 'QA connection engine instance ID'); instanceMatches = connectionInstanceId === manifest.instanceId; } catch { /* invalid instance remains a static mismatch */ }
-  try { connectionProfileId = normalizeProfileId(connection.profileId, 'QA connection profile ID'); profileMatches = connectionProfileId === manifest.profileId; } catch { /* invalid profile remains a static mismatch */ }
-  const staticIdentityMatches = hashMatches && pidMatches && urlMatches && instanceMatches && profileMatches;
-  let processAlive = null; let processInspection = 'skipped'; let healthResult; let healthError; let healthSkipped = 'static identity mismatch';
+  const connectionIdentity = statusConnectionIdentity(manifest, connection);
+  const staticIdentityMatches = hashMatches && connectionIdentity.matches;
+  let inspection = { alive: null, supported: null, denied: false, status: 'skipped-static-identity-mismatch', identityMatches: null };
+  let healthResult; let healthError; let healthSkipped = 'static identity mismatch';
+  let authentication = { verified: false, httpStatus: null, result: 'not-required' };
+  let inspectionFallbackVerified = false;
   if (staticIdentityMatches) {
-    processInspection = 'performed'; processAlive = Boolean((await guardedInspectProcess(context, Number(manifest.pid))).alive);
-    if (processAlive) {
+    try { inspection = normalizeStatusProcessInspection(await guardedInspectStatusProcess(context, Number(manifest.pid)), manifest.pid); }
+    catch (error) { inspection = statusInspectionFromError(error); }
+    if (inspection.status === 'alive') {
       healthSkipped = undefined;
-      try { healthResult = await guardedProbeHealth(context, manifest.mcpUrl, manifest.pid, manifest.instanceId, manifest.profileId); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
-    } else healthSkipped = 'process not alive';
+      try { healthResult = normalizeStatusHealth(await guardedProbeHealth(context, manifest.mcpUrl, manifest.pid, manifest.instanceId, manifest.profileId), manifest); } catch (error) { healthError = error instanceof Error ? error.message : String(error); }
+    } else if (inspection.status === 'absent') healthSkipped = 'process absent';
+    else if (inspection.status === 'identity-mismatch') healthSkipped = 'process identity mismatch';
+    else {
+      const darwinFallback = privateRootPlatform(dependencies) === 'darwin' && inspection.status === 'permission-denied';
+      if (!darwinFallback) healthSkipped = 'process inspection unavailable';
+      else if (!context.packageSubjectBinding) healthSkipped = 'verified package subject required';
+      else {
+        healthSkipped = undefined;
+        try { healthResult = exactStatusHealth(normalizeStatusHealth(await guardedProbeHealth(context, manifest.mcpUrl, manifest.pid, manifest.instanceId, manifest.profileId), manifest), manifest); }
+        catch (error) { healthError = error instanceof Error ? error.message : String(error); }
+        if (healthResult) {
+          authentication = normalizeAuthenticationProof(await guardedProbeMcpAuthentication(context, manifest.mcpUrl, connection.token));
+          if (authentication.verified) {
+            const finalConnection = await readGuardedConnection(context);
+            const finalIdentity = statusConnectionIdentity(manifest, finalConnection);
+            if (!finalIdentity.matches || finalConnection.token !== connection.token) authentication = { verified: false, httpStatus: authentication.httpStatus, result: 'connection-drift' };
+            else {
+              const request = persistedPackageSubject(manifestPath, manifest);
+              const rebound = await verifySubjectBinding(request, manifest.exe, dependencies);
+              assertSubjectBindingStable(context.packageSubjectBinding, rebound);
+              const finalHash = await guardedHashExecutable(context);
+              if (finalHash !== manifest.exeSha256) authentication = { verified: false, httpStatus: authentication.httpStatus, result: 'executable-drift' };
+              else {
+                try { healthResult = exactStatusHealth(normalizeStatusHealth(await guardedProbeHealth(context, manifest.mcpUrl, manifest.pid, manifest.instanceId, manifest.profileId), manifest), manifest); inspectionFallbackVerified = true; }
+                catch (error) { healthResult = undefined; healthError = error instanceof Error ? error.message : String(error); }
+              }
+            }
+          }
+        }
+      }
+    }
   }
-  const result = { manifestPath, exe: manifest.exe, expectedSha256: manifest.exeSha256, currentSha256: currentHash, hashMatches, pid: manifest.pid, processAlive, processInspection, connectionPid: connection.pid, pidMatches, instanceId: manifest.instanceId, connectionInstanceId, instanceMatches, profileId: manifest.profileId, connectionProfileId, profileMatches, mcpUrl: manifest.mcpUrl, connectionUrl: connection.url, urlMatches, health: healthResult ?? (healthError ? { error: healthError } : { skipped: healthSkipped }), profile: manifest.profile, mode: manifest.mode, windowRequested: Boolean(manifest.windowRequested) };
-  const okay = staticIdentityMatches && processAlive === true && Boolean(healthResult);
+  const processInspection = inspection.status.startsWith('skipped-') ? 'skipped' : inspection.denied ? 'denied' : inspection.supported ? 'performed' : 'unsupported';
+  const result = {
+    manifestPath,
+    exe: manifest.exe,
+    expectedSha256: manifest.exeSha256,
+    currentSha256: currentHash,
+    hashMatches,
+    packageSubjectVerified: Boolean(context.packageSubjectBinding),
+    ...(context.packageSubjectBinding ? { packageSubjectManifest: context.packageSubjectBinding.manifestPath, packageSubjectManifestSha256: context.packageSubjectBinding.manifestSha256, packageSubjectIdentitySha256: context.packageSubjectBinding.subjectIdentitySha256 } : {}),
+    pid: manifest.pid,
+    processAlive: inspection.alive,
+    processInspection,
+    processInspectionSupported: inspection.supported,
+    processInspectionDenied: inspection.denied,
+    processInspectionStatus: inspection.status,
+    processIdentityMatches: inspection.identityMatches,
+    inspectionFallbackVerified,
+    connectionPid: connection.pid,
+    pidMatches: connectionIdentity.pidMatches,
+    instanceId: manifest.instanceId,
+    connectionInstanceId: connectionIdentity.instanceId,
+    instanceMatches: connectionIdentity.instanceMatches,
+    profileId: manifest.profileId,
+    connectionProfileId: connectionIdentity.profileId,
+    profileMatches: connectionIdentity.profileMatches,
+    mcpUrl: manifest.mcpUrl,
+    connectionUrl: connection.url,
+    urlMatches: connectionIdentity.urlMatches,
+    health: healthResult ?? (healthError ? { error: healthError } : { skipped: healthSkipped }),
+    mcpAuthentication: authentication,
+    profile: manifest.profile,
+    mode: manifest.mode,
+    windowRequested: Boolean(manifest.windowRequested),
+  };
+  const processVerified = inspection.status === 'alive' || inspectionFallbackVerified;
+  const okay = staticIdentityMatches && processVerified && Boolean(healthResult);
   await guardedOutput(context, `${JSON.stringify({ okay, ...result }, null, 2)}\n`); if (!okay) (dependencies.setExitCode ?? ((code) => { process.exitCode = code; }))(1);
 }
 

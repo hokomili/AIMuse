@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { GenerationProvider } from '@aimuse/core';
 import { atomicWriteFile } from './persistence';
 
@@ -30,6 +31,12 @@ function parseProtectedFile(raw: string): ProtectedFile {
 class ProtectedStore {
   constructor(private readonly path: string, private readonly storage: ProtectedStorage, private readonly writer: CredentialFileWriter = atomicWriteFile) {}
 
+  private async protectParent(): Promise<void> {
+    const parent = dirname(this.path);
+    await mkdir(parent, { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') await chmod(parent, 0o700);
+  }
+
   private requireEncryption(): void {
     let available = false;
     try { available = this.storage.isEncryptionAvailable(); } catch { /* fail closed without surfacing protected-storage diagnostics */ }
@@ -45,7 +52,9 @@ class ProtectedStore {
   protected async write(values: Record<string, string>): Promise<void> {
     this.requireEncryption();
     const serialized = `${JSON.stringify({ version: 1, values } satisfies ProtectedFile, null, 2)}\n`;
+    await this.protectParent();
     await this.writer(this.path, serialized, (bytes) => { parseProtectedFile(bytes.toString('utf8')); });
+    if (process.platform !== 'win32') await chmod(this.path, 0o600);
   }
 
   protected encrypt(value: string): string {

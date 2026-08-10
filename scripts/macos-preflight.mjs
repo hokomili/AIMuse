@@ -21,10 +21,13 @@ function inspectTool(command, arguments_) {
 
 export function macosVerificationContract() {
   return {
-    runtimeBinariesBuilt: false,
-    coreAudioClaimed: false,
-    packageClaimed: false,
-    signingClaimed: false,
+    runtimeBinariesBuilt: true,
+    coreAudioSharedRuntimeBuilt: true,
+    coreAudioDeviceSmokeRequired: true,
+    coreAudioExclusiveClaimed: false,
+    developmentPackageAvailable: true,
+    developerIdSigningClaimed: false,
+    notarizationClaimed: false,
     requiredTools: ['xcode-select', 'cmake', 'git'],
   };
 }

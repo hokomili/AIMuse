@@ -26,6 +26,7 @@
   ],
   "trees": [
     ".github/workflows",
+    "build",
     "docs",
     "e2e",
     "native/cmake",

@@ -120,6 +120,25 @@ void playback_mode_contract_test() {
     "duplicate playback mode did not fail closed");
 }
 
+void playback_device_health_test() {
+  aimuse::audio::PlaybackDeviceHealth health;
+  expect(!health.ready(), "device health should begin unavailable");
+  health.notify(aimuse::audio::PlaybackDeviceNotification::started);
+  expect(health.ready(), "device start did not make playback ready");
+  health.notify(aimuse::audio::PlaybackDeviceNotification::rerouted);
+  expect(health.ready() && health.reroutes() == 1U, "successful device reroute was not retained");
+  health.notify(aimuse::audio::PlaybackDeviceNotification::interruption_began);
+  expect(!health.ready() && health.interruption_active() && health.interruptions() == 1U,
+    "device interruption did not fail playback closed");
+  health.notify(aimuse::audio::PlaybackDeviceNotification::interruption_ended);
+  expect(health.ready() && !health.interruption_active(), "device interruption recovery did not restore readiness");
+  health.notify(aimuse::audio::PlaybackDeviceNotification::stopped, true);
+  expect(!health.ready() && health.unexpected_stops() == 0U, "expected device stop was reported as a loss");
+  health.notify(aimuse::audio::PlaybackDeviceNotification::started);
+  health.notify(aimuse::audio::PlaybackDeviceNotification::stopped);
+  expect(!health.ready() && health.unexpected_stops() == 1U, "unexpected device stop did not fail playback closed");
+}
+
 }  // namespace
 
 int main() {
@@ -130,6 +149,7 @@ int main() {
   deterministic_synth_test();
   realtime_playback_callback_test();
   playback_mode_contract_test();
+  playback_device_health_test();
   std::cout << "AIMuse native DSP tests passed\n";
   return 0;
 }
