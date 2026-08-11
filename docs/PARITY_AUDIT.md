@@ -1,6 +1,6 @@
 # Human/agent parity audit
 
-Last audited: 2026-08-09
+Last audited: 2026-08-11
 
 ## Verdict
 
@@ -10,7 +10,7 @@ Parity does not imply v1 DAW completeness. Managed-preview WASAPI shared playbac
 
 ## Shared canonical boundary
 
-Renderer IPC and MCP commit through `ProjectService`, the same operation schema/reducer, mutation queue, two-phase native graph handshake, journal and trace. Server-owned policies normalize actor identity, timestamps, revisions and trusted generation provenance. Agents receive semantic music operations rather than replacing tracks or reimplementing quantize/humanize/transpose/legato/arpeggiate algorithms.
+Renderer IPC and MCP commit through `ProjectService`, the same operation schema/reducer, per-project mutation queue, two-phase native graph handshake, journal and trace. Authenticated MCP direct/branch transactions and actor history additionally share a fair bounded external-agent admission layer; human renderer commits do not consume those lanes. Server-owned policies normalize actor identity, timestamps, revisions and trusted generation provenance. Agents receive semantic music operations rather than replacing tracks or reimplementing quantize/humanize/transpose/legato/arpeggiate algorithms.
 
 ## Closed parity gaps
 
@@ -23,7 +23,7 @@ Renderer IPC and MCP commit through `ProjectService`, the same operation schema/
 | Checkpoints/variants | Agents and humans use the same immutable project checkpoints and named variant service. |
 | Auditory feedback | Bounded audition/stem renders are addressable MCP media resources with engine-owned asset metadata. The same real non-silent 32-bit-float audition is visible and playable in the packaged editor through the stream-enabled custom media scheme. |
 | Real-time transport | Editor IPC and MCP transport use the same background-prewarmed revision preview and native playback state. Windows has packaged WASAPI cross-surface evidence; macOS has bounded native shared-CoreAudio callback evidence but not yet formal editor/MCP parity evidence. Preview rendering does not block Electron, revision swaps preserve cursor/play state, and both surfaces share the same transport contract. |
-| Throughput | Per-project serialized mutation tails prevent simultaneous UI/MCP lost updates; transactions are bounded and idempotent. |
+| Throughput | Per-project serialized mutation tails prevent simultaneous UI/MCP lost updates. Agent direct/branch transactions and actor undo/redo share four fair bounded admission lanes; transactions retain explicit idempotency while non-idempotent history returns re-observation guidance after pre-start backpressure/cancellation. Paired no-socket and bearer-authenticated loopback acceptance covers the same five-session history scenario without starting audio; packaged acceptance remains separate. |
 | Editor control integrity | Enabled renderer buttons are mechanically audited for an action, high-frequency draft controls serialize and rebase canonical commits, and action failures surface in the editor instead of looking inert. Headless Chrome covers the main toolbar, timeline tools, devices, mixer, automation, candidate audition and agent connection; exact packaged QA additionally covers Windows Escape normalization, tab-scoped search, global history after blur, native dirty Cancel/Save and real audition playback. Historical hash `E558…412` passed authorized disposable-project Discard; current hash `CFCC…30621` did not repeat that destructive action without action-time confirmation. |
 | Attribution/provenance | Server actor/client metadata is durable; generated provenance is engine-only and candidates remain outside the arrangement until acceptance. Human and authenticated-agent saves carry their actor through a separate durable destination-free `file.saved` audit without changing content revision or undo history. |
 
@@ -43,7 +43,7 @@ Renderer IPC and MCP commit through `ProjectService`, the same operation schema/
 
 | Agent | Human |
 | --- | --- |
-| Bounded operation count, explicit idempotency, coarse locks/advisory UI state | Pointer previews remain local and human commits have priority inside an active gesture |
+| Bounded operation count, explicit transaction idempotency, fair project/history admission, and re-observation before repeating non-idempotent history; coarse locks/advisory UI state | Pointer previews remain local, human commits do not consume external-agent lanes, and human edits have priority inside an active gesture |
 | Addressed paths and policy/approval for reads, writes and every overwrite | Native dialogs carry direct one-time intent |
 | Provider/model/budget authority and approval for unknown-cost requests | Human-started generation does not ask a second agent-authority question |
 | No microphone/MIDI by default and no inline media bytes | Direct UI recording still requires OS/user permission and explicit arm/record action |

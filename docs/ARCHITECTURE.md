@@ -31,11 +31,12 @@ Graph-affecting commits follow this sequence:
 5. Commit the prepared native graph and publish the model/event.
 6. Mirror the durable transaction trace. A mirror failure is reported as a warning because the recovery journal is already canonical.
 
-A failed native prepare or journal append aborts the prepared graph and leaves the project unchanged. Per-project mutation queues prevent lost updates when UI and MCP transactions arrive simultaneously.
+A failed native prepare or journal append aborts the prepared graph and leaves the project unchanged. Per-project mutation queues prevent lost updates when UI and MCP transactions arrive simultaneously. Authenticated MCP direct/branch transactions and actor-scoped undo/redo first share a four-lane actor-round-robin admission layer; renderer work does not consume those external-agent lanes.
 
 ## Collaboration semantics
 
 - Human gestures acquire entity and optional tick-range locks. Agent conflicts include retry guidance.
+- Authenticated direct/branch edits and actor history share bounded fair admission. Queued cancellation occurs before `ProjectService` invocation; once a reducer or atomic history commit starts it is not preempted, and the per-project service queue remains the commit-order authority.
 - Direct editing is the default. Broad agent transactions cause an immutable copy-on-write checkpoint under the automatic checkpoint policy.
 - Undo/redo is scoped to the authenticated actor. A selective inverse applies only where the current value still matches that actor's forward edit, so later edits from another actor are not overwritten.
 - Named variants keep a base snapshot and support comparison, discard, restore, and merge paths.

@@ -11,7 +11,7 @@ import {
 } from '@aimuse/core';
 import type { ExportRequest } from '../common/contracts';
 import type { GenerationJobResult, GenerationRequest } from '../common/generation';
-import { FairAgentMutationScheduler } from './agent-mutation-scheduler';
+import { FairAgentMutationScheduler, type AgentMutationResult } from './agent-mutation-scheduler';
 import { AudioEngineController } from './audio-engine';
 import { AuthorityManager } from './authority-manager';
 import { ExportManager } from './export-manager';
@@ -108,7 +108,7 @@ const GenerationSchema = z.object({
   projectId: z.string().describe('Open project receiving immutable candidates.'), provider: z.enum(['elevenlabs', 'stability', 'lyria']).describe('Exact configured provider; AIMuse never substitutes another provider.'), model: z.string().min(1).describe('Exact provider model allowed by authority policy.'), kind: z.enum(['music', 'sfx', 'audio-to-audio', 'section-replace']).describe('Requested generation capability.'), prompt: z.string().min(1).max(10_000).describe('Exact submitted prompt; no silent rewrite or retry.'), negativePrompt: z.string().max(10_000).optional(), lyrics: z.string().max(200_000).optional(), instrumental: z.boolean().default(true), durationMs: z.number().int().positive().describe('Requested output duration in milliseconds.'), resultCount: z.number().int().min(1).max(4).default(1).describe('Number of immutable candidates, one to four.'), seed: z.number().int().optional(), referenceAssetIds: z.array(z.string()).max(20).default([]), targetRange: z.object({ startTick: z.number().int().nonnegative(), endTick: z.number().int().positive() }).strict().optional(), structure: z.array(z.object({ name: z.string(), startMs: z.number().int().nonnegative(), endMs: z.number().int().positive(), prompt: z.string().optional(), lyrics: z.string().optional() }).strict()).max(30).optional(), seamlessLoop: z.boolean().optional(), outputFormat: z.enum(['wav', 'mp3', 'pcm', 'opus']).default('mp3'), rightsDeclaration: z.enum(['original', 'licensed', 'owned-reference']).describe('Caller declaration required for provenance and reference rights.'), estimatedCostMinor: z.number().int().nonnegative().optional().describe('Expected charge in minor currency units; unknown cost is separately budgeted.'), currency: z.string().max(10).optional(), providerOptions: z.record(z.string(), z.unknown()).default({}).describe('Explicit provider-specific options; never inferred from another provider.'),
 }).strict();
 
-const SERVER_INSTRUCTIONS = 'Call aimuse_help(getting-started), then session_manage(join). Use project_manage/project_observe before edits, project_apply with a unique clientOperationId for content changes, trace_replay for a non-mutating visualization of a selected durable transaction, and job_manage for every returned jobId. Human approvals cannot be granted through MCP. Submit approval-capable requests one at a time: while one is being prepared or awaits a human, another fails with approval_pending and creates no job. File access is policy-gated; public job reads are owner-scoped. project_apply admission is fair and bounded; retry only when a retryable queue response says to.';
+const SERVER_INSTRUCTIONS = 'Call aimuse_help(getting-started), then session_manage(join). Use project_manage/project_observe before edits, project_apply with a unique clientOperationId for content changes, trace_replay for a non-mutating visualization of a selected durable transaction, and job_manage for every returned jobId. Human approvals cannot be granted through MCP. Submit approval-capable requests one at a time: while one is being prepared or awaits a human, another fails with approval_pending and creates no job. File access is policy-gated; public job reads are owner-scoped. project_apply and history_manage mutation admission is fair and bounded; retry only when a retryable queue response says to, and re-observe before issuing another non-idempotent history action.';
 const MCP_GUIDE = `# AIMuse MCP guide
 
 ## Safe starting workflow
@@ -121,7 +121,7 @@ const MCP_GUIDE = `# AIMuse MCP guide
 
 ## Identity, collaboration, and privacy
 
-The server assigns the authenticated actor ID. Agent-supplied transaction actors, timestamps, revisions, assets, provenance, checkpoints, and variants are not trusted. Presence is collaborative, while job summaries/details/results are visible only to the owning authenticated session; a foreign job ID is indistinguishable from a missing ID. Active human entity/time locks take priority and return a retryable locked result without mutation. Direct and branch project transactions enter a four-lane actor-round-robin scheduler with bounded per-actor and global queues; backpressure is explicit and retryable.
+The server assigns the authenticated actor ID. Agent-supplied transaction actors, timestamps, revisions, assets, provenance, checkpoints, and variants are not trusted. Presence is collaborative, while job summaries/details/results are visible only to the owning authenticated session; a foreign job ID is indistinguishable from a missing ID. Active human entity/time locks take priority and return a retryable locked result without mutation. Direct and branch project transactions plus actor-scoped undo/redo enter one four-lane actor-round-robin scheduler with bounded per-actor and global queues; backpressure is explicit and retryable. A queued history cancellation starts no mutation, while a running atomic history commit is not preempted. Because history actions are not idempotent, re-observe before issuing another one.
 
 ## Files, jobs, and approvals
 
@@ -143,7 +143,7 @@ function helpTopic(topic = 'getting-started'): Record<string, unknown> {
     'projects-and-edits': { guidance: 'Observe before applying. project_apply is idempotent and actor-authenticated; branch commits require variantId. Server-owned assets/provenance/checkpoints/variants require their domain tools. Re-observe revisions after every commit. trace_replay visualizes a selected durable transaction and returns before/after canonical hashes; it never reapplies the transaction.' },
     'jobs-and-approvals': { guidance: 'Every job belongs to one authenticated actor. Use job_manage list/inspect/wait/cancel. waiting-for-user means a human must decide in AIMuse; MCP cannot approve. Submit one approval-capable request at a time: a concurrent request fails with approval_pending, creates no job, and reveals no incumbent owner, job, or request details. Foreign and missing IDs both return job_not_found.' },
     'files-and-audit': { guidance: 'File paths are canonicalized and authority-gated. Rejected access queues only the owner approval job and performs no I/O. Successful saves emit destination-free file.saved audit records without creating an undo step or changing project revision.' },
-    collaboration: { guidance: 'Presence is shared and authenticated. Jobs/results stay owner-only. Human entity/time locks preempt conflicting agent edits; unrelated edits remain allowed. project_apply uses four fair lanes with bounded actor/global queues and explicit retry guidance. Actor undo/redo affects only that actor history.' },
+    collaboration: { guidance: 'Presence is shared and authenticated. Jobs/results stay owner-only. Human entity/time locks preempt conflicting agent edits; unrelated edits remain allowed. project_apply and actor undo/redo share four fair lanes with bounded actor/global queues and explicit retry guidance. Queued history cancellation starts no mutation; once running, an atomic history commit is not preempted. Actor undo/redo affects only that actor history and is not idempotent, so re-observe before issuing another history action.' },
     resources: { guidance: 'Resources are optional. aimuse://guide is complete; project manifest/snapshot/change/trace and media templates are observational. Use trace_replay with a project ID and transaction ID from the durable trace for a non-mutating visualization and deterministic audit receipt. aimuse://sessions filters jobs to the reader, and aimuse://jobs/{id} is owner-only. Subscriptions are exact URI strings.' },
   };
   return { topic, ...topics[topic], fullGuideResource: 'aimuse://guide' };
@@ -227,12 +227,8 @@ export class McpHost {
       const forbidden = operations.find((operation) => ['asset.add', 'provenance.register', 'provenance.update', 'checkpoint.register', 'variant.register', 'variant.update'].includes(String(operation.kind)));
       if (forbidden) return jsonText({ status: 'conflict', message: `${String(forbidden.kind)} is server-owned. Use the corresponding media, generation, checkpoint, or branch tool.` });
       const transaction: ProjectTransaction = { id: createId('tx'), clientOperationId, projectId, actor: structuredClone(session.actor), label, createdAt: nowIso(), operations: operations as ProjectOperation[], checkpointPolicy: commitMode === 'checkpointed' ? 'required' : 'auto' };
-      const scheduled = await this.mutationScheduler.submit({
-        actorId: session.actor.id, projectId, cost: operations.length,
-        onStateChange: () => this.refreshMutationPresence(session),
-        run: () => commitMode === 'branch' ? projects.applyBranch(variantId!, transaction, session.actor) : projects.apply(transaction, session.actor),
-      });
-      this.refreshMutationPresence(session);
+      const scheduled = await this.submitMutation(session, projectId, operations.length,
+        () => commitMode === 'branch' ? projects.applyBranch(variantId!, transaction, session.actor) : projects.apply(transaction, session.actor));
       if (!scheduled.accepted) {
         const scheduler = { code: scheduled.code, actorQueueDepth: scheduled.queueDepth, globalQueueDepth: scheduled.globalQueueDepth };
         if (scheduled.code === 'cancelled') return jsonText({ status: 'cancelled', message: scheduled.message, scheduler }, { tool: 'project_observe', arguments: { projectId }, guidance: 'Re-observe the project before deciding whether to submit the cancelled intent again.' });
@@ -242,7 +238,21 @@ export class McpHost {
     });
 
     server.registerTool('transport_manage', { title: 'Manage AIMuse transport', description: 'Read/control the shared transport and return its state. Seek/loop fields are action-specific; recording is policy-gated and may return a human-only job.', inputSchema: TransportSchema, ...TOOL_OUTPUT, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } }, async ({ action, recordingSource, ...options }) => { if (action === 'status') return jsonText(this.options.audio.snapshot()); if (action === 'record') { const kind = recordingSource ?? 'microphone'; const decision = this.options.authority.recording(kind); if (!decision.allowed) return this.queueApproval(session, 'approval', decision.approvalKind ?? 'recording', 'Start recording', { action, kind }, async () => this.options.audio.transport('record', options)); } return jsonText(await this.options.audio.transport(action, options)); });
-    server.registerTool('history_manage', { title: 'Manage actor history', description: 'Undo/redo only this authenticated actor’s edits and return commit/conflict status and revision; later work from other actors is preserved.', inputSchema: HistorySchema, ...TOOL_OUTPUT, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } }, async ({ action, projectId }) => jsonText(action === 'undo' ? await projects.undo(projectId, session.actor) : await projects.redo(projectId, session.actor)));
+    server.registerTool('history_manage', { title: 'Manage actor history', description: 'Fairly schedules undo/redo for only this authenticated actor and returns commit/conflict, cancellation, or retryable backpressure; later work from other actors is preserved. History actions are not idempotent.', inputSchema: HistorySchema, ...TOOL_OUTPUT, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } }, async ({ action, projectId }) => {
+      const actor = structuredClone(session.actor);
+      const id = projectId ?? projects.getActiveProjectId();
+      if (!id) return jsonText(action === 'undo' ? await projects.undo(undefined, actor) : await projects.redo(undefined, actor));
+      const scheduled = await this.submitMutation(session, id, 1, () => action === 'undo' ? projects.undo(id, actor) : projects.redo(id, actor));
+      if (!scheduled.accepted) {
+        const scheduler = { code: scheduled.code, actorQueueDepth: scheduled.queueDepth, globalQueueDepth: scheduled.globalQueueDepth };
+        const next = { tool: 'project_observe', arguments: { projectId: id }, guidance: scheduled.code === 'cancelled'
+          ? `No ${action} mutation started. Re-observe the project before deciding whether to issue a new history action.`
+          : `Wait at least ${scheduled.retryAfterMs} ms, then re-observe the project before deciding whether to issue a new ${action}; history actions are not idempotent.` };
+        if (scheduled.code === 'cancelled') return jsonText({ status: 'cancelled', message: scheduled.message, scheduler }, next);
+        return jsonText({ status: 'busy', message: scheduled.message, conflict: { retryable: true, retryAfterMs: scheduled.retryAfterMs }, scheduler }, next);
+      }
+      return jsonText(scheduled.result);
+    });
     server.registerTool('trace_replay', { title: 'Replay durable transaction trace', description: 'Visualizes one selected durable transaction without applying operations. Returns a deterministic, credential-free receipt with source and canonical before/after hashes.', inputSchema: TraceReplaySchema, ...TOOL_OUTPUT, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } }, async ({ projectId, transactionId }) => {
       const before = projects.getProject(projectId);
       if (!before) return jsonText({ error: 'no_open_project', projectId });
@@ -270,6 +280,7 @@ export class McpHost {
   }
 
   private async fileAction(session: McpSession, path: string, mode: 'read' | 'write', kind: AsyncJob['kind'], summary: string, request: Record<string, unknown>, run: (actor: Actor) => Promise<unknown>) { return this.multiFileAction(session, [{ path, mode }], kind, summary, request, run); }
+  private async submitMutation<T>(session: McpSession, projectId: Id, cost: number, run: () => Promise<T>): Promise<AgentMutationResult<T>> { const scheduled = await this.mutationScheduler.submit({ actorId: session.actor.id, projectId, cost, run, onStateChange: () => this.refreshMutationPresence(session) }); this.refreshMutationPresence(session); return scheduled; }
   private refreshMutationPresence(session: McpSession): void { const existing = this.options.projects.getMcpInfo().sessions.find((presence) => presence.actor.id === session.actor.id); if (!existing) return; const state = this.mutationScheduler.status().actors[session.actor.id]; this.options.projects.updatePresence({ ...existing, actor: structuredClone(session.actor), queueDepth: state?.queued ?? 0, status: state?.active ? 'working' : state?.queued ? 'waiting' : 'idle' }); }
   private async multiFileAction(session: McpSession, files: Array<{ path: string; mode: 'read' | 'write' }>, kind: AsyncJob['kind'], summary: string, request: Record<string, unknown>, run: (actor: Actor) => Promise<unknown>) { const actor = structuredClone(session.actor); for (const file of files) { const target = resolve(file.path); const present = await stat(target).then(() => true, () => false); const decision = await this.options.authority.file(target, file.mode, present); if (!decision.allowed) return this.queueApproval(session, kind, decision.approvalKind ?? (file.mode === 'read' ? 'file-read' : 'file-write'), summary, request, run, actor); } return jsonText(await run(actor)); }
   private approvalPending() { return jsonText({ error: 'approval_pending', message: 'Another approval-capable request is being prepared or awaits human review. No job was created.', retryable: true }, { guidance: 'Wait for the single visible approval request to be resolved or cancelled, then retry. AIMuse does not reveal another actor’s approval details.', humanRequired: true }); }

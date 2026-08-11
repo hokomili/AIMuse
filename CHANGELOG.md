@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Extend AGT-18's shared fair mutation admission to authenticated `history_manage` undo/redo. Queued cancellation cannot start or partially apply history, running atomic history commits remain non-preemptive, non-idempotent busy/cancelled guidance requires re-observation, and paired five-session no-socket and authenticated-loopback MCP acceptances cover coexistence with four active `project_apply` lanes plus retained later edits and attributed undo/redo without starting audio.
 - Add an allowlisted initial Git snapshot boundary, anchored never-track rules for local coordination/evidence/credential material, portable text/binary attributes and a root-avoiding case/Unicode/path/import audit. No files are staged or committed and no remote is configured.
 - Add a truthful macOS development structure: Node-24/Darwin preflight, a macOS-14 source/native-test workflow, platform-aware profile/native naming and CoreAudio protocol identity, CMake runtime separation, and fail-closed Mac packaging. CoreAudio, Keychain, signing, entitlements, notarization, package and UI evidence remain explicitly unearned.
 - Record the retained AUD-02 two-phase native PASS: exact Windows build/CTest plus bounded shared and effective-exclusive WASAPI playback both passed with matching requested/effective diagnostics, unchanged endpoint identity, natural exits and no fallback, force or cleanup. Scope remains exact-executable/endpoint/scenario only.
