@@ -56,7 +56,10 @@
     "test:level3:auto": "npm run release:windows",
     "checksums": "node scripts/checksums.mjs",
     "licenses": "node scripts/license-report.mjs",
-    "release:windows": "npm run verify && npm run native:test && npm run test:performance && npm audit --omit=dev --audit-level=high && npm run package && npm run test:e2e:only && npm run make && npm run checksums && npm run licenses"
+    "audit:runtime": "npm audit --omit=dev --audit-level=high",
+    "audit:complete": "npm audit --include=prod --include=dev --include=optional --include=peer --audit-level=high",
+    "audit:release": "npm run audit:runtime && npm run audit:complete",
+    "release:windows": "npm run verify && npm run native:test && npm run test:performance && npm run audit:release && npm run package && npm run test:e2e:only && npm run make && npm run checksums && npm run licenses"
   },
   "dependencies": {
     "@modelcontextprotocol/node": "2.0.0",
@@ -93,7 +96,7 @@
     "@types/react-dom": "19.2.3",
     "@types/yauzl": "2.10.3",
     "@vitejs/plugin-react": "5.1.4",
-    "electron": "43.2.0",
+    "electron": "43.4.0",
     "eslint": "9.39.2",
     "eslint-plugin-react-hooks": "7.0.1",
     "eslint-plugin-react-refresh": "0.5.2",
@@ -102,5 +105,10 @@
     "typescript-eslint": "8.57.1",
     "vite": "7.3.6",
     "vitest": "4.1.10"
+  },
+  "overrides": {
+    "extract-zip": "npm:@electron-internal/extract-zip@1.0.5",
+    "tar": "7.5.22",
+    "tmp": "0.2.7"
   }
 }

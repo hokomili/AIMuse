@@ -8,7 +8,9 @@ This checklist complements `FEATURE_TRACKER.md`; it cannot override an open trac
 - [ ] Create a fresh owner-private formal root and disjoint run-scoped Playwright output, then run `node scripts/npm-node24.mjs run test:level2:auto` once on Windows 11 x64 with the documented `AIMUSE_FORMAL_RUN_ROOT`, `AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR`, optional subject-manifest path and exit-preserving `tee` procedure.
 - [ ] Retain the exclusively created post-package subject manifest and prove its executable/ASAR/helper hashes, architecture/signature/bundle/fuses remain unchanged after verifier, packaged E2E, coordinator handoff and cleanup; do not rebuild after declaration.
 - [ ] Complete an independent Level 2 Luna/high MCP + Computer Use report against that exact manifest-bound package.
-- [ ] Reconcile README, tracker, parity audit, limitations and dependency audit.
+- [ ] With a fresh isolated npm cache and the exact `https://registry.npmjs.org/` endpoint, confirm the pinned Electron version equals the current supported `43-x-y` dist-tag; retain the queried time/dist metadata.
+- [ ] Run `npm run audit:release` so both the shipped production graph and explicit prod/dev/optional/peer build/package graph pass at the release threshold; a production-only or ambient-omit audit is not acceptable. Run `npm audit signatures` and retain signature/attestation results.
+- [ ] Reconcile README, tracker, parity audit, limitations and the registry-fresh dependency/security evidence.
 - [ ] Build installer/portable artifacts; generate SHA-256 and license/SBOM reports.
 - [ ] Verify no credentials, MCP state, provider keys, profiles, QA artifacts or user audio are staged.
 
@@ -19,7 +21,7 @@ This checklist complements `FEATURE_TRACKER.md`; it cannot override an open trac
 - [ ] Corrupt-input, provider-mock, codec/interchange, performance, accessibility and complete packaged matrices pass.
 - [ ] Independent Level 3 Luna/high automation + isolated MCP + native Computer Use passes on one immutable checksummed subject whose evidence/log root is disjoint from every Playwright cleanup target.
 - [ ] Installer install/uninstall and portable behavior pass on a clean Windows 11 x64 VM.
-- [ ] Reproducibility, production advisories, VST3/ASIO decisions, licenses and SBOM are complete.
+- [ ] Reproducibility, production and complete build/package advisories, VST3/ASIO decisions, licenses and SBOM are complete.
 - [ ] Repository baseline/owner/remote, CI, signing status and publication credentials are confirmed.
 - [ ] For any macOS release artifact, separately prove CoreAudio endpoint/hot-plug/recording/soak behavior, provider-Keychain and locked-state handling, release entitlements, Developer ID identity, Gatekeeper assessment, notarization, stapling, architecture policy, exact `.app`/archive/update verification and fresh independent bidirectional Computer Use against those release bytes; the earned ad-hoc development-subject Level 2 certificate is not release certification.
 - [ ] Replace prerelease metadata with `1.0.0`, finalize changelog, tag and publish only after every previous box passes.

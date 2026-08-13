@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { declaredActorError, declaredEntityBaseError, declaredProjectRootError, isDeclaredId, isDeclaredIsoTimestamp } from './declared-values';
 import { createId, nowIso } from './ids';
-import type { ActivityEntry, AIMuseProject, Actor, AutomationLane, Checkpoint, Clip, Device, DeviceParameter, EntityBase, GenerationProvenance, Id, Marker, MediaAsset, MidiControlEvent, MidiNote, MidiPitchBendEvent, Send, SidechainRoute, SongSection, TakeLane, TempoEvent, TimeSignatureEvent, Track, Variant } from './model';
+import type { ActivityEntry, AIMuseProject, Actor, AutomationLane, AutomationPoint, Checkpoint, Clip, CompSegment, Device, DeviceParameter, EntityBase, GenerationProvenance, Id, Marker, MediaAsset, MidiControlEvent, MidiNote, MidiPitchBendEvent, Send, SidechainRoute, SongSection, TakeLane, TempoEvent, TimeSignatureEvent, Track, Variant } from './model';
 import { TransactionConflictError, type ProjectOperation, type ProjectTransaction } from './operations';
 
 enablePatches();
@@ -116,6 +116,16 @@ function declaredTrackMutableError(track: Track): string | undefined {
   return undefined;
 }
 
+function declaredTrackKindError(track: Track): string | undefined {
+  if (!['audio', 'instrument', 'midi', 'folder', 'aux', 'master'].includes(track.kind)) return `Track ${track.id} has an invalid kind.`;
+  return undefined;
+}
+
+function assertDeclaredTrackKind(track: Track, operationIndex: number): void {
+  const kindError = declaredTrackKindError(track);
+  if (kindError) conflict(operationIndex, kindError);
+}
+
 function declaredClipMutableError(clip: Clip): string | undefined {
   if (typeof clip.name !== 'string' || clip.name.length < 1 || clip.name.length > 200 || typeof clip.color !== 'string' || clip.color.length > 40) return `Clip ${clip.id} has invalid text values.`;
   if (typeof clip.muted !== 'boolean' || typeof clip.loopEnabled !== 'boolean') return `Clip ${clip.id} has invalid state flags.`;
@@ -126,10 +136,34 @@ function declaredClipMutableError(clip: Clip): string | undefined {
   return undefined;
 }
 
+function declaredClipNumericError(clip: Clip): string | undefined {
+  if (!Number.isSafeInteger(clip.startTick) || clip.startTick < 0 || !Number.isSafeInteger(clip.durationTicks) || clip.durationTicks < 1 || !Number.isFinite(clip.gainDb) || clip.gainDb < -120 || clip.gainDb > 24) return `Clip ${clip.id} has invalid timing or gain.`;
+  const fadeInDuration = (clip.fadeIn as { durationTicks?: unknown } | null | undefined)?.durationTicks;
+  const fadeOutDuration = (clip.fadeOut as { durationTicks?: unknown } | null | undefined)?.durationTicks;
+  if (!Number.isSafeInteger(fadeInDuration) || (fadeInDuration as number) < 0 || !Number.isSafeInteger(fadeOutDuration) || (fadeOutDuration as number) < 0 || (clip.loopLengthTicks !== undefined && (!Number.isSafeInteger(clip.loopLengthTicks) || clip.loopLengthTicks < 1))) return `Clip ${clip.id} has invalid fade or loop timing.`;
+  return undefined;
+}
+
+function assertDeclaredClipNumeric(clip: Clip, operationIndex: number): void {
+  const numericError = declaredClipNumericError(clip);
+  if (numericError) conflict(operationIndex, numericError);
+}
+
+function declaredAudioClipSourceError(project: AIMuseProject, clip: Extract<Clip, { kind: 'audio' }>): string | undefined {
+  if (!isDeclaredId(clip.assetId) || !project.assets[clip.assetId]) return `Audio clip ${clip.id} references missing media.`;
+  if (!Number.isSafeInteger(clip.sourceStartSample) || clip.sourceStartSample < 0 || !Number.isSafeInteger(clip.sourceDurationSamples) || clip.sourceDurationSamples < 1 || !Number.isFinite(clip.transposeSemitones) || clip.transposeSemitones < -48 || clip.transposeSemitones > 48) return `Audio clip ${clip.id} has invalid source bounds.`;
+  return undefined;
+}
+
+function assertDeclaredAudioClipSource(project: AIMuseProject, clip: Extract<Clip, { kind: 'audio' }>, operationIndex: number): void {
+  const sourceError = declaredAudioClipSourceError(project, clip);
+  if (sourceError) conflict(operationIndex, sourceError);
+}
+
 function declaredDeviceMutableError(device: Device): string | undefined {
   if (typeof device.name !== 'string' || device.name.length < 1 || device.name.length > 500) return `Device ${device.id} has an invalid name.`;
   if (typeof device.bypassed !== 'boolean' || typeof device.degraded !== 'boolean') return `Device ${device.id} has invalid state flags.`;
-  if (!Number.isInteger(device.latencySamples) || device.latencySamples < 0) return `Device ${device.id} has invalid latency.`;
+  if (!Number.isSafeInteger(device.latencySamples) || device.latencySamples < 0) return `Device ${device.id} has invalid latency.`;
   if (device.stateAssetId !== undefined && (typeof device.stateAssetId !== 'string' || device.stateAssetId.length < 1 || device.stateAssetId.length > 240)) return `Device ${device.id} has an invalid state asset ID.`;
   if (device.presetName !== undefined && (typeof device.presetName !== 'string' || device.presetName.length > 500)) return `Device ${device.id} has an invalid preset name.`;
   return undefined;
@@ -150,6 +184,23 @@ function declaredDeviceParametersError(device: Device): string | undefined {
   return undefined;
 }
 
+function declaredDeviceError(device: Device): string | undefined {
+  if (!isDeclaredId(device.trackId)) return `Device ${device.id} has an invalid track ID.`;
+  if (!['builtin', 'vst3', 'clap', 'missing'].includes(device.format)) return `Device ${device.id} has an invalid format.`;
+  if (device.builtinKind !== undefined && !['sampler', 'drum-rack', 'subtractive-synth', 'utility', 'eq', 'compressor', 'gate', 'saturator', 'chorus', 'delay', 'reverb', 'limiter', 'analyzer'].includes(device.builtinKind)) return `Device ${device.id} has an invalid built-in kind.`;
+  if (device.pluginId !== undefined && (typeof device.pluginId !== 'string' || device.pluginId.length > 500)) return `Device ${device.id} has an invalid plug-in ID.`;
+  if (device.pluginVersion !== undefined && (typeof device.pluginVersion !== 'string' || device.pluginVersion.length > 100)) return `Device ${device.id} has an invalid plug-in version.`;
+  if (device.pluginHash !== undefined && (typeof device.pluginHash !== 'string' || device.pluginHash.length > 128)) return `Device ${device.id} has an invalid plug-in hash.`;
+  if (device.vendor !== undefined && (typeof device.vendor !== 'string' || device.vendor.length > 500)) return `Device ${device.id} has an invalid vendor.`;
+  return declaredDeviceMutableError(device) ?? declaredDeviceParametersError(device);
+}
+
+function assertDeclaredDevice(device: Device, operationIndex: number): void {
+  assertDeclaredEntityBase(device, operationIndex, 'Device');
+  const deviceError = declaredDeviceError(device);
+  if (deviceError) conflict(operationIndex, deviceError);
+}
+
 function declaredSendValueError(send: Send): string | undefined {
   if (!Number.isFinite(send.gainDb) || send.gainDb < -120 || send.gainDb > 24) return `Send ${send.id} has invalid gain.`;
   if (typeof send.preFader !== 'boolean' || typeof send.enabled !== 'boolean') return `Send ${send.id} has invalid state flags.`;
@@ -165,6 +216,14 @@ function declaredSidechainValueError(route: SidechainRoute): string | undefined 
 function declaredTakeLaneMutableError(lane: TakeLane): string | undefined {
   if (typeof lane.name !== 'string' || lane.name.length < 1 || lane.name.length > 200) return `Take lane ${lane.id} has an invalid name.`;
   if (typeof lane.active !== 'boolean') return `Take lane ${lane.id} has an invalid active state.`;
+  return undefined;
+}
+
+function declaredCompSegmentError(project: AIMuseProject, segment: CompSegment): string | undefined {
+  if (!isDeclaredId(segment.trackId) || !isDeclaredId(segment.takeLaneId)) return `Comp segment ${segment.id} references an invalid track or take lane.`;
+  const lane = project.takeLanes[segment.takeLaneId];
+  if (!project.tracks[segment.trackId] || !lane || lane.trackId !== segment.trackId) return `Comp segment ${segment.id} references an invalid track or take lane.`;
+  if (!Number.isSafeInteger(segment.startTick) || segment.startTick < 0 || !Number.isSafeInteger(segment.endTick) || segment.endTick < 0 || segment.endTick <= segment.startTick) return `Comp segment ${segment.id} must have a non-empty forward range.`;
   return undefined;
 }
 
@@ -199,6 +258,24 @@ function declaredProvenanceMutableError(value: GenerationProvenance): string | u
   return undefined;
 }
 
+function declaredProvenanceError(value: GenerationProvenance): string | undefined {
+  if (!isDeclaredId(value.assetId)) return `Generation provenance ${value.id} has an invalid asset ID.`;
+  if (!['elevenlabs', 'stability', 'lyria'].includes(value.provider)) return `Generation provenance ${value.id} has an invalid provider.`;
+  if (typeof value.model !== 'string' || value.model.length < 1 || value.model.length > 300) return `Generation provenance ${value.id} has an invalid model.`;
+  if (!['music', 'sfx', 'audio-to-audio', 'section-replace'].includes(value.kind)) return `Generation provenance ${value.id} has an invalid kind.`;
+  if (typeof value.prompt !== 'string' || value.prompt.length < 1 || value.prompt.length > 20_000) return `Generation provenance ${value.id} has an invalid prompt.`;
+  if (value.lyrics !== undefined && (typeof value.lyrics !== 'string' || value.lyrics.length > 200_000)) return `Generation provenance ${value.id} has invalid lyrics.`;
+  if (!Array.isArray(value.referenceAssetIds) || value.referenceAssetIds.length > 20 || value.referenceAssetIds.some((id) => !isDeclaredId(id))) return `Generation provenance ${value.id} has invalid reference asset IDs.`;
+  if (value.requestId !== undefined && (typeof value.requestId !== 'string' || value.requestId.length > 500)) return `Generation provenance ${value.id} has an invalid request ID.`;
+  if (value.costMinor !== undefined && (!Number.isInteger(value.costMinor) || value.costMinor < 0)) return `Generation provenance ${value.id} has an invalid cost.`;
+  if (value.currency !== undefined && (typeof value.currency !== 'string' || value.currency.length > 10)) return `Generation provenance ${value.id} has an invalid currency.`;
+  if (!['original', 'licensed', 'owned-reference'].includes(value.rightsDeclaration)) return `Generation provenance ${value.id} has an invalid rights declaration.`;
+  const mutableError = declaredProvenanceMutableError(value);
+  if (mutableError) return mutableError;
+  if (typeof value.experimental !== 'boolean') return `Generation provenance ${value.id} has an invalid experimental value.`;
+  return undefined;
+}
+
 function declaredVariantMutableError(value: Variant): string | undefined {
   if (typeof value.name !== 'string' || value.name.length < 1 || value.name.length > 500) return `Variant ${value.id} has an invalid name.`;
   if (!['active', 'merged', 'discarded'].includes(value.status)) return `Variant ${value.id} has an invalid status.`;
@@ -214,10 +291,20 @@ function declaredMarkerTextError(marker: Marker): string | undefined {
   return undefined;
 }
 
+function declaredMarkerRangeError(marker: Marker): string | undefined {
+  if (!Number.isSafeInteger(marker.tick) || marker.tick < 0 || (marker.endTick !== undefined && (!Number.isSafeInteger(marker.endTick) || marker.endTick <= marker.tick))) return `Marker ${marker.id} has an invalid range.`;
+  return undefined;
+}
+
 function declaredSectionTextError(section: SongSection): string | undefined {
   if (typeof section.name !== 'string' || section.name.length < 1 || section.name.length > 200) return `Section ${section.id} has invalid text values.`;
   if (typeof section.color !== 'string' || section.color.length > 40) return `Section ${section.id} has invalid text values.`;
   if (section.prompt !== undefined && (typeof section.prompt !== 'string' || section.prompt.length > 10_000)) return `Section ${section.id} has invalid text values.`;
+  return undefined;
+}
+
+function declaredSectionRangeError(section: SongSection): string | undefined {
+  if (!Number.isSafeInteger(section.startTick) || section.startTick < 0 || !Number.isSafeInteger(section.endTick) || section.endTick <= section.startTick) return `Section ${section.id} has an invalid range or energy.`;
   return undefined;
 }
 
@@ -253,20 +340,61 @@ function assertDeclaredMidiEntityBases(clip: Extract<Clip, { kind: 'midi' }>, op
   for (const event of Object.values(clip.pitchBends)) assertDeclaredEntityBase(event, operationIndex, 'MIDI pitch bend');
 }
 
-function assertDeclaredWarpMarkerEntityBases(clip: Extract<Clip, { kind: 'audio' }>, operationIndex: number): void {
+function assertDeclaredWarpMarkers(clip: Extract<Clip, { kind: 'audio' }>, operationIndex: number): void {
   for (const marker of clip.warpMarkers) assertDeclaredEntityBase(marker, operationIndex, 'Warp marker');
+  if (clip.warpMarkers.some((marker) => !Number.isSafeInteger(marker.sourceSample) || marker.sourceSample < 0 || !Number.isSafeInteger(marker.projectTick) || marker.projectTick < 0)) {
+    conflict(operationIndex, `Audio clip ${clip.id} has invalid warp timing.`);
+  }
 }
 
-function assertDeclaredAutomationEntityBases(lane: AutomationLane, operationIndex: number): void {
+function declaredAutomationPointError(point: AutomationPoint): string | undefined {
+  if (!Number.isSafeInteger(point.tick) || point.tick < 0) return `Automation point ${point.id} has an invalid tick.`;
+  if (!Number.isFinite(point.value)) return `Automation point ${point.id} has an invalid value.`;
+  if (!['hold', 'linear', 'bezier'].includes(point.curve)) return `Automation point ${point.id} has an invalid curve.`;
+  if (point.tension !== undefined && (!Number.isFinite(point.tension) || point.tension < -1 || point.tension > 1)) return `Automation point ${point.id} has an invalid tension.`;
+  return undefined;
+}
+
+function declaredAutomationLaneError(lane: AutomationLane): string | undefined {
+  if (!isDeclaredId(lane.trackId)) return `Automation lane ${lane.id} has an invalid track ID.`;
+  const target = lane.target as AutomationLane['target'] | null | undefined;
+  if (!target || typeof target !== 'object' || Array.isArray(target)) return `Automation lane ${lane.id} has an invalid target.`;
+  if (target.kind === 'track') {
+    if (!['gainDb', 'pan'].includes(target.parameter)) return `Automation lane ${lane.id} has an invalid target.`;
+  } else if (target.kind === 'device') {
+    if (!isDeclaredId(target.deviceId) || typeof target.parameterId !== 'string' || target.parameterId.length < 1 || target.parameterId.length > 500) return `Automation lane ${lane.id} has an invalid target.`;
+  } else return `Automation lane ${lane.id} has an invalid target.`;
+  if (!lane.points || typeof lane.points !== 'object' || Array.isArray(lane.points)) return `Automation lane ${lane.id} has an invalid point record.`;
+  if (typeof lane.armed !== 'boolean' || typeof lane.visible !== 'boolean') return `Automation lane ${lane.id} has invalid state flags.`;
+  return undefined;
+}
+
+function declaredAutomationIndexError(lane: AutomationLane): string | undefined {
+  if (Object.keys(lane.points).some((id) => !isDeclaredId(id))) return `Automation lane ${lane.id} has an invalid point record.`;
+  if (!Array.isArray(lane.pointOrder) || lane.pointOrder.some((id) => !isDeclaredId(id))) return `Automation lane ${lane.id} has an invalid point order.`;
+  return undefined;
+}
+
+function assertDeclaredAutomationPoint(point: AutomationPoint, operationIndex: number): void {
+  assertDeclaredEntityBase(point, operationIndex, 'Automation point');
+  const pointError = declaredAutomationPointError(point);
+  if (pointError) conflict(operationIndex, pointError);
+}
+
+function assertDeclaredAutomationLane(lane: AutomationLane, operationIndex: number): void {
   assertDeclaredEntityBase(lane, operationIndex, 'Automation lane');
-  for (const point of Object.values(lane.points)) assertDeclaredEntityBase(point, operationIndex, 'Automation point');
+  const laneError = declaredAutomationLaneError(lane);
+  if (laneError) conflict(operationIndex, laneError);
+  for (const point of Object.values(lane.points)) assertDeclaredAutomationPoint(point, operationIndex);
+  const indexError = declaredAutomationIndexError(lane);
+  if (indexError) conflict(operationIndex, indexError);
 }
 
 function assertDeclaredTrackDeviceRoutingCleanup(project: AIMuseProject, track: Track, operationIndex: number): void {
   const deviceIds = new Set(track.deviceIds);
   for (const deviceId of deviceIds) {
     const device = project.devices[deviceId];
-    if (device) assertDeclaredEntityBase(device, operationIndex, 'Device');
+    if (device) assertDeclaredDevice(device, operationIndex);
   }
   for (const send of Object.values(project.sends)) {
     if (send.sourceTrackId === track.id || send.destinationTrackId === track.id) assertDeclaredEntityBase(send, operationIndex, 'Send');
@@ -280,7 +408,11 @@ function deleteClip(project: AIMuseProject, clipId: Id, operationIndex: number):
   const clip = project.clips[clipId];
   if (!clip) return;
   assertDeclaredEntityBase(clip, operationIndex, 'Clip');
-  if (clip.kind === 'audio') assertDeclaredWarpMarkerEntityBases(clip, operationIndex);
+  if (clip.kind === 'audio') {
+    assertDeclaredWarpMarkers(clip, operationIndex);
+    assertDeclaredAudioClipSource(project, clip, operationIndex);
+  }
+  assertDeclaredClipNumeric(clip, operationIndex);
   removeFrom(project.tracks[clip.trackId]?.clipIds ?? [], clipId);
   if (clip.takeLaneId) removeFrom(project.takeLanes[clip.takeLaneId]?.clipIds ?? [], clipId);
   delete project.clips[clipId];
@@ -350,18 +482,27 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
       if (project.markers[operation.marker.id]) conflict(operationIndex, 'Marker ID already exists.');
       const markerError = declaredMarkerTextError(operation.marker);
       if (markerError) conflict(operationIndex, markerError);
+      const rangeError = declaredMarkerRangeError(operation.marker);
+      if (rangeError) conflict(operationIndex, rangeError);
       project.markers[operation.marker.id] = normalizeNewEntity(operation.marker, actor, timestamp); insertAt(project.markerOrder, operation.marker.id, operation.index); return;
     }
     case 'marker.update': {
       const marker = expectEntity(project.markers[operation.markerId], operationIndex, 'Marker', operation.expectedRevision);
       assertDeclaredEntityBase(marker, operationIndex, 'Marker');
-      const markerError = declaredMarkerTextError({ ...marker, ...operation.changes });
+      const nextMarker = { ...marker, ...operation.changes };
+      const markerError = declaredMarkerTextError(nextMarker);
       if (markerError) conflict(operationIndex, markerError);
+      const existingRangeError = declaredMarkerRangeError(marker);
+      if (existingRangeError) conflict(operationIndex, existingRangeError);
+      const nextRangeError = declaredMarkerRangeError(nextMarker);
+      if (nextRangeError) conflict(operationIndex, nextRangeError);
       updateEntity(marker, operation.changes, actor, timestamp); return;
     }
     case 'marker.delete': {
       const marker = expectEntity(project.markers[operation.markerId], operationIndex, 'Marker', operation.expectedRevision);
       assertDeclaredEntityBase(marker, operationIndex, 'Marker');
+      const rangeError = declaredMarkerRangeError(marker);
+      if (rangeError) conflict(operationIndex, rangeError);
       delete project.markers[marker.id]; removeFrom(project.markerOrder, marker.id); return;
     }
     case 'section.add': {
@@ -369,18 +510,27 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
       if (project.sections[operation.section.id]) conflict(operationIndex, 'Section ID already exists.');
       const sectionError = declaredSectionTextError(operation.section);
       if (sectionError) conflict(operationIndex, sectionError);
+      const rangeError = declaredSectionRangeError(operation.section);
+      if (rangeError) conflict(operationIndex, rangeError);
       project.sections[operation.section.id] = normalizeNewEntity(operation.section, actor, timestamp); insertAt(project.sectionOrder, operation.section.id, operation.index); return;
     }
     case 'section.update': {
       const section = expectEntity(project.sections[operation.sectionId], operationIndex, 'Section', operation.expectedRevision);
       assertDeclaredEntityBase(section, operationIndex, 'Section');
-      const sectionError = declaredSectionTextError({ ...section, ...operation.changes });
+      const nextSection = { ...section, ...operation.changes };
+      const sectionError = declaredSectionTextError(nextSection);
       if (sectionError) conflict(operationIndex, sectionError);
+      const existingRangeError = declaredSectionRangeError(section);
+      if (existingRangeError) conflict(operationIndex, existingRangeError);
+      const nextRangeError = declaredSectionRangeError(nextSection);
+      if (nextRangeError) conflict(operationIndex, nextRangeError);
       updateEntity(section, operation.changes, actor, timestamp); return;
     }
     case 'section.delete': {
       const section = expectEntity(project.sections[operation.sectionId], operationIndex, 'Section', operation.expectedRevision);
       assertDeclaredEntityBase(section, operationIndex, 'Section');
+      const rangeError = declaredSectionRangeError(section);
+      if (rangeError) conflict(operationIndex, rangeError);
       delete project.sections[section.id]; removeFrom(project.sectionOrder, section.id); return;
     }
     case 'lyrics.set':
@@ -396,6 +546,9 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
         const parent = project.tracks[operation.parentId];
         if (!parent || parent.kind !== 'folder') conflict(operationIndex, 'Parent track must be a folder.');
       }
+      const trackError = declaredTrackMutableError(track);
+      if (trackError) conflict(operationIndex, trackError);
+      assertDeclaredTrackKind(track, operationIndex);
       const next = normalizeNewEntity({ ...track, parentId: operation.parentId, clipIds: [], deviceIds: [], automationLaneIds: [], childTrackIds: [] }, actor, timestamp);
       project.tracks[next.id] = next;
       if (operation.parentId) insertAt(project.tracks[operation.parentId].childTrackIds, next.id, operation.index);
@@ -407,6 +560,7 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
       assertDeclaredEntityBase(track, operationIndex, 'Track');
       const trackError = declaredTrackMutableError({ ...track, ...operation.changes });
       if (trackError) conflict(operationIndex, trackError);
+      assertDeclaredTrackKind(track, operationIndex);
       updateEntity(track, operation.changes, actor, timestamp); return;
     }
     case 'track.move': {
@@ -420,6 +574,7 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
         let cursor: Track | undefined = parent;
         while (cursor?.parentId) { if (cursor.parentId === track.id) conflict(operationIndex, 'Folder move would create a cycle.'); cursor = project.tracks[cursor.parentId]; }
       }
+      assertDeclaredTrackKind(track, operationIndex);
       if (track.parentId) removeFrom(project.tracks[track.parentId]?.childTrackIds ?? [], track.id); else removeFrom(project.trackOrder, track.id);
       track.parentId = operation.parentId;
       if (operation.parentId) insertAt(project.tracks[operation.parentId].childTrackIds, track.id, operation.index); else insertAt(project.trackOrder, track.id, operation.index);
@@ -434,8 +589,9 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
       assertDeclaredTrackDeviceRoutingCleanup(project, track, operationIndex);
       for (const laneId of track.automationLaneIds) {
         const lane = project.automationLanes[laneId];
-        if (lane) assertDeclaredAutomationEntityBases(lane, operationIndex);
+        if (lane) assertDeclaredAutomationLane(lane, operationIndex);
       }
+      assertDeclaredTrackKind(track, operationIndex);
       const descendants = [...track.childTrackIds];
       for (const childId of descendants) applyOperation(project, { kind: 'track.delete', trackId: childId, cascade: true }, operationIndex, transaction, actor, timestamp);
       for (const clipId of [...track.clipIds]) deleteClip(project, clipId, operationIndex);
@@ -455,8 +611,11 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
       const clipError = declaredClipMutableError(clip);
       if (clipError) conflict(operationIndex, clipError);
       assertFinite(clip.startTick, operationIndex, 'Clip start', 0); assertFinite(clip.durationTicks, operationIndex, 'Clip duration', 1);
-      if (clip.kind === 'audio') assertDeclaredWarpMarkerEntityBases(clip, operationIndex);
-      else assertDeclaredMidiEntityBases(clip, operationIndex);
+      if (clip.kind === 'audio') {
+        assertDeclaredWarpMarkers(clip, operationIndex);
+        assertDeclaredAudioClipSource(project, clip, operationIndex);
+      } else assertDeclaredMidiEntityBases(clip, operationIndex);
+      assertDeclaredClipNumeric(clip, operationIndex);
       const next = normalizeNewEntity(clip, actor, timestamp);
       if (next.kind === 'midi') {
         next.notes = Object.fromEntries(Object.values(next.notes).map((note) => [note.id, normalizeNewEntity(note, actor, timestamp)]));
@@ -471,27 +630,44 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
       const changes = operation.changes as Record<string, unknown>;
       if (changes.startTick !== undefined) assertFinite(Number(changes.startTick), operationIndex, 'Clip start', 0);
       if (changes.durationTicks !== undefined) assertFinite(Number(changes.durationTicks), operationIndex, 'Clip duration', 1);
-      if (clip.kind === 'audio') assertDeclaredWarpMarkerEntityBases(clip, operationIndex);
+      if (clip.kind === 'audio') assertDeclaredWarpMarkers(clip, operationIndex);
       const nextClip = { ...clip, ...changes } as Clip;
       const clipError = declaredClipMutableError(nextClip);
       if (clipError) conflict(operationIndex, clipError);
-      if (nextClip.kind === 'audio') assertDeclaredWarpMarkerEntityBases(nextClip, operationIndex);
+      if (nextClip.kind === 'audio') assertDeclaredWarpMarkers(nextClip, operationIndex);
+      if (clip.kind === 'audio') assertDeclaredAudioClipSource(project, clip, operationIndex);
+      if (nextClip.kind === 'audio') assertDeclaredAudioClipSource(project, nextClip, operationIndex);
+      assertDeclaredClipNumeric(clip, operationIndex);
+      assertDeclaredClipNumeric(nextClip, operationIndex);
       updateEntity(clip, changes, actor, timestamp); return;
     }
     case 'clip.move': {
       const clip = expectEntity(project.clips[operation.clipId], operationIndex, 'Clip', operation.expectedRevision);
       assertDeclaredEntityBase(clip, operationIndex, 'Clip');
-      if (clip.kind === 'audio') assertDeclaredWarpMarkerEntityBases(clip, operationIndex);
+      if (clip.kind === 'audio') assertDeclaredWarpMarkers(clip, operationIndex);
       const target = project.tracks[operation.trackId];
       if (!target || !trackAcceptsClip(target, clip)) conflict(operationIndex, 'Target track is incompatible with the clip.');
       assertFinite(operation.startTick, operationIndex, 'Clip start', 0);
+      if (clip.kind === 'audio') assertDeclaredAudioClipSource(project, clip, operationIndex);
+      assertDeclaredClipNumeric(clip, operationIndex);
+      assertDeclaredClipNumeric({ ...clip, startTick: operation.startTick }, operationIndex);
       removeFrom(project.tracks[clip.trackId].clipIds, clip.id); clip.trackId = target.id; clip.startTick = operation.startTick; insertAt(target.clipIds, clip.id, operation.index); touch(clip, actor, timestamp); return;
     }
     case 'clip.trim': {
       const clip = expectEntity(project.clips[operation.clipId], operationIndex, 'Clip', operation.expectedRevision);
       assertDeclaredEntityBase(clip, operationIndex, 'Clip');
-      if (clip.kind === 'audio') assertDeclaredWarpMarkerEntityBases(clip, operationIndex);
+      if (clip.kind === 'audio') assertDeclaredWarpMarkers(clip, operationIndex);
       assertFinite(operation.startTick, operationIndex, 'Clip start', 0); assertFinite(operation.durationTicks, operationIndex, 'Clip duration', 1);
+      if (clip.kind === 'audio') {
+        assertDeclaredAudioClipSource(project, clip, operationIndex);
+        assertDeclaredAudioClipSource(project, {
+          ...clip,
+          sourceStartSample: operation.sourceStartSample ?? clip.sourceStartSample,
+          sourceDurationSamples: operation.sourceDurationSamples ?? clip.sourceDurationSamples,
+        }, operationIndex);
+      }
+      assertDeclaredClipNumeric(clip, operationIndex);
+      assertDeclaredClipNumeric({ ...clip, startTick: operation.startTick, durationTicks: operation.durationTicks }, operationIndex);
       clip.startTick = operation.startTick; clip.durationTicks = operation.durationTicks;
       if (clip.kind === 'audio') {
         if (operation.sourceStartSample !== undefined) clip.sourceStartSample = Math.max(0, Math.round(operation.sourceStartSample));
@@ -503,12 +679,18 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
       const clip = expectEntity(project.clips[operation.clipId], operationIndex, 'Clip', operation.expectedRevision);
       assertDeclaredEntityBase(clip, operationIndex, 'Clip');
       assertDeclaredEntityBase(operation.rightClip, operationIndex, 'Clip');
-      if (clip.kind === 'audio') assertDeclaredWarpMarkerEntityBases(clip, operationIndex);
-      if (operation.rightClip.kind === 'audio') assertDeclaredWarpMarkerEntityBases(operation.rightClip, operationIndex);
+      if (clip.kind === 'audio') assertDeclaredWarpMarkers(clip, operationIndex);
+      if (operation.rightClip.kind === 'audio') assertDeclaredWarpMarkers(operation.rightClip, operationIndex);
       if (operation.tick <= clip.startTick || operation.tick >= clip.startTick + clip.durationTicks) conflict(operationIndex, 'Split tick must be inside the clip.');
       if (project.clips[operation.rightClip.id]) conflict(operationIndex, 'Right clip ID already exists.');
       if (operation.rightClip.kind !== clip.kind) conflict(operationIndex, 'Split clips must have the same kind.');
+      if (clip.kind === 'audio') assertDeclaredAudioClipSource(project, clip, operationIndex);
+      if (operation.rightClip.kind === 'audio') assertDeclaredAudioClipSource(project, operation.rightClip, operationIndex);
       const leftDuration = operation.tick - clip.startTick; const rightDuration = clip.durationTicks - leftDuration;
+      assertDeclaredClipNumeric(clip, operationIndex);
+      assertDeclaredClipNumeric(operation.rightClip, operationIndex);
+      assertDeclaredClipNumeric({ ...clip, durationTicks: leftDuration }, operationIndex);
+      assertDeclaredClipNumeric({ ...operation.rightClip, trackId: clip.trackId, startTick: operation.tick, durationTicks: rightDuration }, operationIndex);
       clip.durationTicks = leftDuration; touch(clip, actor, timestamp);
       const right = normalizeNewEntity({ ...operation.rightClip, trackId: clip.trackId, startTick: operation.tick, durationTicks: rightDuration }, actor, timestamp);
       if (clip.kind === 'midi' && right.kind === 'midi') {
@@ -556,21 +738,35 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
       assertDeclaredEntityBase(lane, operationIndex, 'Take lane');
       const relatedSegments = Object.entries(project.compSegments).filter(([, segment]) => segment.takeLaneId === lane.id);
       for (const [, segment] of relatedSegments) assertDeclaredEntityBase(segment, operationIndex, 'Comp segment');
+      for (const [, segment] of relatedSegments) {
+        const segmentError = declaredCompSegmentError(project, segment);
+        if (segmentError) conflict(operationIndex, segmentError);
+      }
       for (const clipId of lane.clipIds) if (project.clips[clipId]) project.clips[clipId].takeLaneId = undefined;
       delete project.takeLanes[lane.id]; for (const [id] of relatedSegments) delete project.compSegments[id]; return;
     }
     case 'comp-segment.upsert': {
       assertDeclaredEntityBase(operation.segment, operationIndex, 'Comp segment');
-      const lane = project.takeLanes[operation.segment.takeLaneId];
-      if (!project.tracks[operation.segment.trackId] || !lane || lane.trackId !== operation.segment.trackId || operation.segment.endTick <= operation.segment.startTick) {
-        conflict(operationIndex, 'Comp segment references an invalid track, take lane, or range.');
-      }
+      const segmentError = declaredCompSegmentError(project, operation.segment);
+      if (segmentError) conflict(operationIndex, 'Comp segment references an invalid track, take lane, or range.');
       const existing = project.compSegments[operation.segment.id];
-      if (existing) { expectEntity(existing, operationIndex, 'Comp segment', operation.expectedRevision); assertDeclaredEntityBase(existing, operationIndex, 'Comp segment'); project.compSegments[existing.id] = { ...normalizeNewEntity(operation.segment, actor, timestamp), createdAt: existing.createdAt, createdBy: existing.createdBy, revision: existing.revision + 1 }; }
+      if (existing) {
+        expectEntity(existing, operationIndex, 'Comp segment', operation.expectedRevision);
+        assertDeclaredEntityBase(existing, operationIndex, 'Comp segment');
+        const existingError = declaredCompSegmentError(project, existing);
+        if (existingError) conflict(operationIndex, existingError);
+        project.compSegments[existing.id] = { ...normalizeNewEntity(operation.segment, actor, timestamp), createdAt: existing.createdAt, createdBy: existing.createdBy, revision: existing.revision + 1 };
+      }
       else project.compSegments[operation.segment.id] = normalizeNewEntity(operation.segment, actor, timestamp);
       return;
     }
-    case 'comp-segment.delete': { const segment = expectEntity(project.compSegments[operation.segmentId], operationIndex, 'Comp segment', operation.expectedRevision); assertDeclaredEntityBase(segment, operationIndex, 'Comp segment'); delete project.compSegments[segment.id]; return; }
+    case 'comp-segment.delete': {
+      const segment = expectEntity(project.compSegments[operation.segmentId], operationIndex, 'Comp segment', operation.expectedRevision);
+      assertDeclaredEntityBase(segment, operationIndex, 'Comp segment');
+      const segmentError = declaredCompSegmentError(project, segment);
+      if (segmentError) conflict(operationIndex, segmentError);
+      delete project.compSegments[segment.id]; return;
+    }
     case 'midi.note.add': {
       const clip = expectEntity(project.clips[operation.clipId], operationIndex, 'MIDI clip', operation.expectedRevision);
       if (clip.kind !== 'midi') conflict(operationIndex, 'Invalid MIDI note target.');
@@ -636,52 +832,48 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
     }
     case 'automation.lane.add': {
       const lane = operation.lane;
-      assertDeclaredAutomationEntityBases(lane, operationIndex);
+      assertDeclaredAutomationLane(lane, operationIndex);
       const track = project.tracks[lane.trackId]; if (!track || project.automationLanes[lane.id]) conflict(operationIndex, 'Invalid automation lane.');
       project.automationLanes[lane.id] = normalizeNewEntity({ ...lane, points: Object.fromEntries(Object.values(lane.points).map((point) => [point.id, normalizeNewEntity(point, actor, timestamp)])) }, actor, timestamp); track.automationLaneIds.push(lane.id); return;
     }
-    case 'automation.lane.update': { const lane = expectEntity(project.automationLanes[operation.laneId], operationIndex, 'Automation lane', operation.expectedRevision); assertDeclaredAutomationEntityBases(lane, operationIndex); updateEntity(lane, operation.changes, actor, timestamp); return; }
-    case 'automation.lane.delete': { const lane = expectEntity(project.automationLanes[operation.laneId], operationIndex, 'Automation lane', operation.expectedRevision); assertDeclaredAutomationEntityBases(lane, operationIndex); removeFrom(project.tracks[lane.trackId]?.automationLaneIds ?? [], lane.id); delete project.automationLanes[lane.id]; return; }
+    case 'automation.lane.update': { const lane = expectEntity(project.automationLanes[operation.laneId], operationIndex, 'Automation lane', operation.expectedRevision); assertDeclaredAutomationLane({ ...lane, ...operation.changes }, operationIndex); updateEntity(lane, operation.changes, actor, timestamp); return; }
+    case 'automation.lane.delete': { const lane = expectEntity(project.automationLanes[operation.laneId], operationIndex, 'Automation lane', operation.expectedRevision); assertDeclaredAutomationLane(lane, operationIndex); removeFrom(project.tracks[lane.trackId]?.automationLaneIds ?? [], lane.id); delete project.automationLanes[lane.id]; return; }
     case 'automation.point.upsert': {
       const lane = expectEntity(project.automationLanes[operation.laneId], operationIndex, 'Automation lane', operation.expectedRevision);
-      assertDeclaredAutomationEntityBases(lane, operationIndex);
-      assertDeclaredEntityBase(operation.point, operationIndex, 'Automation point');
+      assertDeclaredAutomationLane(lane, operationIndex);
+      assertDeclaredAutomationPoint(operation.point, operationIndex);
       const existing = lane.points[operation.point.id];
       if (existing) lane.points[existing.id] = { ...normalizeNewEntity(operation.point, actor, timestamp), revision: existing.revision + 1 }; else { lane.points[operation.point.id] = normalizeNewEntity(operation.point, actor, timestamp); lane.pointOrder.push(operation.point.id); }
       lane.pointOrder.sort((a, b) => lane.points[a].tick - lane.points[b].tick); touch(lane, actor, timestamp); return;
     }
-    case 'automation.point.delete': { const lane = expectEntity(project.automationLanes[operation.laneId], operationIndex, 'Automation lane', operation.expectedRevision); assertDeclaredAutomationEntityBases(lane, operationIndex); expectEntity(lane.points[operation.pointId], operationIndex, 'Automation point'); delete lane.points[operation.pointId]; removeFrom(lane.pointOrder, operation.pointId); touch(lane, actor, timestamp); return; }
+    case 'automation.point.delete': { const lane = expectEntity(project.automationLanes[operation.laneId], operationIndex, 'Automation lane', operation.expectedRevision); assertDeclaredAutomationLane(lane, operationIndex); expectEntity(lane.points[operation.pointId], operationIndex, 'Automation point'); delete lane.points[operation.pointId]; removeFrom(lane.pointOrder, operation.pointId); touch(lane, actor, timestamp); return; }
     case 'device.add': {
       const device = operation.device;
-      assertDeclaredEntityBase(device, operationIndex, 'Device');
+      assertDeclaredDevice(device, operationIndex);
       const track = project.tracks[device.trackId]; if (!track || ['folder', 'midi'].includes(track.kind) || project.devices[device.id]) conflict(operationIndex, 'Invalid device target.');
-      const deviceError = declaredDeviceMutableError(device) ?? declaredDeviceParametersError(device);
-      if (deviceError) conflict(operationIndex, deviceError);
       project.devices[device.id] = normalizeNewEntity(device, actor, timestamp); insertAt(track.deviceIds, device.id, operation.index); return;
     }
     case 'device.update': {
       const device = expectEntity(project.devices[operation.deviceId], operationIndex, 'Device', operation.expectedRevision);
-      assertDeclaredEntityBase(device, operationIndex, 'Device');
-      const deviceError = declaredDeviceMutableError({ ...device, ...operation.changes });
-      if (deviceError) conflict(operationIndex, deviceError);
+      assertDeclaredDevice({ ...device, ...operation.changes }, operationIndex);
       updateEntity(device, operation.changes, actor, timestamp); return;
     }
     case 'device.move': {
-      const device = expectEntity(project.devices[operation.deviceId], operationIndex, 'Device', operation.expectedRevision); assertDeclaredEntityBase(device, operationIndex, 'Device'); const track = project.tracks[operation.trackId]; if (!track || ['folder', 'midi'].includes(track.kind)) conflict(operationIndex, 'Invalid device target.');
+      const device = expectEntity(project.devices[operation.deviceId], operationIndex, 'Device', operation.expectedRevision); assertDeclaredDevice(device, operationIndex); const track = project.tracks[operation.trackId]; if (!track || ['folder', 'midi'].includes(track.kind)) conflict(operationIndex, 'Invalid device target.');
       removeFrom(project.tracks[device.trackId].deviceIds, device.id); device.trackId = track.id; insertAt(track.deviceIds, device.id, operation.index); touch(device, actor, timestamp); return;
     }
     case 'device.parameter.set': {
-      const device = expectEntity(project.devices[operation.deviceId], operationIndex, 'Device', operation.expectedRevision); assertDeclaredEntityBase(device, operationIndex, 'Device'); const parameter = device.parameters[operation.parameterId]; if (!parameter) conflict(operationIndex, 'Device parameter does not exist.');
+      const device = expectEntity(project.devices[operation.deviceId], operationIndex, 'Device', operation.expectedRevision); assertDeclaredDevice(device, operationIndex); const parameter = device.parameters[operation.parameterId]; if (!parameter) conflict(operationIndex, 'Device parameter does not exist.');
       const parameterError = declaredDeviceParameterError(operation.parameterId, parameter, device.id);
       if (parameterError) conflict(operationIndex, parameterError);
       assertFinite(operation.value, operationIndex, 'Parameter value', parameter.min, parameter.max); parameter.value = operation.value; touch(device, actor, timestamp); return;
     }
     case 'device.delete': {
       const device = expectEntity(project.devices[operation.deviceId], operationIndex, 'Device', operation.expectedRevision);
-      assertDeclaredEntityBase(device, operationIndex, 'Device');
+      assertDeclaredDevice(device, operationIndex);
       const relatedLanes = Object.values(project.automationLanes).filter((lane) => lane.target.kind === 'device' && lane.target.deviceId === device.id);
       const relatedRoutes = Object.values(project.sidechains).filter((route) => route.destinationDeviceId === device.id);
-      for (const lane of relatedLanes) assertDeclaredAutomationEntityBases(lane, operationIndex);
+      for (const lane of relatedLanes) assertDeclaredAutomationLane(lane, operationIndex);
       for (const route of relatedRoutes) assertDeclaredEntityBase(route, operationIndex, 'Sidechain');
       removeFrom(project.tracks[device.trackId]?.deviceIds ?? [], device.id); delete project.devices[device.id];
       for (const route of relatedRoutes) delete project.sidechains[route.id];
@@ -710,6 +902,7 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
     case 'sidechain.delete': { const route = expectEntity(project.sidechains[operation.routeId], operationIndex, 'Sidechain', operation.expectedRevision); assertDeclaredEntityBase(route, operationIndex, 'Sidechain'); delete project.sidechains[route.id]; return; }
     case 'asset.add': {
       const asset = operation.asset;
+      assertDeclaredEntityBase(asset, operationIndex, 'Media asset');
       if (project.assets[asset.id]) conflict(operationIndex, 'Asset ID already exists.');
       const assetError = declaredMediaAssetError(asset);
       if (assetError) conflict(operationIndex, assetError);
@@ -717,36 +910,54 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
     }
     case 'asset.delete': {
       const asset = expectEntity(project.assets[operation.assetId], operationIndex, 'Asset', operation.expectedRevision);
+      assertDeclaredEntityBase(asset, operationIndex, 'Media asset');
       if (Object.values(project.clips).some((clip) => clip.kind === 'audio' && clip.assetId === asset.id) || Object.values(project.devices).some((device) => device.stateAssetId === asset.id) || Object.values(project.checkpoints).some((checkpoint) => checkpoint.snapshotAssetId === asset.id) || Object.values(project.provenance).some((entry) => entry.assetId === asset.id || entry.referenceAssetIds.includes(asset.id)) || Object.values(project.variants).some((variant) => variant.snapshotAssetId === asset.id)) conflict(operationIndex, 'Asset is still referenced.');
       delete project.assets[asset.id]; return;
     }
     case 'provenance.register': {
       const value = operation.provenance;
-      if (project.provenance[value.id] || !project.assets[value.assetId] || value.referenceAssetIds.some((id) => !project.assets[id])) conflict(operationIndex, 'Generation provenance references invalid media.');
-      const provenanceError = declaredProvenanceMutableError(value);
+      assertDeclaredEntityBase(value, operationIndex, 'Generation provenance');
+      const provenanceError = declaredProvenanceError(value);
       if (provenanceError) conflict(operationIndex, provenanceError);
+      if (project.provenance[value.id] || !project.assets[value.assetId] || value.referenceAssetIds.some((id) => !project.assets[id])) conflict(operationIndex, 'Generation provenance references invalid media.');
       project.provenance[value.id] = normalizeNewEntity(value, actor, timestamp); return;
     }
     case 'provenance.update': {
       const value = expectEntity(project.provenance[operation.provenanceId], operationIndex, 'Generation provenance', operation.expectedRevision);
-      const provenanceError = declaredProvenanceMutableError({ ...value, ...operation.changes });
+      assertDeclaredEntityBase(value, operationIndex, 'Generation provenance');
+      const provenanceError = declaredProvenanceError({ ...value, ...operation.changes });
       if (provenanceError) conflict(operationIndex, provenanceError);
       updateEntity(value, operation.changes, actor, timestamp); return;
     }
-    case 'sfx-deliverable.add': if (project.sfxDeliverables[operation.deliverable.id]) conflict(operationIndex, 'Deliverable ID already exists.'); project.sfxDeliverables[operation.deliverable.id] = normalizeNewEntity(operation.deliverable, actor, timestamp); return;
-    case 'sfx-deliverable.update': { const value = expectEntity(project.sfxDeliverables[operation.deliverableId], operationIndex, 'SFX deliverable', operation.expectedRevision); updateEntity(value, operation.changes, actor, timestamp); return; }
-    case 'sfx-deliverable.delete': { const value = expectEntity(project.sfxDeliverables[operation.deliverableId], operationIndex, 'SFX deliverable', operation.expectedRevision); delete project.sfxDeliverables[value.id]; return; }
+    case 'sfx-deliverable.add': {
+      const value = operation.deliverable;
+      assertDeclaredEntityBase(value, operationIndex, 'SFX deliverable');
+      if (project.sfxDeliverables[value.id]) conflict(operationIndex, 'Deliverable ID already exists.');
+      project.sfxDeliverables[value.id] = normalizeNewEntity(value, actor, timestamp); return;
+    }
+    case 'sfx-deliverable.update': {
+      const value = expectEntity(project.sfxDeliverables[operation.deliverableId], operationIndex, 'SFX deliverable', operation.expectedRevision);
+      assertDeclaredEntityBase(value, operationIndex, 'SFX deliverable');
+      updateEntity(value, operation.changes, actor, timestamp); return;
+    }
+    case 'sfx-deliverable.delete': {
+      const value = expectEntity(project.sfxDeliverables[operation.deliverableId], operationIndex, 'SFX deliverable', operation.expectedRevision);
+      assertDeclaredEntityBase(value, operationIndex, 'SFX deliverable');
+      delete project.sfxDeliverables[value.id]; return;
+    }
     case 'checkpoint.register': {
       const value = operation.checkpoint;
+      assertDeclaredEntityBase(value, operationIndex, 'Checkpoint');
       if (project.checkpoints[value.id]) conflict(operationIndex, 'Invalid checkpoint.');
       const checkpointError = declaredCheckpointError(value);
       if (checkpointError) conflict(operationIndex, checkpointError);
       if (!project.assets[value.snapshotAssetId]) conflict(operationIndex, 'Invalid checkpoint.');
       project.checkpoints[value.id] = normalizeNewEntity(value, actor, timestamp); return;
     }
-    case 'checkpoint.delete': { const value = expectEntity(project.checkpoints[operation.checkpointId], operationIndex, 'Checkpoint', operation.expectedRevision); if (Object.values(project.variants).some((variant) => variant.baseCheckpointId === value.id && variant.status === 'active')) conflict(operationIndex, 'Checkpoint has an active variant.'); delete project.checkpoints[value.id]; return; }
+    case 'checkpoint.delete': { const value = expectEntity(project.checkpoints[operation.checkpointId], operationIndex, 'Checkpoint', operation.expectedRevision); assertDeclaredEntityBase(value, operationIndex, 'Checkpoint'); if (Object.values(project.variants).some((variant) => variant.baseCheckpointId === value.id && variant.status === 'active')) conflict(operationIndex, 'Checkpoint has an active variant.'); delete project.checkpoints[value.id]; return; }
     case 'variant.register': {
       const value = operation.variant;
+      assertDeclaredEntityBase(value, operationIndex, 'Variant');
       if (project.variants[value.id]) conflict(operationIndex, 'Invalid variant.');
       const variantError = declaredVariantMutableError(value);
       if (variantError) conflict(operationIndex, variantError);
@@ -755,6 +966,7 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
     }
     case 'variant.update': {
       const value = expectEntity(project.variants[operation.variantId], operationIndex, 'Variant', operation.expectedRevision);
+      assertDeclaredEntityBase(value, operationIndex, 'Variant');
       const variantError = declaredVariantMutableError({ ...value, ...operation.changes });
       if (variantError) conflict(operationIndex, variantError);
       if (operation.changes.snapshotAssetId && !project.assets[operation.changes.snapshotAssetId]) conflict(operationIndex, 'Variant snapshot media does not exist.');
@@ -805,7 +1017,8 @@ export function validateProjectIntegrity(project: AIMuseProject): void {
     if (entityError) throw new Error(entityError);
     const markerError = declaredMarkerTextError(marker);
     if (markerError) throw new Error(markerError);
-    if (!Number.isInteger(marker.tick) || marker.tick < 0 || (marker.endTick !== undefined && (!Number.isInteger(marker.endTick) || marker.endTick <= marker.tick))) throw new Error(`Marker ${marker.id} has an invalid range.`);
+    const rangeError = declaredMarkerRangeError(marker);
+    if (rangeError) throw new Error(rangeError);
   }
   validateCompleteOrder(project.sectionOrder, project.sections, 'Section');
   for (const section of Object.values(project.sections)) {
@@ -813,7 +1026,9 @@ export function validateProjectIntegrity(project: AIMuseProject): void {
     if (entityError) throw new Error(entityError);
     const sectionError = declaredSectionTextError(section);
     if (sectionError) throw new Error(sectionError);
-    if (!Number.isInteger(section.startTick) || section.startTick < 0 || !Number.isInteger(section.endTick) || section.endTick <= section.startTick || (section.energy !== undefined && (!Number.isFinite(section.energy) || section.energy < 0 || section.energy > 1))) throw new Error(`Section ${section.id} has an invalid range or energy.`);
+    const rangeError = declaredSectionRangeError(section);
+    if (rangeError) throw new Error(rangeError);
+    if (section.energy !== undefined && (!Number.isFinite(section.energy) || section.energy < 0 || section.energy > 1)) throw new Error(`Section ${section.id} has an invalid range or energy.`);
   }
   const rootTrackIds = new Set(project.trackOrder);
   if (rootTrackIds.size !== project.trackOrder.length) throw new Error('Track order contains duplicates.');
@@ -866,15 +1081,15 @@ export function validateProjectIntegrity(project: AIMuseProject): void {
     if (!trackAcceptsClip(track, clip)) throw new Error(`Clip ${clip.id} is incompatible with track ${track.id}.`);
     const clipError = declaredClipMutableError(clip);
     if (clipError) throw new Error(clipError);
-    if (!Number.isInteger(clip.startTick) || clip.startTick < 0 || !Number.isInteger(clip.durationTicks) || clip.durationTicks < 1 || !Number.isFinite(clip.gainDb) || clip.gainDb < -120 || clip.gainDb > 24) throw new Error(`Clip ${clip.id} has invalid timing or gain.`);
-    if (!Number.isInteger(clip.fadeIn.durationTicks) || clip.fadeIn.durationTicks < 0 || !Number.isInteger(clip.fadeOut.durationTicks) || clip.fadeOut.durationTicks < 0 || (clip.loopLengthTicks !== undefined && (!Number.isInteger(clip.loopLengthTicks) || clip.loopLengthTicks < 1))) throw new Error(`Clip ${clip.id} has invalid fade or loop timing.`);
+    const numericError = declaredClipNumericError(clip);
+    if (numericError) throw new Error(numericError);
     if (clip.kind === 'audio') {
-      if (!project.assets[clip.assetId]) throw new Error(`Audio clip ${clip.id} references missing media.`);
-      if (!Number.isInteger(clip.sourceStartSample) || clip.sourceStartSample < 0 || !Number.isInteger(clip.sourceDurationSamples) || clip.sourceDurationSamples < 1 || !Number.isFinite(clip.transposeSemitones) || clip.transposeSemitones < -48 || clip.transposeSemitones > 48) throw new Error(`Audio clip ${clip.id} has invalid source bounds.`);
+      const sourceError = declaredAudioClipSourceError(project, clip);
+      if (sourceError) throw new Error(sourceError);
       for (const marker of clip.warpMarkers) {
         const entityError = declaredEntityBaseError(marker, 'Warp marker');
         if (entityError) throw new Error(entityError);
-        if (!Number.isInteger(marker.sourceSample) || marker.sourceSample < 0 || !Number.isInteger(marker.projectTick) || marker.projectTick < 0) throw new Error(`Audio clip ${clip.id} has invalid warp timing.`);
+        if (!Number.isSafeInteger(marker.sourceSample) || marker.sourceSample < 0 || !Number.isSafeInteger(marker.projectTick) || marker.projectTick < 0) throw new Error(`Audio clip ${clip.id} has invalid warp timing.`);
       }
     }
     if (clip.kind === 'midi') {
@@ -922,31 +1137,36 @@ export function validateProjectIntegrity(project: AIMuseProject): void {
   for (const segment of Object.values(project.compSegments)) {
     const entityError = declaredEntityBaseError(segment, 'Comp segment');
     if (entityError) throw new Error(entityError);
-    const lane = project.takeLanes[segment.takeLaneId];
-    if (!project.tracks[segment.trackId] || !lane || lane.trackId !== segment.trackId) throw new Error(`Comp segment ${segment.id} references an invalid track or take lane.`);
-    if (segment.endTick <= segment.startTick) throw new Error(`Comp segment ${segment.id} must have a non-empty forward range.`);
+    const segmentError = declaredCompSegmentError(project, segment);
+    if (segmentError) throw new Error(segmentError);
   }
   for (const device of Object.values(project.devices)) {
     const entityError = declaredEntityBaseError(device, 'Device');
     if (entityError) throw new Error(entityError);
+    const deviceError = declaredDeviceError(device);
+    if (deviceError) throw new Error(deviceError);
     const track = project.tracks[device.trackId];
     if (!track || !track.deviceIds.includes(device.id)) throw new Error(`Device ${device.id} is orphaned.`);
     if (track.kind === 'folder' || track.kind === 'midi') throw new Error(`Device ${device.id} is assigned to an unsupported track kind.`);
-    const deviceError = declaredDeviceMutableError(device) ?? declaredDeviceParametersError(device);
-    if (deviceError) throw new Error(deviceError);
     if (device.stateAssetId && !project.assets[device.stateAssetId]) throw new Error(`Device ${device.id} references missing state media.`);
   }
   for (const lane of Object.values(project.automationLanes)) {
     const entityError = declaredEntityBaseError(lane, 'Automation lane');
     if (entityError) throw new Error(entityError);
+    const laneError = declaredAutomationLaneError(lane);
+    if (laneError) throw new Error(laneError);
+    for (const point of Object.values(lane.points)) {
+      const pointError = declaredEntityBaseError(point, 'Automation point');
+      if (pointError) throw new Error(pointError);
+      const valueError = declaredAutomationPointError(point);
+      if (valueError) throw new Error(valueError);
+    }
+    const indexError = declaredAutomationIndexError(lane);
+    if (indexError) throw new Error(indexError);
     const track = project.tracks[lane.trackId];
     if (!track || !track.automationLaneIds.includes(lane.id)) throw new Error(`Automation lane ${lane.id} is orphaned.`);
     if (lane.target.kind === 'device' && !project.devices[lane.target.deviceId]) throw new Error(`Automation lane ${lane.id} targets a missing device.`);
     if (new Set(lane.pointOrder).size !== lane.pointOrder.length || lane.pointOrder.some((id) => !lane.points[id]) || Object.keys(lane.points).some((id) => !lane.pointOrder.includes(id))) throw new Error(`Automation lane ${lane.id} has an invalid point order.`);
-    for (const point of Object.values(lane.points)) {
-      const pointError = declaredEntityBaseError(point, 'Automation point');
-      if (pointError) throw new Error(pointError);
-    }
   }
   for (const send of Object.values(project.sends)) {
     const entityError = declaredEntityBaseError(send, 'Send');
@@ -963,10 +1183,14 @@ export function validateProjectIntegrity(project: AIMuseProject): void {
     if (routeError) throw new Error(routeError);
   }
   for (const asset of Object.values(project.assets)) {
+    const entityError = declaredEntityBaseError(asset, 'Media asset');
+    if (entityError) throw new Error(entityError);
     const assetError = declaredMediaAssetError(asset);
     if (assetError) throw new Error(assetError);
   }
   for (const deliverable of Object.values(project.sfxDeliverables)) {
+    const entityError = declaredEntityBaseError(deliverable, 'SFX deliverable');
+    if (entityError) throw new Error(entityError);
     if (typeof deliverable.name !== 'string' || deliverable.name.length < 1 || deliverable.name.length > 500 || !Array.isArray(deliverable.tags) || deliverable.tags.length > 100 || deliverable.tags.some((tag) => typeof tag !== 'string' || tag.length > 100) || typeof deliverable.namingTemplate !== 'string' || deliverable.namingTemplate.length < 1 || deliverable.namingTemplate.length > 500 || !['wav', 'flac', 'mp3'].includes(deliverable.exportFormat)) throw new Error(`SFX deliverable ${deliverable.id} has invalid text or format values.`);
     if (!Number.isInteger(deliverable.startTick) || deliverable.startTick < 0 || !Number.isInteger(deliverable.endTick) || deliverable.endTick <= deliverable.startTick || !Number.isInteger(deliverable.variantCount) || deliverable.variantCount < 1 || deliverable.variantCount > 1_000) throw new Error(`SFX deliverable ${deliverable.id} has an invalid range or variant count.`);
     if (typeof deliverable.seamlessLoop !== 'boolean' || (deliverable.loopStartSample !== undefined && (!Number.isInteger(deliverable.loopStartSample) || deliverable.loopStartSample < 0)) || (deliverable.loopEndSample !== undefined && (!Number.isInteger(deliverable.loopEndSample) || deliverable.loopEndSample < 0))) throw new Error(`SFX deliverable ${deliverable.id} has invalid loop point values.`);
@@ -977,16 +1201,22 @@ export function validateProjectIntegrity(project: AIMuseProject): void {
     if (!Number.isFinite(deliverable.targetLufs) || deliverable.targetLufs < -36 || deliverable.targetLufs > -5) throw new Error(`SFX deliverable ${deliverable.id} has an invalid loudness target.`);
   }
   for (const checkpoint of Object.values(project.checkpoints)) {
+    const entityError = declaredEntityBaseError(checkpoint, 'Checkpoint');
+    if (entityError) throw new Error(entityError);
     const checkpointError = declaredCheckpointError(checkpoint);
     if (checkpointError) throw new Error(checkpointError);
     if (!project.assets[checkpoint.snapshotAssetId]) throw new Error(`Checkpoint ${checkpoint.id} is invalid.`);
   }
   for (const value of Object.values(project.provenance)) {
-    if (!project.assets[value.assetId] || value.referenceAssetIds.some((id) => !project.assets[id])) throw new Error(`Generation provenance ${value.id} is invalid.`);
-    const provenanceError = declaredProvenanceMutableError(value);
+    const entityError = declaredEntityBaseError(value, 'Generation provenance');
+    if (entityError) throw new Error(entityError);
+    const provenanceError = declaredProvenanceError(value);
     if (provenanceError) throw new Error(provenanceError);
+    if (!project.assets[value.assetId] || value.referenceAssetIds.some((id) => !project.assets[id])) throw new Error(`Generation provenance ${value.id} is invalid.`);
   }
   for (const value of Object.values(project.variants)) {
+    const entityError = declaredEntityBaseError(value, 'Variant');
+    if (entityError) throw new Error(entityError);
     const variantError = declaredVariantMutableError(value);
     if (variantError) throw new Error(variantError);
     if (!project.checkpoints[value.baseCheckpointId] || (value.snapshotAssetId && !project.assets[value.snapshotAssetId])) throw new Error(`Variant ${value.id} is invalid.`);
@@ -996,6 +1226,10 @@ export function validateProjectIntegrity(project: AIMuseProject): void {
     if (track.kind === 'master') continue;
     const seen = new Set<Id>([track.id]); let cursor = track.routing.outputTrackId ?? masterId;
     while (cursor !== masterId) { if (seen.has(cursor)) throw new Error('Audio routing contains a cycle.'); seen.add(cursor); const next = project.tracks[cursor]; if (!next) throw new Error('Audio routing references a missing track.'); cursor = next.routing.outputTrackId ?? masterId; }
+  }
+  for (const track of Object.values(project.tracks)) {
+    const kindError = declaredTrackKindError(track);
+    if (kindError) throw new Error(kindError);
   }
 }
 

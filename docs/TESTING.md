@@ -1,6 +1,6 @@
 # AIMuse testing workflow
 
-Last updated: 2026-08-10
+Last updated: 2026-08-13
 
 This workflow is adapted directly from AIDraw and defines three formal test levels for AIMuse. Every formal run uses a **new independent Codex task configured as `gpt-5.6-luna` with `high` reasoning**. The implementation task does not certify its own work.
 
@@ -23,6 +23,7 @@ Playwright is valuable automated coverage, but it does not replace Computer Use.
 - Before automation, record source, branch, index, dirty-worktree and toolchain identity as inputs only. A pre-existing package is not the formal UI subject when the required command intentionally packages.
 - Formal Levels 1 and 2 package exactly once before declaring their subject. The immutable post-package manifest binds the application executable, ASAR, all three native helpers, architecture, bundle/signature identity and hardened fuses; a convenient pre-existing AIMuse window or pre-package hash is not a formal subject. Level 3 additionally requires its separately checksummed release artifacts and may not weaken this identity rule.
 - Packaging and formal QA use Node 24.x. For Levels 1/2 the manifest-bound verifier must pass around packaged E2E when present and again at coordinator handoff; a Forge exit code without verified artifacts is failure.
+- Release dependency security has three distinct surfaces. Revalidate the supported Electron `43-x-y` dist-tag from the exact `https://registry.npmjs.org/` endpoint with a fresh isolated npm cache; run `npm run audit:runtime` for the shipped application graph and `npm run audit:complete` for the explicit prod/dev/optional/peer build and packaging graph. `npm run audit:release` must pass both and is the only audit accepted by `release:windows`; a production-only or ambient-omit audit is insufficient. Also run `npm audit signatures` with the current pinned Node-compatible npm and record signature/attestation results. Registry freshness, a clean audit and lock integrity do not replace verification of the packaged Electron binary or immutable artifact.
 - `AIMUSE_FORMAL_RUN_ROOT` must be the fresh protected `test-results/luna-high/<run>` root. `AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR` must be a run-scoped strict child below `test-results/playwright/` and disjoint from the formal root and its parent. `AIMUSE_PACKAGE_SUBJECT_MANIFEST` may explicitly select `<formal-run-root>/package-subject.json`; otherwise that path is derived from the formal root.
 - Paid provider requests are forbidden. Generation is tested with mocks, preflight rejection, cancellation or denial.
 - A missing window, unavailable Computer Use helper, unavailable MCP connection or unknown/mismatched build identity is `BLOCKED`, not Pass.

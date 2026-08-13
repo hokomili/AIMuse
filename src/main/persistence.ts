@@ -230,42 +230,84 @@ function entryStream(zip: yauzl.ZipFile, entry: yauzl.Entry): Promise<NodeJS.Rea
   return new Promise((resolvePromise, reject) => zip.openReadStream(entry, (error, stream) => error || !stream ? reject(error ?? new Error('Unable to read archive entry.')) : resolvePromise(stream)));
 }
 
-export async function unpackProjectPack(packPath: string, destinationRoot: string): Promise<string> {
+export type ProjectPackUnpackEffect =
+  | { phase: 'archive-read'; state: 'started' | 'completed' }
+  | { phase: 'destination'; state: 'root-created' | 'cleanup-started' | 'removed' | 'cleanup-failed' }
+  | { phase: 'entry'; state: 'discovered' | 'started' | 'completed'; index: number; entryType: 'directory' | 'file' }
+  | { phase: 'project-validation'; state: 'started' | 'completed' };
+
+export interface UnpackProjectPackOptions {
+  observe?: (effect: ProjectPackUnpackEffect) => void;
+  openArchive?: (path: string, openDefault: (path: string) => Promise<yauzl.ZipFile>) => Promise<yauzl.ZipFile>;
+  writeEntry?: (stream: NodeJS.ReadableStream, destination: string, writeDefault: (stream: NodeJS.ReadableStream, destination: string) => Promise<void>) => Promise<void>;
+  removeDestination?: (path: string, removeDefault: (path: string) => Promise<void>) => Promise<void>;
+}
+
+function observeProjectPackUnpack(options: UnpackProjectPackOptions, effect: ProjectPackUnpackEffect): void {
+  try { options.observe?.(effect); } catch { /* Progress reporting must not change persistence semantics. */ }
+}
+
+async function writeArchiveEntry(stream: NodeJS.ReadableStream, destination: string): Promise<void> {
+  await pipeline(stream, createWriteStream(destination, { flags: 'wx', mode: 0o600 }));
+}
+
+async function removeUnpackDestination(path: string): Promise<void> {
+  await rm(path, { recursive: true, force: true });
+}
+
+export async function unpackProjectPack(packPath: string, destinationRoot: string, options: UnpackProjectPackOptions = {}): Promise<string> {
   const source = resolve(packPath);
   const root = resolve(destinationRoot);
+  observeProjectPackUnpack(options, { phase: 'archive-read', state: 'started' });
   if (!(await exists(source))) throw new Error('AIMuse pack does not exist.');
   if (await exists(root)) throw new Error('Unpack destination already exists.');
   await mkdir(root, { recursive: false });
-  const zip = await openZip(source);
+  observeProjectPackUnpack(options, { phase: 'destination', state: 'root-created' });
+  let zip: yauzl.ZipFile | undefined;
   let entries = 0; let totalBytes = 0;
   try {
+    const archive = await (options.openArchive ? options.openArchive(source, openZip) : openZip(source));
+    zip = archive;
     await new Promise<void>((resolvePromise, reject) => {
-      zip.once('error', reject); zip.once('end', resolvePromise);
-      zip.on('entry', (entry) => {
+      archive.once('error', reject); archive.once('end', () => { observeProjectPackUnpack(options, { phase: 'archive-read', state: 'completed' }); resolvePromise(); });
+      archive.on('entry', (entry) => {
         void (async () => {
           entries += 1; totalBytes += entry.uncompressedSize;
+          const entryType = /\/$/.test(entry.fileName) ? 'directory' : 'file';
+          observeProjectPackUnpack(options, { phase: 'entry', state: 'discovered', index: entries - 1, entryType });
           if (entries > 100_000 || totalBytes > 1024 ** 4) throw new Error('Archive exceeds AIMuse extraction limits.');
           if (entry.compressedSize > 0 && entry.uncompressedSize / entry.compressedSize > 2_000) throw new Error('Archive compression ratio is unsafe.');
           const name = safeArchiveEntry(entry.fileName);
           const destination = resolve(root, name);
           const relativePath = relative(root, destination);
           if (relativePath.startsWith('..') || isAbsolute(relativePath)) throw new Error(`Archive entry escapes destination: ${entry.fileName}`);
-          if (/\/$/.test(entry.fileName)) await mkdir(destination, { recursive: true });
+          observeProjectPackUnpack(options, { phase: 'entry', state: 'started', index: entries - 1, entryType });
+          if (entryType === 'directory') await mkdir(destination, { recursive: true });
           else {
             await mkdir(dirname(destination), { recursive: true });
-            const stream = await entryStream(zip, entry);
-            await pipeline(stream, createWriteStream(destination, { flags: 'wx', mode: 0o600 }));
+            const stream = await entryStream(archive, entry);
+            await (options.writeEntry ? options.writeEntry(stream, destination, writeArchiveEntry) : writeArchiveEntry(stream, destination));
           }
-          zip.readEntry();
+          observeProjectPackUnpack(options, { phase: 'entry', state: 'completed', index: entries - 1, entryType });
+          archive.readEntry();
         })().catch(reject);
       });
-      zip.readEntry();
+      archive.readEntry();
     });
+    observeProjectPackUnpack(options, { phase: 'project-validation', state: 'started' });
     await readProjectFolder(root);
+    observeProjectPackUnpack(options, { phase: 'project-validation', state: 'completed' });
     return root;
   } catch (error) {
-    zip.close();
-    await rm(root, { recursive: true, force: true });
+    zip?.close();
+    observeProjectPackUnpack(options, { phase: 'destination', state: 'cleanup-started' });
+    try {
+      await (options.removeDestination ? options.removeDestination(root, removeUnpackDestination) : removeUnpackDestination(root));
+      observeProjectPackUnpack(options, { phase: 'destination', state: 'removed' });
+    } catch (cleanupError) {
+      observeProjectPackUnpack(options, { phase: 'destination', state: 'cleanup-failed' });
+      throw cleanupError;
+    }
     throw error;
   }
 }

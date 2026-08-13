@@ -11,11 +11,31 @@ import { AuthorityManager } from './authority-manager';
 import { atomicWriteFile, sha256File } from './persistence';
 import { ProjectService } from './project-service';
 
-interface ScannerOutput {
+export interface PluginScannerOutput {
   pluginUid: string; name: string; vendor?: string; version?: string; categories?: string[]; instrument?: boolean; parameters?: DeviceParameter[];
 }
 interface QuarantineEntry { path: string; hash?: string; reason: string; occurredAt: string }
 interface PluginCatalogFile { version: 1; scannedAt: string; plugins: PluginDescriptor[]; quarantine: QuarantineEntry[] }
+export interface PluginScanPartialEffects {
+  discovery: 'not-started' | 'may-have-completed' | 'completed';
+  nativeHelper: 'not-started' | 'unconfirmed' | 'settled';
+  candidateResults: 'none' | 'partial' | 'complete';
+  catalog: 'unchanged' | 'write-may-have-completed' | 'replaced';
+}
+export interface PluginScanJobResult {
+  partial: PluginScanPartialEffects;
+  discoveredCandidates?: number;
+  processedCandidates: number;
+  pluginCount: number;
+  quarantined: number;
+}
+export interface PluginScanRuntime {
+  scannerAvailable?(executable: string): Promise<boolean>;
+  findCandidates?(roots: string[]): Promise<string[]>;
+  scanModule?(executable: string, pluginPath: string, timeoutMs: number): Promise<PluginScannerOutput[]>;
+  /** Model the production atomic writer: resolve after replacement, or reject while the previous catalog remains canonical. */
+  persistCatalog?(catalogPath: string, payload: string): Promise<void>;
+}
 
 export function standardPluginRoots(platform: NodeJS.Platform = process.platform, home = homedir(), environment: NodeJS.ProcessEnv = process.env): string[] {
   const values = platform === 'darwin'
@@ -74,40 +94,76 @@ export async function pluginBinaryFor(path: string, platform: NodeJS.Platform = 
   throw new Error(`VST3/CLAP bundle modules are unsupported on ${platform}.`);
 }
 
-function runScanner(executable: string, pluginPath: string, timeoutMs: number): Promise<ScannerOutput[]> {
+function runScanner(executable: string, pluginPath: string, timeoutMs: number): Promise<PluginScannerOutput[]> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(executable, ['--scan', pluginPath], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); let output = ''; let errors = ''; let settled = false;
-    const finish = (error?: Error, value?: ScannerOutput[]): void => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolvePromise(value ?? []); };
+    const finish = (error?: Error, value?: PluginScannerOutput[]): void => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else resolvePromise(value ?? []); };
     const timer = setTimeout(() => { child.kill(); finish(new Error(`Scanner timed out after ${timeoutMs} ms.`)); }, timeoutMs);
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8'); child.stdout.on('data', (chunk: string) => { output += chunk; if (output.length > 2_000_000) { child.kill(); finish(new Error('Scanner output exceeded 2 MB.')); } }); child.stderr.on('data', (chunk: string) => { errors += chunk; if (errors.length > 100_000) errors = errors.slice(-100_000); });
-    child.once('error', (error) => finish(error)); child.once('exit', (code) => { if (code !== 0) return finish(new Error(`Scanner exited with ${code}: ${errors.trim() || 'no diagnostic'}`)); try { const parsed = JSON.parse(output) as unknown; const values = Array.isArray(parsed) ? parsed : [parsed]; finish(undefined, values as ScannerOutput[]); } catch (error) { finish(new Error(`Scanner returned malformed JSON: ${error instanceof Error ? error.message : String(error)}`)); } });
+    child.once('error', (error) => finish(error)); child.once('exit', (code) => { if (code !== 0) return finish(new Error(`Scanner exited with ${code}: ${errors.trim() || 'no diagnostic'}`)); try { const parsed = JSON.parse(output) as unknown; const values = Array.isArray(parsed) ? parsed : [parsed]; finish(undefined, values as PluginScannerOutput[]); } catch (error) { finish(new Error(`Scanner returned malformed JSON: ${error instanceof Error ? error.message : String(error)}`)); } });
   });
 }
 
 export class PluginManager {
   private plugins = new Map<string, PluginDescriptor>(); private quarantine: QuarantineEntry[] = [];
-  constructor(private readonly catalogPath: string, private readonly scannerExecutable: string | undefined, private readonly projects: ProjectService, private readonly authority: AuthorityManager) {}
+  private readonly scanRuntime: Required<PluginScanRuntime>;
+  constructor(private readonly catalogPath: string, private readonly scannerExecutable: string | undefined, private readonly projects: ProjectService, private readonly authority: AuthorityManager, runtime: PluginScanRuntime = {}) {
+    this.scanRuntime = {
+      scannerAvailable: runtime.scannerAvailable ?? exists,
+      findCandidates: runtime.findCandidates ?? ((roots) => findPluginCandidates(roots)),
+      scanModule: runtime.scanModule ?? runScanner,
+      persistCatalog: runtime.persistCatalog ?? ((path, payload) => atomicWriteFile(path, payload)),
+    };
+  }
 
   async initialize(): Promise<void> { try { const value = JSON.parse(await readFile(this.catalogPath, 'utf8')) as PluginCatalogFile; if (value.version === 1) { this.plugins = new Map(value.plugins.map((plugin) => [plugin.id, plugin])); this.quarantine = value.quarantine ?? []; } } catch { /* empty catalog */ } this.projects.setPlugins([...this.plugins.values()]); }
   list(): PluginDescriptor[] { return [...this.plugins.values()].map((value) => structuredClone(value)); }
 
   scan(roots: string[] = standardPluginRoots(), actor: Actor = HUMAN_ACTOR): { jobId: Id } {
-    const jobId = createId('plugin-scan'); const timestamp = nowIso(); this.projects.upsertJob({ id: jobId, ownerActorId: actor.id, projectId: this.projects.getActiveProjectId(), kind: 'plugin-scan', status: 'queued', progress: 0, message: 'Plug-in scan queued.', createdAt: timestamp, updatedAt: timestamp, cancellable: true }); void this.runScan(jobId, roots, actor); return { jobId };
+    const jobId = createId('plugin-scan'); const timestamp = nowIso(); const result: PluginScanJobResult = { partial: { discovery: 'not-started', nativeHelper: 'not-started', candidateResults: 'none', catalog: 'unchanged' }, processedCandidates: 0, pluginCount: 0, quarantined: 0 }; this.projects.upsertJob({ id: jobId, ownerActorId: actor.id, projectId: this.projects.getActiveProjectId(), kind: 'plugin-scan', status: 'queued', progress: 0, message: 'Plug-in scan queued.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, result }); void this.runScan(jobId, roots, actor); return { jobId };
   }
 
   private async runScan(jobId: Id, roots: string[], actor: Actor): Promise<void> {
+    const partial: PluginScanPartialEffects = { discovery: 'not-started', nativeHelper: 'not-started', candidateResults: 'none', catalog: 'unchanged' };
+    let discoveredCandidates: number | undefined; let processedCandidates = 0; const found = new Map<string, PluginDescriptor>(); const quarantine: QuarantineEntry[] = [];
+    const result = (): PluginScanJobResult => ({ partial: { ...partial }, ...(discoveredCandidates === undefined ? {} : { discoveredCandidates }), processedCandidates, pluginCount: found.size, quarantined: quarantine.length });
+    const retainCancellation = (): boolean => {
+      const current = this.projects.getJob<PluginScanJobResult>(jobId); if (current?.status !== 'cancelled') return false;
+      const message = partial.catalog === 'replaced'
+        ? 'Cancelled while finalizing the scan. The complete replacement catalog remains available.'
+        : partial.catalog === 'write-may-have-completed'
+          ? 'Cancelled while the atomic catalog write was running. Its retained effect is not yet confirmed.'
+          : partial.candidateResults === 'none' && discoveredCandidates === 0
+            ? 'Cancelled after discovery found no candidates. The existing catalog remains available.'
+            : 'Cancelled during plug-in scanning. Candidate results were not published and the existing catalog remains available.';
+      this.projects.upsertJob({ ...current, cancellable: false, message, updatedAt: nowIso(), result: result() }); return true;
+    };
+    const publishProgress = (message: string, progress: number): void => {
+      const current = this.projects.getJob<PluginScanJobResult>(jobId); if (!current || current.status === 'cancelled') return;
+      this.projects.upsertJob({ ...current, status: 'running', progress, message, updatedAt: nowIso(), result: result() });
+    };
     try {
       if (actor.kind === 'agent') for (const root of roots) { const decision = await this.authority.file(root, 'read', true); if (!decision.allowed) throw new Error(decision.reason); }
-      if (!this.scannerExecutable || !(await exists(this.scannerExecutable))) throw new Error('The isolated native plug-in scanner is not built. Existing catalog remains available.');
-      this.projects.upsertJob({ ...this.projects.getJob(jobId)!, status: 'running', progress: 0.01, message: 'Discovering VST3 and CLAP modules…', updatedAt: nowIso() }); const candidates = await findPluginCandidates(roots); const found = new Map<string, PluginDescriptor>(); const quarantine: QuarantineEntry[] = [];
+      if (retainCancellation()) return;
+      if (!this.scannerExecutable || !(await this.scanRuntime.scannerAvailable(this.scannerExecutable))) throw new Error('The isolated native plug-in scanner is not built. Existing catalog remains available.');
+      if (retainCancellation()) return;
+      partial.discovery = 'may-have-completed'; publishProgress('Discovering VST3 and CLAP modules…', 0.01);
+      const candidates = await this.scanRuntime.findCandidates(roots); discoveredCandidates = candidates.length; partial.discovery = 'completed';
+      if (retainCancellation()) return;
       for (let index = 0; index < candidates.length; index += 1) {
-        const path = candidates[index]; const current = this.projects.getJob(jobId); if (current?.status === 'cancelled') return; this.projects.upsertJob({ ...current!, progress: 0.03 + 0.94 * index / Math.max(1, candidates.length), message: `Scanning ${basename(path)} (${index + 1}/${candidates.length})`, updatedAt: nowIso() });
-        let hash: string | undefined; try { const binary = await pluginBinaryFor(path); hash = (await sha256File(binary)).sha256; const format = extname(path).toLowerCase() === '.clap' ? 'clap' as const : 'vst3' as const; const outputs = await runScanner(this.scannerExecutable, path, 15_000); if (!outputs.length) throw new Error('Module reported no plug-in classes.');
+        const path = candidates[index]; if (retainCancellation()) return; publishProgress(`Scanning ${basename(path)} (${index + 1}/${candidates.length})`, 0.03 + 0.94 * index / Math.max(1, candidates.length));
+        let hash: string | undefined; let helperStarted = false; try { const binary = await pluginBinaryFor(path); hash = (await sha256File(binary)).sha256; if (retainCancellation()) return; const format = extname(path).toLowerCase() === '.clap' ? 'clap' as const : 'vst3' as const; helperStarted = true; partial.nativeHelper = 'unconfirmed'; publishProgress(`Scanning ${basename(path)} (${index + 1}/${candidates.length})`, 0.03 + 0.94 * index / Math.max(1, candidates.length)); const outputs = await this.scanRuntime.scanModule(this.scannerExecutable, path, 15_000); partial.nativeHelper = 'settled'; if (!outputs.length) throw new Error('Module reported no plug-in classes.');
           for (const output of outputs) { if (!output.pluginUid || !output.name) throw new Error('Module metadata has no stable class ID or name.'); const id = `${format}:${output.pluginUid}`; found.set(id, { id, format, name: output.name.slice(0, 500), vendor: (output.vendor ?? 'Unknown').slice(0, 500), version: (output.version ?? '0').slice(0, 100), path, sha256: hash, categories: (output.categories ?? []).slice(0, 100), instrument: Boolean(output.instrument), quarantined: false, parameters: (output.parameters ?? []).slice(0, 100_000) }); }
-        } catch (error) { quarantine.push({ path, hash, reason: error instanceof Error ? error.message : String(error), occurredAt: nowIso() }); }
+        } catch (error) { if (helperStarted) partial.nativeHelper = 'settled'; quarantine.push({ path, hash, reason: error instanceof Error ? error.message : String(error), occurredAt: nowIso() }); }
+        processedCandidates += 1; partial.candidateResults = processedCandidates === candidates.length ? 'complete' : 'partial';
+        if (retainCancellation()) return;
       }
-      this.plugins = found; this.quarantine = quarantine; await this.persist(); this.projects.setPlugins(this.list()); const current = this.projects.getJob(jobId)!; this.projects.upsertJob({ ...current, status: 'completed', progress: 1, message: `Found ${found.size} plug-in class${found.size === 1 ? '' : 'es'}; quarantined ${quarantine.length}.`, updatedAt: nowIso(), result: { pluginCount: found.size, quarantined: quarantine.length } });
-    } catch (error) { const current = this.projects.getJob(jobId)!; this.projects.upsertJob({ ...current, status: 'failed', message: error instanceof Error ? error.message : String(error), updatedAt: nowIso(), error: { code: 'plugin-scan-failed', message: error instanceof Error ? error.message : String(error), retryable: true } }); }
+      if (retainCancellation()) return;
+      partial.catalog = 'write-may-have-completed'; publishProgress('Persisting replacement plug-in catalog…', 0.98); await this.persist(found, quarantine);
+      this.plugins = found; this.quarantine = quarantine; partial.catalog = 'replaced'; this.projects.setPlugins(this.list());
+      if (retainCancellation()) return;
+      const current = this.projects.getJob<PluginScanJobResult>(jobId)!; this.projects.upsertJob({ ...current, status: 'completed', progress: 1, cancellable: false, message: `Found ${found.size} plug-in class${found.size === 1 ? '' : 'es'}; quarantined ${quarantine.length}.`, updatedAt: nowIso(), result: result() });
+    } catch (error) { if (partial.catalog === 'write-may-have-completed') partial.catalog = 'unchanged'; if (retainCancellation()) return; const current = this.projects.getJob<PluginScanJobResult>(jobId)!; this.projects.upsertJob({ ...current, status: 'failed', cancellable: false, message: error instanceof Error ? error.message : String(error), updatedAt: nowIso(), result: result(), error: { code: 'plugin-scan-failed', message: error instanceof Error ? error.message : String(error), retryable: true } }); }
   }
 
   async instantiate(projectId: Id, trackId: Id, pluginId: string, actor: Actor = HUMAN_ACTOR, authorityOverride = false): Promise<{ deviceId?: Id; status: string; message?: string }> {
@@ -120,5 +176,5 @@ export class PluginManager {
 
   async reconcileMissing(projectId: Id): Promise<number> { const project = this.projects.getProject(projectId); if (!project) return 0; const actor: Actor = { id: 'system-plugin-catalog', kind: 'system', name: 'Plug-in Catalog', color: '#f59e0b' }; const operations = Object.values(project.devices).filter((device) => device.format !== 'builtin' && device.pluginId && !this.plugins.has(device.pluginId) && !device.degraded).map((device) => ({ kind: 'device.update' as const, deviceId: device.id, changes: { bypassed: true, degraded: true }, expectedRevision: device.revision })); if (!operations.length) return 0; const tx: ProjectTransaction = { id: createId('tx'), clientOperationId: createId('missing-plugins'), projectId, actor, label: 'Preserve missing plug-ins as bypassed placeholders', createdAt: nowIso(), operations, checkpointPolicy: 'none' }; const result = await this.projects.apply(tx, actor); return result.status === 'committed' ? operations.length : 0; }
 
-  private async persist(): Promise<void> { const payload: PluginCatalogFile = { version: 1, scannedAt: nowIso(), plugins: this.list(), quarantine: this.quarantine }; await atomicWriteFile(this.catalogPath, `${JSON.stringify(payload, null, 2)}\n`); }
+  private async persist(plugins = this.plugins, quarantine = this.quarantine): Promise<void> { const payload: PluginCatalogFile = { version: 1, scannedAt: nowIso(), plugins: [...plugins.values()].map((value) => structuredClone(value)), quarantine: quarantine.map((value) => structuredClone(value)) }; await this.scanRuntime.persistCatalog(this.catalogPath, `${JSON.stringify(payload, null, 2)}\n`); }
 }

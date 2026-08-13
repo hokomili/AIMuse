@@ -25,6 +25,29 @@ export interface AudioAnalysis {
 
 export interface ImportedMedia { asset: MediaAsset; managedPath: string; warnings: string[] }
 
+export interface MediaImportFileEffect {
+  index: number;
+  outcome: 'pending' | 'running' | 'imported' | 'warning';
+  sourceRead: 'not-started' | 'may-be-partial' | 'completed';
+  cache: 'unchanged' | 'may-be-partial' | 'retained';
+  projectTransaction: 'unchanged' | 'may-have-committed' | 'committed';
+  assetSource: 'unchanged' | 'registered';
+  assetId?: Id;
+  warning?: string;
+}
+
+export type MediaImportObserver = (effect: MediaImportFileEffect) => void;
+
+export interface MediaImportRuntime {
+  makeCacheDirectory(path: string): Promise<void>;
+  statSource(path: string): Promise<{ isFile(): boolean; size: number }>;
+  hashSource(path: string): Promise<{ sha256: string; byteLength: number }>;
+  copyToCache(source: string, destination: string): Promise<void>;
+  readSource(path: string): Promise<Buffer>;
+}
+
+export interface MediaManagerOptions { importRuntime?: Partial<MediaImportRuntime> }
+
 function db(value: number): number { return value > 0 ? 20 * Math.log10(value) : -120; }
 function xml(value: string): string { return value.replace(/[&<>"']/g, (match) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[match]!); }
 function mono(decoded: DecodedWav): Float32Array { const output = new Float32Array(decoded.frames); for (let channel = 0; channel < decoded.channels; channel += 1) for (let index = 0; index < decoded.frames; index += 1) output[index] += decoded.data[channel][index] / decoded.channels; return output; }
@@ -96,23 +119,41 @@ function midiImportOperations(project: AIMuseProject, bytes: Uint8Array, filenam
 }
 
 export class MediaManager {
-  constructor(private readonly root: string, private readonly projects: ProjectService, private readonly authority: AuthorityManager) {}
+  private readonly importRuntime: MediaImportRuntime;
 
-  async importPaths(projectId: Id, paths: string[], actor: Actor = HUMAN_ACTOR, authorityOverride = false): Promise<{ imported: ImportedMedia[]; warnings: string[] }> {
+  constructor(private readonly root: string, private readonly projects: ProjectService, private readonly authority: AuthorityManager, options: MediaManagerOptions = {}) {
+    this.importRuntime = {
+      makeCacheDirectory: async (path) => { await mkdir(path, { recursive: true }); },
+      statSource: (path) => stat(path),
+      hashSource: (path) => sha256File(path),
+      copyToCache: (source, destination) => copyFile(source, destination),
+      readSource: (path) => readFile(path),
+      ...options.importRuntime,
+    };
+  }
+
+  async importPaths(projectId: Id, paths: string[], actor: Actor = HUMAN_ACTOR, authorityOverride = false, observer?: MediaImportObserver): Promise<{ imported: ImportedMedia[]; warnings: string[] }> {
     if (paths.length > 512) throw new Error('A media import is limited to 512 files.'); const project = this.projects.getProject(projectId); if (!project) throw new Error('Project is not open.');
-    const imported: ImportedMedia[] = []; const warnings: string[] = []; await mkdir(join(this.root, 'media'), { recursive: true });
-    for (const requestedPath of paths) try {
+    const imported: ImportedMedia[] = []; const warnings: string[] = []; await this.importRuntime.makeCacheDirectory(join(this.root, 'media'));
+    for (const [index, requestedPath] of paths.entries()) {
+      const effect: MediaImportFileEffect = { index, outcome: 'pending', sourceRead: 'not-started', cache: 'unchanged', projectTransaction: 'unchanged', assetSource: 'unchanged' };
+      const report = () => { try { observer?.(structuredClone(effect)); } catch { /* Progress reporting must not change import semantics. */ } };
+      effect.outcome = 'running'; report();
+      try {
       const sourcePath = resolve(requestedPath); const extension = extname(sourcePath).toLowerCase(); const mimeType = SUPPORTED.get(extension); if (!mimeType) throw new Error(`Unsupported media type: ${extension || '(none)'}`);
       if (actor.kind === 'agent' && !authorityOverride) { const decision = await this.authority.file(sourcePath, 'read', true); if (!decision.allowed) throw new Error(decision.reason); }
-      const info = await stat(sourcePath); if (!info.isFile() || info.size <= 0 || info.size > 16 * 1024 ** 3) throw new Error('Media file size is outside AIMuse limits.');
-      const hashed = await sha256File(sourcePath); const managedPath = join(this.root, 'media', hashed.sha256); await copyFile(sourcePath, managedPath);
+      const info = await this.importRuntime.statSource(sourcePath); if (!info.isFile() || info.size <= 0 || info.size > 16 * 1024 ** 3) throw new Error('Media file size is outside AIMuse limits.');
+      effect.sourceRead = 'may-be-partial'; report(); const hashed = await this.importRuntime.hashSource(sourcePath); effect.sourceRead = 'completed'; report();
+      const managedPath = join(this.root, 'media', hashed.sha256); effect.cache = 'may-be-partial'; report(); await this.importRuntime.copyToCache(sourcePath, managedPath); effect.cache = 'retained'; report();
       const metadata = await parseFile(sourcePath, { duration: true, skipCovers: true }).catch(() => undefined); const timestamp = nowIso(); const base = { id: createId('asset'), revision: 0, createdAt: timestamp, updatedAt: timestamp, createdBy: actor.id, updatedBy: actor.id };
       const asset: MediaAsset = { ...base, kind: mimeType === 'audio/midi' ? 'midi' : 'audio', name: basename(sourcePath), mimeType, sha256: hashed.sha256, byteLength: hashed.byteLength, storage: 'managed-cache', externalPath: managedPath, sampleRate: metadata?.format.sampleRate, channels: metadata?.format.numberOfChannels, durationSamples: metadata?.format.duration && metadata.format.sampleRate ? Math.round(metadata.format.duration * metadata.format.sampleRate) : undefined, source: 'import' };
       const operations: ProjectOperation[] = [{ kind: 'asset.add', asset }];
-      if (asset.kind === 'midi') operations.push(...midiImportOperations(project, await readFile(sourcePath), asset.name, actor));
-      const tx: ProjectTransaction = { id: createId('tx'), clientOperationId: createId('import'), projectId, actor, label: `Import ${asset.name}`, createdAt: timestamp, operations, checkpointPolicy: 'none' }; const result = await this.projects.apply(tx, actor); if (result.status !== 'committed') throw new Error(result.message ?? 'Import transaction failed.');
-      this.projects.registerAssetSource(asset.id, managedPath); imported.push({ asset, managedPath, warnings: [] });
-    } catch (error) { warnings.push(`${basename(requestedPath)}: ${error instanceof Error ? error.message : String(error)}`); }
+      if (asset.kind === 'midi') operations.push(...midiImportOperations(project, await this.importRuntime.readSource(sourcePath), asset.name, actor));
+      effect.assetId = asset.id; effect.projectTransaction = 'may-have-committed'; report();
+      const tx: ProjectTransaction = { id: createId('tx'), clientOperationId: createId('import'), projectId, actor, label: `Import ${asset.name}`, createdAt: timestamp, operations, checkpointPolicy: 'none' }; const result = await this.projects.apply(tx, actor); if (result.status !== 'committed') { if (result.status !== 'engine-error') effect.projectTransaction = 'unchanged'; throw new Error(result.message ?? 'Import transaction failed.'); }
+      effect.projectTransaction = 'committed'; report(); this.projects.registerAssetSource(asset.id, managedPath); effect.assetSource = 'registered'; effect.outcome = 'imported'; report(); imported.push({ asset, managedPath, warnings: [] });
+      } catch (error) { const warning = `${basename(requestedPath)}: ${error instanceof Error ? error.message : String(error)}`; effect.outcome = 'warning'; effect.warning = warning; warnings.push(warning); report(); }
+    }
     return { imported, warnings };
   }
 

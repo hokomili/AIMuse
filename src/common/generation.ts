@@ -56,4 +56,14 @@ export interface GenerationJobResult {
   candidates: GenerationCandidate[];
   acceptedCandidateIds: Id[];
   rejectedCandidateIds: Id[];
+  partial?: {
+    provider: {
+      submittedRequests: number;
+      fulfilledRequests: number;
+      lateFulfilledRequests: number;
+    };
+    candidateCache: 'unchanged' | 'may-be-partial' | 'retained';
+    retainedCandidateCount: number;
+    project: 'unchanged';
+  };
 }

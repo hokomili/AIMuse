@@ -15,7 +15,11 @@ import { ProjectService } from './project-service';
 import { analyzePcm } from './media-manager';
 import { decodeWav, encodeFloat32Wav } from './wav';
 
-export interface ExportReport { destination: string; warnings: string[]; fallbackReport?: string }
+export interface ExportPartialEffects {
+  output: 'unchanged' | 'may-be-partial' | 'retained';
+  project: 'unchanged' | 'save-may-have-completed';
+}
+export interface ExportReport { destination: string; warnings: string[]; fallbackReport?: string; request?: ExportRequest; partial?: ExportPartialEffects }
 function xml(value: string): string { return value.replace(/[&<>"']/g, (match) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[match]!); }
 function safeName(value: string): string {
   const cleaned = [...value].map((character) => character.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(character) ? '_' : character).join('');
@@ -30,6 +34,11 @@ function effectiveDestination(request: ExportRequest): string {
   if (request.kind === 'pack') return finalExtension(request.destination, '.aimusepack');
   return resolve(request.destination);
 }
+function exportPartial(request: ExportRequest, output: ExportPartialEffects['output'], executionStarted: boolean): ExportPartialEffects {
+  return { output, project: request.kind === 'pack' && executionStarted ? 'save-may-have-completed' : 'unchanged' };
+}
+function jobResult(job: AsyncJob): Record<string, unknown> { return typeof job.result === 'object' && job.result ? job.result as Record<string, unknown> : {}; }
+function jobRequest(job: AsyncJob): ExportRequest | undefined { return jobResult(job).request as ExportRequest | undefined; }
 
 async function normalizeLufs(path: string, target: number): Promise<void> {
   const decoded = decodeWav(await readFile(path)); const analysis = analyzePcm(decoded, 'render'); const requestedGain = 10 ** ((target - analysis.integratedLufs) / 20); let peak = 0; for (const channel of decoded.data) for (const sample of channel) peak = Math.max(peak, Math.abs(sample)); const gain = Math.min(requestedGain, peak > 0 ? 0.98 / peak : requestedGain);
@@ -127,11 +136,43 @@ export class ExportManager {
 
   start(request: ExportRequest, actor: Actor = HUMAN_ACTOR, approvalReservationId?: Id): { jobId: Id } { const jobId = `export-${crypto.randomUUID()}`; if (approvalReservationId && !this.projects.bindApprovalReservation(approvalReservationId, jobId, actor.id)) throw new Error('Approval reservation is no longer available.'); const timestamp = nowIso(); this.actors.set(jobId, structuredClone(actor)); this.projects.upsertJob({ id: jobId, ownerActorId: actor.id, projectId: request.projectId, kind: request.kind === 'pack' ? 'pack' : 'render', status: 'queued', progress: 0, message: 'Export queued.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, result: { request } }); void this.run(jobId, request, actor, false); return { jobId }; }
 
+  cancel(jobId: Id): AsyncJob | undefined {
+    const current = this.projects.getJob(jobId);
+    if (!current || ['completed', 'failed', 'cancelled'].includes(current.status)) return current;
+    if (!this.actors.has(jobId)) return this.projects.cancelJob(jobId);
+    const request = jobRequest(current); const cancelled = this.projects.cancelJob(jobId);
+    if (!cancelled || cancelled.status !== 'cancelled' || !request) return cancelled;
+    const executionStarted = current.status === 'running';
+    const next: AsyncJob = {
+      ...cancelled,
+      cancellable: false,
+      message: executionStarted
+        ? 'Export cancellation is terminal. In-flight output is not preempted, cleaned up, or retried automatically.'
+        : 'Export cancelled before destination writes or a portable-pack save started.',
+      result: { ...jobResult(cancelled), partial: exportPartial(request, executionStarted ? 'may-be-partial' : 'unchanged', executionStarted) },
+    };
+    delete next.approval; delete next.error;
+    this.projects.upsertJob(next); return next;
+  }
+
   private async run(jobId: Id, request: ExportRequest, actor: Actor, authorityOverride: boolean): Promise<void> {
-    try { const target = effectiveDestination(request); const effectiveRequest = { ...request, destination: target }; const targetExists = await exists(target); if (actor.kind === 'agent' && !authorityOverride) { const decision = await this.authority.file(target, 'write', targetExists); const current = this.projects.getJob(jobId); if (!current || current.status === 'cancelled') return; if (!decision.allowed) { this.projects.upsertJob({ ...current, status: 'waiting-for-user', message: decision.reason ?? 'Export requires approval.', updatedAt: nowIso(), approval: { kind: decision.approvalKind ?? 'file-write', summary: `${actor.name} requests a ${request.kind} export.`, request: { destination: target, kind: request.kind, format: request.format, overwrite: request.overwrite, existedAtReview: targetExists }, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() } }); return; } } if (targetExists && !request.overwrite) throw new Error('Export destination exists and overwrite was not explicitly requested.'); const project = this.projects.getProject(request.projectId); if (!project) throw new Error('Project is not open.'); const runnable = this.projects.getJob(jobId); if (!runnable || runnable.status === 'cancelled') return; this.projects.upsertJob({ ...runnable, status: 'running', progress: 0.03, message: `Exporting ${request.kind}…`, updatedAt: nowIso(), approval: undefined }); let report: ExportReport;
+    let executionStarted = false;
+    try { const target = effectiveDestination(request); const effectiveRequest = { ...request, destination: target }; const targetExists = await exists(target); if (actor.kind === 'agent' && !authorityOverride) { const decision = await this.authority.file(target, 'write', targetExists); const current = this.projects.getJob(jobId); if (!current || current.status === 'cancelled') return; if (!decision.allowed) { this.projects.upsertJob({ ...current, status: 'waiting-for-user', message: decision.reason ?? 'Export requires approval.', updatedAt: nowIso(), approval: { kind: decision.approvalKind ?? 'file-write', summary: `${actor.name} requests a ${request.kind} export.`, request: { destination: target, kind: request.kind, format: request.format, overwrite: request.overwrite, existedAtReview: targetExists }, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString() } }); return; } } if (targetExists && !request.overwrite) throw new Error('Export destination exists and overwrite was not explicitly requested.'); const project = this.projects.getProject(request.projectId); if (!project) throw new Error('Project is not open.'); const runnable = this.projects.getJob(jobId); if (!runnable || runnable.status === 'cancelled') return; executionStarted = true; this.projects.upsertJob({ ...runnable, status: 'running', progress: 0.03, message: `Exporting ${request.kind}…`, updatedAt: nowIso(), approval: undefined }); let report: ExportReport;
       if (request.kind === 'master') report = await this.master(project, effectiveRequest); else if (request.kind === 'stems') report = await this.stems(project, effectiveRequest, jobId); else if (request.kind === 'midi') { await atomicWriteFile(target, encodeMidi(project, request.trackIds)); report = { destination: target, warnings: [] }; } else if (request.kind === 'dawproject') { const value = await writeDawProject(project, target, this.projects); report = { destination: value.destination, warnings: value.fallbackReport ? value.fallbackReport.split('\n') : [], fallbackReport: value.fallbackReport }; } else if (request.kind === 'sfx-batch') report = await this.sfx(project, effectiveRequest, jobId); else report = await this.pack(project, effectiveRequest, actor);
-      const current = this.projects.getJob(jobId)!; this.projects.upsertJob({ ...current, status: 'completed', progress: 1, message: `Exported to ${report.destination}`, updatedAt: nowIso(), result: report });
-    } catch (error) { const current = this.projects.getJob(jobId)!; this.projects.upsertJob({ ...current, status: current.status === 'cancelled' ? 'cancelled' : 'failed', message: error instanceof Error ? error.message : String(error), updatedAt: nowIso(), error: { code: 'export-failed', message: error instanceof Error ? error.message : String(error), retryable: true } }); }
+      const current = this.projects.getJob(jobId)!;
+      if (current.status === 'cancelled') {
+        this.projects.upsertJob({ ...current, cancellable: false, progress: 1, message: `Export cancellation remained terminal after ${request.kind} output completed. The output remains at its destination.`, updatedAt: nowIso(), error: undefined, result: { ...jobResult(current), ...report, request, partial: exportPartial(request, 'retained', true) } });
+        return;
+      }
+      this.projects.upsertJob({ ...current, status: 'completed', cancellable: false, progress: 1, message: `Exported to ${report.destination}`, updatedAt: nowIso(), result: report });
+    } catch (error) {
+      const current = this.projects.getJob(jobId)!; const message = error instanceof Error ? error.message : String(error);
+      if (current.status === 'cancelled') {
+        this.projects.upsertJob({ ...current, cancellable: false, message: `Export cancellation remained terminal. Partial ${request.kind} output may remain; no automatic cleanup or retry was attempted.`, updatedAt: nowIso(), error: undefined, result: { ...jobResult(current), request, partial: exportPartial(request, executionStarted ? 'may-be-partial' : 'unchanged', executionStarted) } });
+        return;
+      }
+      this.projects.upsertJob({ ...current, status: 'failed', cancellable: false, message, updatedAt: nowIso(), result: { ...jobResult(current), request, partial: exportPartial(request, executionStarted ? 'may-be-partial' : 'unchanged', executionStarted) }, error: { code: 'export-failed', message, retryable: true } });
+    }
   }
 
   private async master(project: AIMuseProject, request: ExportRequest): Promise<ExportReport> { if ((request.format ?? 'wav') !== 'wav') throw new Error(`${request.format?.toUpperCase()} encoding requires the native codec service; AIMuse did not silently substitute WAV.`); const destination = finalExtension(request.destination, '.wav'); await this.audio.render(project, destination, request.startTick, request.endTick, request.trackIds); await normalizeLufs(destination, project.settings.masterLufsTarget); return { destination, warnings: [] }; }

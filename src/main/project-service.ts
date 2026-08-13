@@ -471,6 +471,7 @@ export class ProjectService extends EventEmitter {
       const record = operation as unknown as Record<string, unknown>; const ids = new Set<string>();
       for (const key of ['trackId', 'clipId', 'deviceId', 'laneId', 'markerId', 'sectionId', 'assetId', 'deliverableId']) if (typeof record[key] === 'string') ids.add(String(record[key]));
       if ('clip' in record && record.clip && typeof record.clip === 'object' && 'id' in record.clip) ids.add(String((record.clip as { id: unknown }).id));
+      if (operation.kind === 'device.add') { ids.add(operation.device.id); ids.add(operation.device.trackId); }
       let range: { trackId?: Id; startTick: number; endTick: number } | undefined;
       const clipId = typeof record.clipId === 'string' ? record.clipId : undefined; const clip = clipId ? project.clips[clipId] : undefined;
       if (clip) range = { trackId: clip.trackId, startTick: operation.kind === 'clip.move' || operation.kind === 'clip.trim' ? Number(record.startTick ?? clip.startTick) : clip.startTick, endTick: (operation.kind === 'clip.move' || operation.kind === 'clip.trim' ? Number(record.startTick ?? clip.startTick) + Number(record.durationTicks ?? clip.durationTicks) : clip.startTick + clip.durationTicks) };
