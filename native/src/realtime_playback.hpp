@@ -52,10 +52,44 @@ struct PlaybackTelemetry {
   std::uint64_t callback_count{0U};
   std::uint64_t callback_frames{0U};
   std::uint64_t rendered_frames{0U};
+  // The latest service callback duration divided by its frame budget. This is
+  // deliberately not a platform/device-driver load meter.
+  double callback_cpu_load{0.0};
+  // Callbacks which exceeded their frame budget. This is a service-side
+  // deadline miss, not a claim about hardware underruns.
+  std::uint64_t callback_overruns{0U};
   std::uint64_t device_reroutes{0U};
   std::uint64_t device_interruptions{0U};
   std::uint64_t device_unexpected_stops{0U};
   bool device_interruption_active{false};
+};
+
+struct PlaybackCallbackTiming {
+  std::uint64_t budget_nanoseconds{0U};
+  double cpu_load{0.0};
+  bool overrun{false};
+};
+
+// Pure timing contract for the output callback. A zero sample rate or frame
+// count has no budget and is never an overrun. Exact-deadline callbacks remain
+// within budget; only a strictly later return increments the overrun count.
+[[nodiscard]] PlaybackCallbackTiming playback_callback_timing(
+  std::uint32_t sample_rate,
+  std::uint32_t frame_count,
+  std::uint64_t elapsed_nanoseconds) noexcept;
+
+// Publishes a completed callback's load through one atomic fixed-point value.
+// The overrun count is intentionally cumulative rather than paired with that
+// sample, so readers never combine elapsed/budget values from adjacent calls.
+class PlaybackCallbackTelemetry {
+ public:
+  void record(PlaybackCallbackTiming timing) noexcept;
+  [[nodiscard]] double latest_cpu_load() const noexcept;
+  [[nodiscard]] std::uint64_t overruns() const noexcept;
+
+ private:
+  std::atomic<std::uint64_t> latest_cpu_load_millionths_{0U};
+  std::atomic<std::uint64_t> overruns_{0U};
 };
 
 [[nodiscard]] constexpr std::string_view playback_mode_name(const PlaybackMode mode) noexcept {

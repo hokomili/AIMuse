@@ -317,10 +317,18 @@ describe('authenticated mixed-family fair-scheduler soak', () => {
 
       const firstOrder = seededOrder(4, seed ^ 0x9e37_79b9);
       const pending: Array<{ name: Family; promise: Promise<Record<string, unknown>> }> = [];
-      for (const index of firstOrder) pending.push({ name: pairs[index].first.name, promise: pairs[index].first.run() });
-      await waitFor(() => pairs.every((pair) => schedulerStatus().actors[pair.client.actor!.id]?.queued === 1), `first queued wave in cycle ${cycle}`);
-      for (const index of seededOrder(4, seed ^ 0x85eb_ca6b)) pending.push({ name: pairs[index].second.name, promise: pairs[index].second.run() });
-      await waitFor(() => pairs.every((pair) => schedulerStatus().actors[pair.client.actor!.id]?.queued === 2), `second queued wave in cycle ${cycle}`);
+      // The scheduler rotates actors in their actual first-queued arrival order.
+      // Wait for each HTTP submission before issuing the next seed value so this
+      // fixture establishes that order rather than assuming transport delivery.
+      for (const index of firstOrder) {
+        pending.push({ name: pairs[index].first.name, promise: pairs[index].first.run() });
+        await waitFor(() => schedulerStatus().actors[pairs[index].client.actor!.id]?.queued === 1, `first queued actor in cycle ${cycle}`);
+      }
+      const secondOrder = seededOrder(4, seed ^ 0x85eb_ca6b);
+      for (const index of secondOrder) {
+        pending.push({ name: pairs[index].second.name, promise: pairs[index].second.run() });
+        await waitFor(() => schedulerStatus().actors[pairs[index].client.actor!.id]?.queued === 2, `second queued actor in cycle ${cycle}`);
+      }
       expect(schedulerStatus()).toMatchObject({ active: 4, queued: 8, queuedCost: 8 });
 
       const [observed, compared, capabilities, catalog, assets] = await Promise.all([

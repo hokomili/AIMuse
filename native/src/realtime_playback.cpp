@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -66,6 +67,43 @@ bool read_exact(std::ifstream& input, void* destination, const std::size_t bytes
 }
 
 }  // namespace
+
+PlaybackCallbackTiming playback_callback_timing(
+  const std::uint32_t sample_rate,
+  const std::uint32_t frame_count,
+  const std::uint64_t elapsed_nanoseconds) noexcept {
+  if (sample_rate == 0U || frame_count == 0U) return {};
+  constexpr std::uint64_t nanoseconds_per_second = 1'000'000'000U;
+  const auto numerator = static_cast<std::uint64_t>(frame_count) * nanoseconds_per_second;
+  const auto budget_nanoseconds = (numerator + sample_rate - 1U) / sample_rate;
+  return PlaybackCallbackTiming{
+    budget_nanoseconds,
+    static_cast<double>(elapsed_nanoseconds) / static_cast<double>(budget_nanoseconds),
+    elapsed_nanoseconds > budget_nanoseconds,
+  };
+}
+
+void PlaybackCallbackTelemetry::record(const PlaybackCallbackTiming timing) noexcept {
+  constexpr std::uint64_t scale = 1'000'000U;
+  constexpr std::uint64_t maximum_ratio = std::numeric_limits<std::uint64_t>::max() / scale;
+  std::uint64_t encoded_load = 0U;
+  if (std::isfinite(timing.cpu_load) && timing.cpu_load > 0.0) {
+    encoded_load = timing.cpu_load >= static_cast<double>(maximum_ratio)
+      ? std::numeric_limits<std::uint64_t>::max()
+      : static_cast<std::uint64_t>(timing.cpu_load * static_cast<double>(scale));
+  }
+  latest_cpu_load_millionths_.store(encoded_load, std::memory_order_release);
+  if (timing.overrun) overruns_.fetch_add(1U, std::memory_order_relaxed);
+}
+
+double PlaybackCallbackTelemetry::latest_cpu_load() const noexcept {
+  constexpr double scale = 1'000'000.0;
+  return static_cast<double>(latest_cpu_load_millionths_.load(std::memory_order_acquire)) / scale;
+}
+
+std::uint64_t PlaybackCallbackTelemetry::overruns() const noexcept {
+  return overruns_.load(std::memory_order_acquire);
+}
 
 void PlaybackDeviceHealth::notify(const PlaybackDeviceNotification notification, const bool expected_stop) noexcept {
   switch (notification) {
@@ -245,6 +283,7 @@ class RealtimePlayback::Impl {
   std::atomic<std::uint64_t> callback_count{0U};
   std::atomic<std::uint64_t> callback_frames{0U};
   std::atomic<std::uint64_t> rendered_frames{0U};
+  PlaybackCallbackTelemetry callback_telemetry;
   PlaybackDeviceHealth device_health;
   const PlaybackMode requested_mode;
   std::optional<PlaybackMode> effective_mode;
@@ -327,14 +366,24 @@ class RealtimePlayback::Impl {
 
 #if (defined(AIMUSE_ENABLE_WASAPI) && defined(_WIN32)) || \
     (defined(AIMUSE_ENABLE_COREAUDIO) && defined(__APPLE__))
+  void record_callback_timing(const ma_uint32 frame_count, const std::chrono::steady_clock::time_point started_at) noexcept {
+    const auto ended_at = std::chrono::steady_clock::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(ended_at - started_at).count();
+    const auto elapsed_nanoseconds = elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 0U;
+    const auto timing = playback_callback_timing(current_sample_rate, static_cast<std::uint32_t>(frame_count), elapsed_nanoseconds);
+    callback_telemetry.record(timing);
+  }
+
   static void device_callback(ma_device* device_pointer, void* output, const void*, const ma_uint32 frame_count) {
     auto* self = static_cast<Impl*>(device_pointer->pUserData);
     auto* samples = static_cast<float*>(output);
+    const auto started_at = std::chrono::steady_clock::now();
     const auto buffer = std::atomic_load_explicit(&self->active, std::memory_order_acquire);
     self->callback_count.fetch_add(1U, std::memory_order_relaxed);
     self->callback_frames.fetch_add(frame_count, std::memory_order_relaxed);
     if (!buffer || !self->device_health.ready()) {
       std::fill_n(samples, static_cast<std::size_t>(frame_count) * 2U, 0.0F);
+      self->record_callback_timing(frame_count, started_at);
       return;
     }
     PlaybackWindow window{
@@ -348,6 +397,7 @@ class RealtimePlayback::Impl {
     self->rendered_frames.fetch_add(rendered, std::memory_order_relaxed);
     self->cursor.store(window.cursor, std::memory_order_release);
     self->playing.store(window.playing, std::memory_order_release);
+    self->record_callback_timing(frame_count, started_at);
   }
 
   static void device_notification_callback(const ma_device_notification* notification) {
@@ -409,6 +459,8 @@ PlaybackTelemetry RealtimePlayback::telemetry() const {
     impl_->callback_count.load(std::memory_order_acquire),
     impl_->callback_frames.load(std::memory_order_acquire),
     impl_->rendered_frames.load(std::memory_order_acquire),
+    impl_->callback_telemetry.latest_cpu_load(),
+    impl_->callback_telemetry.overruns(),
     impl_->device_health.reroutes(),
     impl_->device_health.interruptions(),
     impl_->device_health.unexpected_stops(),

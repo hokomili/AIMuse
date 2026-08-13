@@ -91,6 +91,34 @@ void realtime_playback_callback_test() {
   expect(near(looped[6], 0.3F) && near(looped[8], 0.5F) && near(looped[12], 0.5F), "loop callback boundary was not sample exact");
 }
 
+void playback_callback_timing_test() {
+  constexpr auto exact_budget = 5'333'334U;
+  const auto exact = aimuse::audio::playback_callback_timing(48'000U, 256U, exact_budget);
+  expect(exact.budget_nanoseconds == exact_budget, "callback timing budget changed");
+  expect(near(static_cast<float>(exact.cpu_load), 1.0F), "exact callback budget did not report full load");
+  expect(!exact.overrun, "exact callback deadline must not overrun");
+
+  const auto late = aimuse::audio::playback_callback_timing(48'000U, 256U, exact_budget + 1U);
+  expect(late.overrun, "late callback did not report an overrun");
+  expect(late.cpu_load > 1.0, "late callback load did not exceed one");
+
+  const auto no_budget = aimuse::audio::playback_callback_timing(0U, 256U, 1U);
+  expect(no_budget.budget_nanoseconds == 0U && near(static_cast<float>(no_budget.cpu_load), 0.0F) && !no_budget.overrun,
+    "zero-rate callback timing must remain inactive");
+
+  aimuse::audio::PlaybackCallbackTelemetry telemetry;
+  telemetry.record(exact);
+  expect(near(static_cast<float>(telemetry.latest_cpu_load()), 1.0F) && telemetry.overruns() == 0U,
+    "callback telemetry did not publish one completed callback sample");
+  telemetry.record(late);
+  expect(near(static_cast<float>(telemetry.latest_cpu_load()), 1.0F) && telemetry.overruns() == 1U,
+    "callback telemetry did not retain a sub-millionth late callback overrun");
+  const auto very_late = aimuse::audio::playback_callback_timing(48'000U, 256U, exact_budget * 2U);
+  telemetry.record(very_late);
+  expect(telemetry.latest_cpu_load() > 1.0 && telemetry.overruns() == 2U,
+    "callback telemetry did not replace the latest sample or retain cumulative overruns");
+}
+
 void playback_mode_contract_test() {
   constexpr std::array<std::string_view, 0U> default_arguments{};
   const auto defaults = aimuse::audio::parse_audio_service_options(default_arguments);
@@ -148,6 +176,7 @@ int main() {
   delay_impulse_test();
   deterministic_synth_test();
   realtime_playback_callback_test();
+  playback_callback_timing_test();
   playback_mode_contract_test();
   playback_device_health_test();
   std::cout << "AIMuse native DSP tests passed\n";

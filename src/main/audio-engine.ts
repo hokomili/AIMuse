@@ -11,6 +11,7 @@ import { audioServiceArguments, validateNativePlaybackModeReport, type AudioPlay
 import { nativeAudioBackendLabel, nativeAudioDriverLabel, type NativeAudioDriver } from './platform';
 import { settleAudioChildShutdown } from './audio-child-lifecycle';
 import { settleAudioPreviewWork } from './audio-preview-lifecycle';
+import { reconcileNativeAudioTelemetry } from './audio-telemetry';
 import { renderProjectToWav, type ProjectRenderResult } from './project-renderer';
 
 export interface AudioEngineStatus { mode: 'native' | 'fallback'; connected: boolean; driver: NativeAudioDriver; requestedPlaybackMode: AudioPlaybackMode; effectivePlaybackMode: EffectiveAudioPlaybackMode; message?: string }
@@ -157,16 +158,20 @@ export class AudioEngineController extends EventEmitter {
     const loopStartTick = options.loopStartTick === undefined ? this.state.loopStartTick : Math.max(0, Math.round(options.loopStartTick));
     const loopEndTick = options.loopEndTick === undefined ? this.state.loopEndTick : Math.max(loopStartTick + 1, Math.round(options.loopEndTick));
     const loopEnabled = options.loopEnabled ?? this.state.loopEnabled;
-    let nativeState: TransportState | undefined;
+    let nativeState: (Pick<TransportState, 'sample'> & { cpuLoad?: unknown; xruns?: unknown }) | undefined;
     if (this.native && this.statusValue.driver !== 'offline') {
       try {
-        nativeState = await this.nativeCall<TransportState>('transport', {
+        const receivedState = await this.nativeCall<Pick<TransportState, 'sample'> & { cpuLoad?: unknown; xruns?: unknown }>('transport', {
           action, projectId: this.project?.id, tick,
           sample: this.project ? ticksToSamples(this.project, tick) : 0,
           loopEnabled, loopStartTick, loopEndTick,
           loopStartSample: this.project ? ticksToSamples(this.project, loopStartTick) : 0,
           loopEndSample: this.project ? ticksToSamples(this.project, loopEndTick) : 1,
         }, 3_000);
+        const telemetry = reconcileNativeAudioTelemetry(this.state, receivedState);
+        this.state.cpuLoad = telemetry.cpuLoad;
+        this.state.xruns = telemetry.xruns;
+        nativeState = receivedState;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.degradeNative(message);

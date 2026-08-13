@@ -43,7 +43,7 @@ std::string state_json(const EngineState& state, const aimuse::audio::RealtimePl
   return "{\"status\":\"" + state.status + "\",\"tick\":" + std::to_string(state.tick) +
     ",\"sample\":" + std::to_string(state.sample) + ",\"loopEnabled\":" + (state.loop_enabled ? "true" : "false") +
     ",\"loopStartTick\":" + std::to_string(state.loop_start) + ",\"loopEndTick\":" + std::to_string(state.loop_end) +
-    ",\"cpuLoad\":0,\"xruns\":0,\"latencySamples\":" + std::to_string(playback.latency_samples()) +
+    ",\"cpuLoad\":" + std::to_string(telemetry.callback_cpu_load) + ",\"xruns\":" + std::to_string(telemetry.callback_overruns) + ",\"latencySamples\":" + std::to_string(playback.latency_samples()) +
     ",\"graphRevision\":" + std::to_string(state.graph_revision) + ",\"requestedPlaybackMode\":\"" +
     std::string(aimuse::audio::playback_mode_name(playback.requested_mode())) + "\",\"effectivePlaybackMode\":\"" +
     std::string(effective_playback_mode_name(playback)) + "\",\"realtimeBackendReady\":" + (playback.ready() ? "true" : "false") +
