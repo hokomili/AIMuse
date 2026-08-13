@@ -1,5 +1,6 @@
 #include "audio_service_options.hpp"
 #include "dsp.hpp"
+#include "midi_port_registry.hpp"
 #include "realtime_playback.hpp"
 
 #include <array>
@@ -167,6 +168,36 @@ void playback_device_health_test() {
   expect(!health.ready() && health.unexpected_stops() == 1U, "unexpected device stop did not fail playback closed");
 }
 
+void midi_port_registry_test() {
+  aimuse::midi::PortRegistry ports;
+  expect(ports.snapshot().generation == 0U && ports.snapshot().ports.empty(), "MIDI registry did not begin unavailable");
+  expect(!ports.replace_discovered({ {"", aimuse::midi::PortDirection::input} }), "empty MIDI port IDs must not be visible");
+  expect(ports.snapshot().generation == 0U && ports.snapshot().ports.empty(), "invalid discovery changed MIDI visibility");
+  expect(!ports.replace_discovered({
+    {"winrt:input-a", aimuse::midi::PortDirection::input},
+    {"winrt:input-a", aimuse::midi::PortDirection::input},
+  }), "duplicate MIDI direction/ID pairs must not be visible");
+
+  expect(ports.replace_discovered({
+    {"winrt:duplex-a", aimuse::midi::PortDirection::output},
+    {"winrt:duplex-a", aimuse::midi::PortDirection::input},
+  }), "distinct MIDI directions for one endpoint must be visible");
+  const auto first = ports.snapshot();
+  expect(first.generation == 1U && first.ports.size() == 2U, "MIDI discovery did not publish the first coherent snapshot");
+  const auto lease = ports.reserve("winrt:duplex-a", aimuse::midi::PortDirection::input);
+  expect(lease.has_value() && ports.current(*lease), "current MIDI port did not reserve a generation-bound lease");
+  expect(ports.replace_discovered({
+    {"winrt:duplex-a", aimuse::midi::PortDirection::input},
+    {"winrt:duplex-a", aimuse::midi::PortDirection::output},
+  }), "reordered unchanged discovery should succeed");
+  expect(ports.snapshot().generation == first.generation && ports.current(*lease), "reordered discovery changed a live MIDI lease");
+  expect(ports.replace_discovered({}), "MIDI disconnect snapshot failed");
+  expect(!ports.current(*lease) && !ports.reserve("winrt:duplex-a", aimuse::midi::PortDirection::input).has_value(),
+    "disconnected MIDI port retained a usable lease");
+  expect(ports.replace_discovered({ {"winrt:duplex-a", aimuse::midi::PortDirection::input} }), "MIDI reconnect snapshot failed");
+  expect(!ports.current(*lease), "reconnected MIDI port resurrected a stale lease");
+}
+
 }  // namespace
 
 int main() {
@@ -179,6 +210,7 @@ int main() {
   playback_callback_timing_test();
   playback_mode_contract_test();
   playback_device_health_test();
+  midi_port_registry_test();
   std::cout << "AIMuse native DSP tests passed\n";
   return 0;
 }

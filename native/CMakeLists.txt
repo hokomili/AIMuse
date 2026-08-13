@@ -29,6 +29,8 @@ target_include_directories(aimuse-dsp PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(aimuse-dsp PUBLIC AIMUSE_NATIVE_VERSION="${PROJECT_VERSION}")
 
 add_library(aimuse-playback STATIC
+  src/midi_port_registry.cpp
+  src/midi_port_registry.hpp
   src/realtime_playback.cpp
   src/realtime_playback.hpp
 )

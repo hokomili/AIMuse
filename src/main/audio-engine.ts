@@ -10,12 +10,13 @@ import type { AudioHostEvent, AudioHostRequest, AudioHostResponse } from '../com
 import { audioServiceArguments, validateNativePlaybackModeReport, type AudioPlaybackMode, type EffectiveAudioPlaybackMode } from './audio-playback-mode';
 import { nativeAudioBackendLabel, nativeAudioDriverLabel, type NativeAudioDriver } from './platform';
 import { settleAudioChildShutdown } from './audio-child-lifecycle';
+import { unavailableMidiDiscovery, validateNativeMidiDiscovery, type MidiDiscoveryStatus } from './midi-discovery';
 import { settleAudioPreviewWork } from './audio-preview-lifecycle';
 import { reconcileNativeAudioTelemetry } from './audio-telemetry';
 import { renderProjectToWav, type ProjectRenderResult } from './project-renderer';
 
-export interface AudioEngineStatus { mode: 'native' | 'fallback'; connected: boolean; driver: NativeAudioDriver; requestedPlaybackMode: AudioPlaybackMode; effectivePlaybackMode: EffectiveAudioPlaybackMode; message?: string }
-interface NativeHello { protocolVersion: number; serviceVersion: string; driver: NativeAudioDriver; requestedPlaybackMode?: unknown; effectivePlaybackMode?: unknown; realtimeBackendReady: boolean; features: string[]; sampleRate?: number; latencySamples?: number; diagnostic?: string }
+export interface AudioEngineStatus { mode: 'native' | 'fallback'; connected: boolean; driver: NativeAudioDriver; requestedPlaybackMode: AudioPlaybackMode; effectivePlaybackMode: EffectiveAudioPlaybackMode; midiDiscovery: MidiDiscoveryStatus; message?: string }
+interface NativeHello { protocolVersion: number; serviceVersion: string; driver: NativeAudioDriver; requestedPlaybackMode?: unknown; effectivePlaybackMode?: unknown; realtimeBackendReady: boolean; features: string[]; sampleRate?: number; latencySamples?: number; midiDiscovery?: unknown; diagnostic?: string }
 interface PendingRequest { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
 interface PlaybackPreview { key: string; path: string; durationSamples: number; sampleRate: number }
 
@@ -49,6 +50,7 @@ export class AudioEngineController extends EventEmitter {
     this.statusValue = {
       mode: 'fallback', connected: true, driver: 'offline',
       requestedPlaybackMode: this.requestedPlaybackMode, effectivePlaybackMode: 'unavailable',
+      midiDiscovery: unavailableMidiDiscovery(),
       message: `Native service is not built; requested ${nativeAudioBackendLabel()} ${this.requestedPlaybackMode} output is unavailable, while deterministic offline rendering and transport remain active.`,
     };
   }
@@ -74,6 +76,7 @@ export class AudioEngineController extends EventEmitter {
       this.statusValue = {
         mode: 'native', connected: true, driver: hello.realtimeBackendReady ? hello.driver : 'offline',
         ...playbackMode,
+        midiDiscovery: validateNativeMidiDiscovery(hello.midiDiscovery),
         message: hello.realtimeBackendReady
           ? `Native ${nativeAudioDriverLabel(hello.driver)} ${playbackMode.effectivePlaybackMode} output ${hello.serviceVersion} connected at ${hello.sampleRate ?? 48_000} Hz.`
           : `Native DSP service ${hello.serviceVersion} connected; requested ${nativeAudioBackendLabel()} ${playbackMode.requestedPlaybackMode} output is unavailable: ${hello.diagnostic ?? 'the service did not provide a diagnostic.'}`,
@@ -323,6 +326,7 @@ export class AudioEngineController extends EventEmitter {
     this.statusValue = {
       mode: 'fallback', connected: true, driver: 'offline',
       requestedPlaybackMode: this.requestedPlaybackMode, effectivePlaybackMode: 'unavailable',
+      midiDiscovery: unavailableMidiDiscovery(),
       message: `${message} Deterministic offline rendering remains available.`,
     };
     this.nativePreviewKey = undefined;
