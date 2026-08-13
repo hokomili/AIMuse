@@ -167,6 +167,31 @@ describe('authenticated localhost MCP contract', () => {
     await expect(oversized.json()).resolves.toMatchObject({ error: 'body_too_large' });
   });
 
+  it('reports MIDI input capture unavailable before authority, approval, or transport can imply a backend', async () => {
+    const { sessionId } = await initialize();
+    const transport = vi.spyOn(audio, 'transport');
+    const callMidiRecord = async () => {
+      const response = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'transport_manage', arguments: { action: 'record', recordingSource: 'midi-input' } } }, sessionId);
+      expect(response.message?.error).toBeUndefined();
+      const content = response.message?.result?.content as Array<{ text: string }>;
+      return JSON.parse(content[0].text) as Record<string, unknown>;
+    };
+
+    const beforeJobs = projects.listJobs();
+    await expect(callMidiRecord()).resolves.toMatchObject({ error: 'midi_input_unavailable', retryable: false, next: { guidance: expect.stringContaining('Do not treat transport recording state as MIDI capture') } });
+    expect(transport).not.toHaveBeenCalled();
+    expect(projects.listJobs()).toEqual(beforeJobs);
+
+    const now = Date.now();
+    await expect(authority.install({
+      version: 1, id: 'midi-input-authorized-without-backend', issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), maxRuntimeMinutes: 5,
+      budget: { currency: 'USD', maxSpendMinor: 0, maxGenerationRequests: 0, maxUnknownCostRequests: 0 }, providers: {}, readRoots: [], writeRoots: [], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: true, allowMidiOutput: false,
+    })).resolves.toEqual({ installed: true });
+    await expect(callMidiRecord()).resolves.toMatchObject({ error: 'midi_input_unavailable', retryable: false });
+    expect(transport).not.toHaveBeenCalled();
+    expect(projects.listJobs()).toEqual(beforeJobs);
+  });
+
   it('publishes credential-free receiver acknowledgements and poisons duplicate request IDs', async () => {
     const requestId = '33333333-3333-4333-8333-333333333333';
     const { instanceId, profileId } = host.credentials();
