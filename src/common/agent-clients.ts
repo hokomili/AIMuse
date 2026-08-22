@@ -46,8 +46,8 @@ export const AGENT_CLIENTS: readonly AgentClientDescriptor[] = [
     id: 'generic',
     name: 'Other MCP client',
     configuration: 'manual',
-    configurationDescription: 'your client’s Streamable HTTP MCP settings',
-    restartInstruction: 'Reconnect or restart the client after adding the AIMuse endpoint.',
+    configurationDescription: 'your client’s stdio MCP settings',
+    restartInstruction: 'Reconnect or restart the client once after adding the AIMuse bridge.',
     documentationUrl: 'https://modelcontextprotocol.io/specification/2025-11-25/basic/transports',
   },
 ] as const;
@@ -63,15 +63,66 @@ export function isAgentClientId(value: unknown): value is AgentClientId {
 }
 
 export interface AgentClientSetupResult {
-  status: 'configured' | 'cancelled' | 'manual';
+  status: 'one-time';
   clientId: AgentClientId;
   clientName: string;
   message: string;
   restartRequired: boolean;
   restartInstruction: string;
   documentationUrl: string;
-  configPath?: string;
-  backupPath?: string;
-  setupSnippet?: string;
-  startsAtLogin?: boolean;
+  setupSnippet: string;
+}
+
+export interface AgentClientBridgeLaunch {
+  command: string;
+  args: string[];
+}
+
+function jsonSetup(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+/** Builds copy-only, durable client configuration. It must never receive or emit engine authority. */
+export function buildAgentClientSetup(clientId: AgentClientId, launch: AgentClientBridgeLaunch): AgentClientSetupResult {
+  const descriptor = agentClientDescriptor(clientId);
+  const command = launch.command;
+  const args = [...launch.args];
+  let setupSnippet: string;
+  if (clientId === 'codex') {
+    setupSnippet = [
+      '[mcp_servers.aimuse]',
+      `command = ${tomlString(command)}`,
+      `args = [${args.map(tomlString).join(', ')}]`,
+      'startup_timeout_sec = 300',
+      'tool_timeout_sec = 600',
+    ].join('\n');
+  } else if (clientId === 'opencode') {
+    setupSnippet = jsonSetup({
+      mcp: {
+        aimuse: {
+          type: 'local',
+          command: [command, ...args],
+          enabled: true,
+        },
+      },
+    });
+  } else if (clientId === 'generic') {
+    setupSnippet = jsonSetup({ transport: 'stdio', command, args });
+  } else {
+    setupSnippet = jsonSetup({ mcpServers: { aimuse: { command, args } } });
+  }
+  return {
+    status: 'one-time',
+    clientId,
+    clientName: descriptor.name,
+    message: `Add this once to ${descriptor.configurationDescription}. AIMuse derives and verifies link-free isolated browser state, waits for the app, and reconnects automatically after engine restarts; the configuration contains no browser-state switch, bearer, or per-launch value.`,
+    restartRequired: true,
+    restartInstruction: descriptor.restartInstruction,
+    documentationUrl: descriptor.documentationUrl,
+    setupSnippet,
+  };
 }

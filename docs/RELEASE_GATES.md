@@ -1,6 +1,6 @@
 # QA and release gates
 
-The release ladder mirrors the intended AIDraw discipline. [TESTING.md](TESTING.md) is the executable source of truth for independent Level 1–3 QA; this document summarizes product-specific release blockers. A green lower level does not waive a higher level.
+The release ladder mirrors the intended AIDraw discipline. [TESTING.md](TESTING.md) is the executable source of truth for independent Level 1–3 QA; this document summarizes product-specific blockers. A green lower level does not waive a higher level.
 
 ## Smoke
 
@@ -10,11 +10,7 @@ Run for every packaged candidate:
 node scripts/npm-node24.mjs run test:level1:auto
 ```
 
-For formal use, first create the fresh protected `test-results/luna-high/<run>` root and a disjoint `test-results/playwright/<run>` child, then set `AIMUSE_FORMAL_RUN_ROOT`, `AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR` and optionally `AIMUSE_PACKAGE_SUBJECT_MANIFEST=<formal-root>/package-subject.json`. Preserve the command's real exit with the platform-specific `pipefail`/`tee` procedure in [TESTING.md](TESTING.md). Level 1 packages exactly once and declares the manifest-bound subject only after packaging.
-
-The packaged test launches the exact hardened `AIMuse.exe`, verifies its PID and private MCP URL, performs a UI edit observed through MCP, performs an authenticated MCP edit observed live in the UI, captures the editor, releases its MCP session, and shuts the persistent engine down through `--quit-engine`.
-
-Current alpha automated status: passing on the development Windows 11 x64 machine as of 2026-08-04. This is not a formal Level 1 certification until a fresh independent Luna/high task also completes isolated MCP, native Computer Use, identity and bidirectional evidence.
+Formal use requires a fresh owner-private `test-results/luna-high/<run>` root and disjoint `test-results/playwright/<run>` output. Level 1 packages once, declares the immutable subject only after packaging, verifies exact executable/ASAR/native-helper/bundle/fuse identity, exercises one UI→MCP and one MCP→UI edit, then gracefully shuts down and redacts the run handoff.
 
 ## Regression
 
@@ -24,20 +20,18 @@ Before a preview build:
 node scripts/npm-node24.mjs run test:level2:auto
 ```
 
-Use the same formal environment and protected logging procedure. Level 2 packages exactly once, exclusively publishes and verifies the post-package manifest, runs packaged E2E against that exact digest, then verifies all bound components again. Do not substitute standalone `npm run test:e2e`, which packages for developer use.
+The exact candidate must cover:
 
-- Run all core schema/migration/reducer/inverse/time tests and main-process persistence, authority, journal, media, export, generation, collaboration and MCP suites.
-- Run native golden/null DSP tests and the service/scanner/bridge protocol fixtures.
-- Repeat packaged Song and SFX UI/MCP workflows, recovery after forced interruption, checkpoint restore, actor undo, authorization exhaustion, generation failure, missing media and degraded plug-in scenarios.
-- Inspect renderer CSP, sandbox, IPC origin checks, fuses, dependencies, archive defenses and credential storage.
-- Resolve or formally re-review every production dependency advisory; the current two moderate MCP/Hono transitive entries block v1 even though AIMuse does not invoke the affected static-file middleware.
-- Verify keyboard-only navigation, focus visibility, accessible names, zoom and high-contrast behavior.
+- Core schema/migration/reducer/inverse/time, persistence, authority, journal, media, export, collaboration, and all twelve MCP tools.
+- One static no-secret stdio client setup across GUI/headless start and at least one stop/restart; target-only setup plus source preparation of a real link-free deterministic bridge Electron sibling with canonical/filesystem identity checks and POSIX/Windows alias rejection, prohibited macOS bridge activation, fresh internal bearer/instance rotation, stale bearer/session rejection, same-session SSE EOF/error recovery, close-vs-initialize session cleanup, committed-plus-pending 32-session reservation under parallel initialization/failure/abort/stop/DELETE races, stop-phase rejection of empty/invalid/stale authority across every TCP route while cleanup is blocked, private atomic PID/instance/profile-bound run-state with clean removal, authentication on every TCP path, and absence of any application credential store or automatic client-config write.
+- Native golden/null DSP plus service/scanner/bridge protocol fixtures without overstating SDK hosting.
+- Packaged Song/SFX UI↔MCP workflows, recovery/discard, checkpoints/variants, locks, actor undo, approvals, missing media, and degraded plug-ins.
+- Renderer CSP/sandbox/IPC origin checks, exact hardened fuse values, dependencies, archive defenses, keyboard/focus/accessibility, and package identity.
+- Explicit negative product assertions: no generation tool/job/UI, provider adapter/capability/credential surface, candidate-media route, or source-separation adapter. Legacy provenance must stay passive and old projects readable; divergent checkpoint restore plus snapshot undo/redo may not change the opened provenance map or generation-source assets.
 
-Current alpha status: automated core coverage is passing; the full manual/scenario matrix is incomplete.
+The 2026-08-10 arm64 Level 2 result remains a strict historical result for its exact ad-hoc subject only. It does not certify this changed candidate or waive Level 3, signing/notarization, physical hardware, codec, or plug-in-hosting gates.
 
-Fresh independent macOS Level 2 run [`20260810T061608Z-macos-level2`](../test-results/luna-high/20260810T061608Z-macos-level2/report.md) is a strict `PASS` for exact subject `AE5F9D80…B7E`: one package invocation, full automation, native Computer Use, both MCP/UI directions, durable discard/recovery control, globally serialized approvals, CoreAudio, restart/reattach and cleanup passed with no finding. Report SHA-256 `3F902EDD…5E4C` and manifest SHA-256 `092D52EB…63B1` bind that result. This earns Level 2 for those exact ad-hoc arm64 development bytes only; it does not waive Level 3, release signing/notarization or any external hardware/credential-state gate.
-
-## Release Exhaustive
+## Release exhaustive
 
 Automated portion:
 
@@ -45,21 +39,23 @@ Automated portion:
 node scripts/npm-node24.mjs run test:level3:auto
 ```
 
-`1.0.0` is blocked until all of the following have exact-build evidence:
+`1.0.0` remains blocked until the exact immutable candidate has evidence for:
 
-- Real WASAPI shared/exclusive playback and recording, physical MIDI I/O, monitoring, timing, delay compensation, recovery and deterministic/offline parity.
+- Real WASAPI/CoreAudio playback and recording, physical MIDI I/O, monitoring, timing, delay compensation, recovery, and deterministic/offline parity.
 - Complete built-in instrument/effect and time-stretch golden/null corpus.
-- Synthetic VST3/CLAP matrix for malformed metadata, timeout, crash, state, latency, missing plug-in, sidechain and automation.
-- All MCP actions across 32 sessions, subscriptions, bounds, cancellation, locks, actor history, authority exhaustion and long headless operation.
-- Credentialed provider conformance plus mock moderation, rates, timeouts, cancellation, capability drift, cost ambiguity and no retry/substitution.
-- Interrupted persistence, traversal, malformed media, archive bomb, real ZIP64 >4 GiB, pack/unpack and trace recovery corpus.
-- Clean Windows 11 machine installer/uninstaller, exact executable identity, signed-artifact policy, license review and SBOM.
-- Pinned reference-machine performance: the specified 48 kHz/256-sample callback load for ten minutes without xruns, interactive 200-track/10,000-clip editing, and an eight-hour/20,000-transaction autonomous soak with no lost commits.
+- Synthetic and real VST3/CLAP hosting for malformed metadata, timeout, crash, state, latency, missing plug-in, sidechain, automation, and unload.
+- All MCP actions across 32 sessions, subscriptions, bounds, cancellation, locks, actor history, authority exhaustion, token rotation, long headless operation, installed-client one-time setup, start-before-engine waiting, repeated automatic bridge reconnection, same-session notification-stream failure recovery, close-race cleanup, and package-level proof that the canonically isolated/deactivated bridge never contends with or surfaces beside the engine profile.
+- Interrupted persistence, traversal, malformed media, archive bomb, real ZIP64 >4 GiB, pack/unpack, trace, and recovery corpus.
+- Clean-machine installer/uninstaller, exact executable identity, signed-artifact policy, license review, SBOM, and pinned performance/soak targets.
 
-No release script changes the package to `1.0.0`; version promotion is a separate reviewed change after this document and the feature tracker have no open v1 gate.
+There is deliberately no provider-conformance, provider-credential, spending-budget, or protected-storage release gate. Reintroducing one would be a new product decision, not completion of this plan.
 
 ## macOS boundary
 
-`npm run verify:macos` now builds the CoreAudio/native-helper development targets in addition to the portable source/native-test lane. `npm run macos:coreaudio-smoke` is the separate real-user-session shared-device gate, and `npm run package` produces a structurally verified, fuse-hardened, validly ad-hoc-signed local `AIMuse.app`. The two-cycle packaged headless acceptance also proves authenticated MCP restart/quit and encrypted local-token reuse for one isolated profile.
+`npm run verify:macos` covers the Darwin source/native lane; `npm run macos:coreaudio-smoke` is the separate real-user shared-device gate. Package checks retain architecture, bundle, ASAR, native resources, signature structure, hardened runtime, and hardened fuses. `EnableCookieEncryption` must be false because there is no persistent browser-secret contract. App entitlements contain no Keychain group or protected-storage authority.
 
-The exact ad-hoc arm64 development subject now has a macOS Level 2 certificate, but not a macOS release certificate. Release remains blocked on physical endpoint/hot-plug/interruption and locked/denied/cancelled Keychain evidence, product-wide recording/MIDI, SDK plug-in hosting and compressed decode/export, a shipping architecture/runtime policy, Developer ID signing, strict release-entitlement inspection, Gatekeeper assessment, notarization, stapling, archive/update/rollback verification and Level 3 against the release candidate. Track each exit criterion in [the macOS gate matrix](MACOS_GATE_MATRIX.md). Windows and development-subject certification do not transfer to future release bytes.
+For distribution, Developer ID signing, Gatekeeper, notarization, stapling, archive/update/rollback, hardware/runtime architecture policy, and fresh Level 3 remain mandatory. Those are ordinary package-integrity and platform-acceptance gates; they do not restore a secret-store or provider requirement.
+
+## Current checkpoint boundary
+
+This checkpoint now includes a fresh lockfile-governed disposable install, ad-hoc arm64 package, immutable package verification, relocation to a versioned path with spaces, exact installed bridge execution, device-free native protocol probes and a real stdio-client headless lifecycle. The static configuration stayed byte-identical across a 65-second idle, force death and two ordinary restarts; fresh authority replaced the old bearer/session, simultaneous clients cleaned up independently, live-PID ambiguity and canonical symlink aliasing failed closed, and no run-owned process survived. A discovered malformed-entry hang was corrected so bridge activation is prohibited before validation and unsafe entries exit explicitly. Headless cycles used an exact-ASAR copy whose audio helper was non-executable and whose ad-hoc envelope was refreshed, so this is not CoreAudio/device proof or exact original-envelope engine proof. Interactive GUI, visual no-Dock/UI, named installed client versions, Windows runtime, signing identity, Gatekeeper, notarization, updater/distribution and Level 3 remain required.

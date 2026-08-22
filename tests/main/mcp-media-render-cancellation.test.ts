@@ -10,7 +10,6 @@ import {
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
-import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
 import { RecoveryJournal } from '../../src/main/journal';
 import { McpHost } from '../../src/main/mcp-host';
 import { MediaManager } from '../../src/main/media-manager';
@@ -56,16 +55,10 @@ describe('headless MCP media render-job cancellation', () => {
     const authority = new AuthorityManager();
     const media = new MediaManager(join(root, 'managed'), projects, authority);
     const plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
-    const credentials: ProviderCredentials = {
-      get: async () => undefined,
-      set: async () => undefined,
-      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
-    };
-    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
     const exports = new ExportManager(projects, audio, authority);
     host = new McpHost({
       appVersion: 'test', profileId: '1'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'),
-      cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, generation, exports,
+      cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, exports,
     });
     await projects.initialize();
     await plugins.initialize();
@@ -142,7 +135,7 @@ describe('headless MCP media render-job cancellation', () => {
 
   it('keeps cancellation terminal when an audition render succeeds or fails late and retains only possible cache output', async () => {
     const audioStart = vi.spyOn(audio, 'start');
-    const token = 'media-render-cancellation-token-0123456789';
+    const token = Buffer.alloc(32, 0x34).toString('base64url');
     const startedHost = await host.start(token);
     expect(audioStart).not.toHaveBeenCalled();
 
@@ -222,7 +215,7 @@ describe('headless MCP media render-job cancellation', () => {
 
   it('keeps cancellation terminal while preserving an in-flight consolidation asset or clip commit', async () => {
     const audioStart = vi.spyOn(audio, 'start');
-    const token = 'media-consolidation-cancellation-token-0123456789';
+    const token = Buffer.alloc(32, 0x35).toString('base64url');
     const startedHost = await host.start(token);
     const owner = await createClient(startedHost.url, token, 'Consolidation owner');
     const joined = await owner.callTool<{ actor: Actor }>('session_manage', { action: 'join', name: 'Consolidation Owner' });
@@ -294,7 +287,7 @@ describe('headless MCP media render-job cancellation', () => {
 
   it('fairly admits render-job creation and cancels queued audition/consolidation before every effect', async () => {
     const audioStart = vi.spyOn(audio, 'start');
-    const token = 'media-render-admission-token-0123456789';
+    const token = Buffer.alloc(32, 0x36).toString('base64url');
     const startedHost = await host.start(token);
     const primary = await createClient(startedHost.url, token, 'Render admission owner');
     const joined = await primary.callTool<{ actor: Actor }>('session_manage', { action: 'join', name: 'Render Admission Owner' });

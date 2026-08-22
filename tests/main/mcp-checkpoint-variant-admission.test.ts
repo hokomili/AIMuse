@@ -7,7 +7,6 @@ import type { Actor } from '@aimuse/core';
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
-import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
 import { RecoveryJournal } from '../../src/main/journal';
 import { McpHost } from '../../src/main/mcp-host';
 import { MediaManager } from '../../src/main/media-manager';
@@ -47,14 +46,8 @@ describe('headless MCP checkpoint and variant admission', () => {
     const authority = new AuthorityManager();
     const media = new MediaManager(join(root, 'managed'), projects, authority);
     const plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
-    const credentials: ProviderCredentials = {
-      get: async () => undefined,
-      set: async () => undefined,
-      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
-    };
-    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
     const exports = new ExportManager(projects, audio, authority);
-    host = new McpHost({ appVersion: 'test', profileId: 'C'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'), cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, generation, exports });
+    host = new McpHost({ appVersion: 'test', profileId: 'C'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'), cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, exports });
     await projects.initialize();
     await plugins.initialize();
   });
@@ -119,7 +112,7 @@ describe('headless MCP checkpoint and variant admission', () => {
 
   it('fairly admits authenticated checkpoint/variant mutations and cancels queued compound work before any write', async () => {
     const audioStart = vi.spyOn(audio, 'start');
-    const token = 'checkpoint-variant-listener-token-0123456789';
+    const token = Buffer.alloc(32, 0x3e).toString('base64url');
     const startedHost = await host.start(token);
     expect(startedHost.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
     expect(audioStart).not.toHaveBeenCalled();

@@ -112,7 +112,7 @@ export async function waitForConnectionReadiness(options, dependencies) {
       const fileInfo = await statConnection(connectionPath);
       if (Number(fileInfo.mtimeMs) + 1_000 < startedAt) throw new Error('Connection file is stale.');
       const connection = normalizeReadyConnection(JSON.parse(String(await readConnection(connectionPath))), expectedPid, expectedProfileId);
-      const health = normalizeHealthProbe(await probeHealth(connection.url, expectedPid, connection.instanceId, connection.profileId), expectedPid, connection.instanceId, connection.profileId);
+      const health = normalizeHealthProbe(await probeHealth(connection.url, expectedPid, connection.instanceId, connection.profileId, connection.token), expectedPid, connection.instanceId, connection.profileId);
       return { connection, health };
     } catch (error) {
       lastError = error;

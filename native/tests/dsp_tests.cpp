@@ -1,7 +1,9 @@
 #include "audio_service_options.hpp"
 #include "dsp.hpp"
+#include "midi_discovery_publisher.hpp"
 #include "midi_port_registry.hpp"
 #include "realtime_playback.hpp"
+#include "windows_midi_discovery.hpp"
 
 #include <array>
 #include <cmath>
@@ -198,6 +200,50 @@ void midi_port_registry_test() {
   expect(!ports.current(*lease), "reconnected MIDI port resurrected a stale lease");
 }
 
+void midi_discovery_publisher_test() {
+  aimuse::midi::PortRegistry registry;
+  aimuse::midi::DiscoveryPublisher publisher(registry);
+  publisher.begin();
+  expect(publisher.snapshot().backend_connected && publisher.snapshot().snapshot.ports.empty(),
+    "MIDI watcher began with visible partial discovery");
+  publisher.added(aimuse::midi::PortDirection::input, "interface:input-a");
+  publisher.added(aimuse::midi::PortDirection::input, "interface:input-a");
+  publisher.added(aimuse::midi::PortDirection::output, "interface:output-a");
+  expect(publisher.snapshot().snapshot.ports.empty(), "initial MIDI discovery exposed one completed direction");
+  expect(registry.snapshot().generation == 0U && registry.snapshot().ports.empty(),
+    "initial MIDI discovery changed the shared registry before both directions completed");
+  publisher.enumeration_completed(aimuse::midi::PortDirection::input);
+  expect(publisher.snapshot().snapshot.ports.empty(), "initial MIDI discovery exposed before both directions completed");
+  expect(registry.snapshot().generation == 0U && registry.snapshot().ports.empty(),
+    "one completed MIDI direction changed the shared registry");
+  publisher.enumeration_completed(aimuse::midi::PortDirection::output);
+  const auto visible = publisher.snapshot();
+  expect(visible.backend_connected && visible.snapshot.generation == 1U && visible.snapshot.ports.size() == 2U,
+    "completed MIDI discovery did not expose both direction-qualified ports");
+  const auto input = registry.reserve("interface:input-a", aimuse::midi::PortDirection::input);
+  expect(input.has_value() && registry.current(*input), "visible MIDI input did not reserve a current lease");
+  publisher.updated(aimuse::midi::PortDirection::input, "interface:input-a");
+  expect(registry.current(*input), "MIDI property update changed endpoint identity");
+  publisher.removed(aimuse::midi::PortDirection::input, "interface:input-a");
+  expect(!registry.current(*input), "MIDI removal retained stale endpoint lease");
+  publisher.stop();
+  expect(!publisher.snapshot().backend_connected && publisher.snapshot().snapshot.ports.empty(),
+    "stopped MIDI watcher retained visibility");
+}
+
+#if !defined(_WIN32)
+void windows_midi_discovery_stub_test() {
+  aimuse::midi::WindowsRuntimeApartment apartment;
+  aimuse::midi::PortRegistry registry;
+  aimuse::midi::WindowsMidiDiscoveryAdapter adapter(registry, apartment);
+  expect(!apartment.ready() && !adapter.start(), "non-Windows MIDI adapter reported a connected runtime");
+  expect(!adapter.snapshot().backend_connected && adapter.snapshot().snapshot.ports.empty(),
+    "non-Windows MIDI adapter exposed discovery state");
+  adapter.stop();
+  adapter.stop();
+}
+#endif
+
 }  // namespace
 
 int main() {
@@ -211,6 +257,10 @@ int main() {
   playback_mode_contract_test();
   playback_device_health_test();
   midi_port_registry_test();
+  midi_discovery_publisher_test();
+#if !defined(_WIN32)
+  windows_midi_discovery_stub_test();
+#endif
   std::cout << "AIMuse native DSP tests passed\n";
   return 0;
 }

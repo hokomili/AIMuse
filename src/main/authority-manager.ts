@@ -1,12 +1,10 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import type { AuthorityDecision, AuthorityPolicy, AuthorityUsage, GenerationProvider } from '@aimuse/core';
+import type { AuthorityDecision, AuthorityPolicy, AuthorityUsage } from '@aimuse/core';
 import { canonicalizePath } from './persistence';
 
 const PolicySchema = z.object({
   version: z.literal(1), id: z.string().min(1).max(240), issuedAt: z.string().datetime(), expiresAt: z.string().datetime(), maxRuntimeMinutes: z.number().int().min(1).max(60 * 24 * 30),
-  budget: z.object({ currency: z.string().min(1).max(10), maxSpendMinor: z.number().int().nonnegative(), maxGenerationRequests: z.number().int().nonnegative(), maxUnknownCostRequests: z.number().int().nonnegative() }).strict(),
-  providers: z.partialRecord(z.enum(['elevenlabs', 'stability', 'lyria']), z.object({ models: z.array(z.string().min(1).max(300)).max(100), enabled: z.boolean() }).strict()),
   readRoots: z.array(z.string().min(1).max(32_000)).max(100), writeRoots: z.array(z.string().min(1).max(32_000)).max(100), overwritePaths: z.array(z.string().min(1).max(32_000)).max(10_000), pluginAllowlist: z.array(z.string().min(1).max(500)).max(10_000),
   allowMicrophone: z.boolean(), allowMidiInput: z.boolean(), allowMidiOutput: z.boolean(),
 }).strict();
@@ -26,7 +24,7 @@ export class AuthorityManager {
       const parsed = PolicySchema.parse(value) as AuthorityPolicy;
       if (new Date(parsed.expiresAt).getTime() <= Date.now()) return { installed: false, reason: 'Authority policy has expired.' };
       this.policy = structuredClone(parsed);
-      this.usage = { spentMinor: 0, generationRequests: 0, unknownCostRequests: 0, startedAt: new Date().toISOString() };
+      this.usage = { startedAt: new Date().toISOString() };
       this.readRoots = await Promise.all(parsed.readRoots.map(canonicalizePath)).then((paths) => paths.map(normalized));
       this.writeRoots = await Promise.all(parsed.writeRoots.map(canonicalizePath)).then((paths) => paths.map(normalized));
       this.overwritePaths = new Set((await Promise.all(parsed.overwritePaths.map(canonicalizePath))).map(normalized));
@@ -66,22 +64,5 @@ export class AuthorityManager {
     const active = this.active(); if (!active.allowed) return { ...active, approvalKind: 'recording' };
     const allowed = kind === 'microphone' ? this.policy!.allowMicrophone : kind === 'midi-input' ? this.policy!.allowMidiInput : this.policy!.allowMidiOutput;
     return allowed ? { allowed: true } : { allowed: false, reason: `${kind} is not authorized.`, approvalKind: 'recording' };
-  }
-
-  generation(provider: GenerationProvider, model: string, estimatedCostMinor?: number): AuthorityDecision {
-    const active = this.active(); if (!active.allowed) return { ...active, approvalKind: 'generation' };
-    const settings = this.policy!.providers[provider];
-    if (!settings?.enabled || !settings.models.includes(model)) return { allowed: false, reason: 'Provider or model is not authorized.', approvalKind: 'generation' };
-    if (this.usage!.generationRequests >= this.policy!.budget.maxGenerationRequests) return { allowed: false, reason: 'Generation request limit reached.', approvalKind: 'generation' };
-    if (estimatedCostMinor === undefined && this.usage!.unknownCostRequests >= this.policy!.budget.maxUnknownCostRequests) return { allowed: false, reason: 'Unknown-cost request limit reached.', approvalKind: 'unknown-cost' };
-    if (estimatedCostMinor !== undefined && this.usage!.spentMinor + estimatedCostMinor > this.policy!.budget.maxSpendMinor) return { allowed: false, reason: 'Generation spend limit would be exceeded.', approvalKind: 'generation' };
-    return { allowed: true };
-  }
-
-  consumeGeneration(estimatedCostMinor?: number): void {
-    if (!this.usage) return;
-    this.usage.generationRequests += 1;
-    if (estimatedCostMinor === undefined) this.usage.unknownCostRequests += 1;
-    else this.usage.spentMinor += estimatedCostMinor;
   }
 }

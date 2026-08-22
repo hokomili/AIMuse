@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { relative, resolve } from 'node:path';
-import { assertCredentialFreeEvidence, assertPackageSubjectEvidence, assertPrivateWindowsAcl, parseDarwinRelevantProcesses, resolvePackageSubjectRequest, reverifyHeadlessPackageSubjectAtRestart, validateRestartIdentity, verifyHeadlessPackageSubject } from '../../scripts/qa-headless-restart.mjs';
+import { assertCredentialFreeEvidence, assertPackageSubjectEvidence, assertPrivateWindowsAcl, parseDarwinRelevantProcesses, resolvePackageSubjectRequest, reverifyHeadlessPackageSubjectAtRestart, validateEphemeralAuthority, validateRestartIdentity, verifyHeadlessPackageSubject } from '../../scripts/qa-headless-restart.mjs';
 
 const USER = 'S-1-5-21-111-222-333-1001';
 const PROFILE = 'A'.repeat(64);
@@ -53,6 +53,14 @@ describe('AGT-04 isolated headless restart evidence guards', () => {
     expect(() => validateRestartIdentity(first, { ...second, pid: first.pid })).toThrow('reused the original PID');
     expect(() => validateRestartIdentity(first, { ...second, instanceId: first.instanceId })).toThrow('reused the original engine instance ID');
     expect(() => validateRestartIdentity(first, { ...second, profileId: 'B'.repeat(64) })).toThrow('changed the isolated profile identity');
+  });
+
+  it('requires fresh 32-byte engine-scoped MCP authority across restart', () => {
+    const first = 'A'.repeat(43);
+    const second = 'B'.repeat(43);
+    expect(validateEphemeralAuthority(first, second)).toEqual({ authorityRotated: true });
+    expect(() => validateEphemeralAuthority(first, first)).toThrow('reused engine-scoped MCP authority');
+    expect(() => validateEphemeralAuthority('too-short', second)).toThrow('32-byte base64url');
   });
 
   it('rejects credential keys and bearer-shaped values from retained evidence', () => {

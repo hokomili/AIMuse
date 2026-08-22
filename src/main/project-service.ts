@@ -38,6 +38,18 @@ import type {
   WorkspaceEvent,
   WorkspaceSnapshot,
 } from '../common/contracts';
+
+function passiveCompatibilityWrite(operations: unknown): string | undefined {
+  if (!Array.isArray(operations)) return undefined;
+  for (const candidate of operations) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const operation = candidate as { kind?: unknown; asset?: { source?: unknown } };
+    const kind = String(operation.kind);
+    if (['provenance.register', 'provenance.update', 'provenance.delete'].includes(kind)) return kind;
+    if (kind === 'asset.add' && operation.asset?.source === 'generation') return 'asset.add source=generation';
+  }
+  return undefined;
+}
 import { AudioEngineController } from './audio-engine';
 import { RecoveryJournal } from './journal';
 import { atomicWriteFile, readProjectFileAudit, readProjectFolder, saveProjectFolder } from './persistence';
@@ -80,6 +92,15 @@ export interface ProjectServiceOptions {
 
 function clone<T>(value: T): T { return structuredClone(value); }
 
+function preservePassiveCompatibility(current: AIMuseProject, candidate: AIMuseProject): AIMuseProject {
+  const next = clone(candidate);
+  next.provenance = clone(current.provenance);
+  for (const [assetId, asset] of Object.entries(next.assets)) if (asset.source === 'generation') delete next.assets[assetId];
+  for (const [assetId, asset] of Object.entries(current.assets)) if (asset.source === 'generation') next.assets[assetId] = clone(asset);
+  validateProjectIntegrity(next);
+  return next;
+}
+
 export class ProjectService extends EventEmitter {
   private readonly projects = new Map<Id, AIMuseProject>();
   private readonly histories = new Map<Id, Map<Id, HistoryState>>();
@@ -97,7 +118,7 @@ export class ProjectService extends EventEmitter {
   private readonly mutationTails = new Map<Id, Promise<void>>();
   private activeProjectId?: Id;
   private selection?: TimelineSelection;
-  private mcpInfo: Omit<McpConnectionInfo, 'sessions'> = { running: false };
+  private mcpInfo: Omit<McpConnectionInfo, 'sessions'> = { running: false, connectionMode: 'stdio-bridge' };
 
   constructor(private readonly options: ProjectServiceOptions) {
     super();
@@ -168,6 +189,8 @@ export class ProjectService extends EventEmitter {
   }
 
   private async applyUnlocked(rawTransaction: ProjectTransaction, authenticatedActor?: Actor, skipCheckpoint = false): Promise<ApplyTransactionResponse> {
+    const compatibilityWrite = passiveCompatibilityWrite((rawTransaction as { operations?: unknown } | null)?.operations);
+    if (compatibilityWrite) return { status: 'conflict', message: `${compatibilityWrite} is retained only to read and recover already-authored project data; live project mutations cannot write historical generation metadata.`, conflict: { retryable: false } };
     let transaction: ProjectTransaction;
     try { transaction = validateTransaction(rawTransaction); } catch (error) { return { status: 'conflict', message: error instanceof Error ? error.message : String(error), conflict: { retryable: false } }; }
     const project = this.projects.get(transaction.projectId); if (!project) return { status: 'conflict', message: 'Project is not open.', conflict: { retryable: false } };
@@ -233,7 +256,7 @@ export class ProjectService extends EventEmitter {
         action,
         action === 'undo' ? entry.redo : entry.undo,
       );
-      else { next = clone(action === 'undo' ? entry.before : entry.after); next.revision = current.revision + 1; next.updatedAt = nowIso(); next.dirty = true; next.activity.push({ id: createId('activity'), actor: clone(actor), label: `${action === 'undo' ? 'Undo' : 'Redo'} ${entry.label}`, status: action, createdAt: nowIso(), revision: next.revision }); }
+      else { next = preservePassiveCompatibility(current, action === 'undo' ? entry.before : entry.after); next.revision = current.revision + 1; next.updatedAt = nowIso(); next.dirty = true; next.activity.push({ id: createId('activity'), actor: clone(actor), label: `${action === 'undo' ? 'Undo' : 'Redo'} ${entry.label}`, status: action, createdAt: nowIso(), revision: next.revision }); }
       await this.options.audio.prepareProject(next); try { await this.options.journal.appendSnapshot(next); } catch (error) { await this.options.audio.abortPreparedProject(next); throw error; } await this.options.audio.commitPreparedProject(next); this.projects.set(projectId, next); target.push(entry);
       await this.options.trace.append({ version: 1, projectId, revision: next.revision, recordedAt: nowIso(), outcome: action, actor: clone(actor), label: `${action === 'undo' ? 'Undo' : 'Redo'} ${entry.label}` }).catch(() => undefined);
       this.publish(); return { status: 'committed', revision: next.revision };
@@ -268,8 +291,8 @@ export class ProjectService extends EventEmitter {
     const checkpoint = current.checkpoints[checkpointId]; if (!checkpoint) return { status: 'conflict', message: 'Checkpoint does not exist.', conflict: { retryable: false } };
     const asset = current.assets[checkpoint.snapshotAssetId]; const path = asset ? this.resolveAssetSource(current, asset) : undefined; if (!path) return { status: 'conflict', message: 'Checkpoint snapshot is unavailable.', conflict: { retryable: false } };
     try {
-      const before = clone(current); const restored = migrateProject(JSON.parse(await readFile(path, 'utf8'))); restored.projectPath = current.projectPath; restored.revision = current.revision + 1; restored.updatedAt = nowIso(); restored.dirty = true;
-      restored.checkpoints = clone(current.checkpoints); restored.assets = { ...restored.assets, ...clone(current.assets) };
+      const before = clone(current); let restored = migrateProject(JSON.parse(await readFile(path, 'utf8'))); restored.projectPath = current.projectPath; restored.revision = current.revision + 1; restored.updatedAt = nowIso(); restored.dirty = true;
+      restored.checkpoints = clone(current.checkpoints); restored.assets = { ...restored.assets, ...clone(current.assets) }; restored = preservePassiveCompatibility(current, restored);
       restored.activity.push({ id: createId('activity'), actor: clone(actor), label: `Restore ${checkpoint.name}`, status: 'checkpoint', createdAt: nowIso(), revision: restored.revision });
       await this.options.audio.prepareProject(restored); try { await this.options.journal.appendSnapshot(restored); } catch (error) { await this.options.audio.abortPreparedProject(restored); throw error; } await this.options.audio.commitPreparedProject(restored); this.projects.set(projectId, restored); const history = this.getHistory(projectId, actor.id); history.undo.push({ kind: 'snapshot', label: `Restore ${checkpoint.name}`, before, after: clone(restored) }); history.redo.length = 0;
       await this.options.trace.append({ version: 1, projectId, revision: restored.revision, recordedAt: nowIso(), outcome: 'checkpoint', actor, label: `Restore ${checkpoint.name}`, details: { checkpointId } }).catch(() => undefined); this.publish();
@@ -292,6 +315,8 @@ export class ProjectService extends EventEmitter {
 
   private async applyBranchUnlocked(variantId: Id, rawTransaction: ProjectTransaction, actor: Actor): Promise<ApplyTransactionResponse> {
     const branch = await this.loadBranch(variantId); if (!branch) return { status: 'conflict', message: 'Branch is unavailable.', conflict: { retryable: false } }; const main = this.projects.get(rawTransaction.projectId); const variant = main?.variants[variantId]; if (!main || !variant || variant.status !== 'active') return { status: 'conflict', message: 'Branch is not active.', conflict: { retryable: false } };
+    const compatibilityWrite = passiveCompatibilityWrite((rawTransaction as { operations?: unknown } | null)?.operations);
+    if (compatibilityWrite) return { status: 'conflict', message: `${compatibilityWrite} is retained only to read and recover already-authored project data; live branch mutations cannot write historical generation metadata.`, conflict: { retryable: false } };
     let transaction: ProjectTransaction; try { transaction = validateTransaction(rawTransaction); } catch (error) { return { status: 'conflict', message: error instanceof Error ? error.message : String(error), conflict: { retryable: false } }; }
     if (branch.operationIds.has(transaction.clientOperationId)) return { status: 'duplicate', revision: branch.operationIds.get(transaction.clientOperationId), message: 'This branch operation was already committed.' };
     try {
@@ -321,7 +346,7 @@ export class ProjectService extends EventEmitter {
     for (const field of ENTITY_MAPS) { const destination = (next as unknown as Record<string, Record<string, unknown>>)[field]; const base = branch.base[field] as Record<string, unknown>; const human = current[field] as Record<string, unknown>; const proposed = branch.current[field] as Record<string, unknown>; for (const id of new Set([...Object.keys(base), ...Object.keys(human), ...Object.keys(proposed)])) { if (sameContent(human[id], base[id])) { if (proposed[id] === undefined) delete destination[id]; else { const value = clone(proposed[id]) as Record<string, unknown>; if (base[id] !== undefined) { value.revision = Number((human[id] as { revision?: number } | undefined)?.revision ?? (base[id] as { revision?: number }).revision ?? 0) + 1; value.updatedAt = nowIso(); value.updatedBy = actor.id; } destination[id] = value; } } else if (!sameContent(proposed[id], base[id]) && !sameContent(human[id], proposed[id])) conflicts.push(`${field}.${id}`); } }
     if (conflicts.length) return { status: 'conflict', message: 'Branch and main both changed the same project fields.', conflict: { retryable: false }, conflicts: [...new Set(conflicts)] };
     const before = clone(current); next.revision = current.revision + 1; next.updatedAt = nowIso(); next.dirty = true; next.projectPath = current.projectPath; next.variants[variantId] = { ...next.variants[variantId], status: 'merged', revision: next.variants[variantId].revision + 1, updatedAt: nowIso(), updatedBy: actor.id }; next.activity.push({ id: createId('activity'), actor: clone(actor), label: `Merge branch: ${variant.name}`, status: 'committed', createdAt: nowIso(), revision: next.revision });
-    try { validateProjectIntegrity(next); await this.options.audio.prepareProject(next); try { await this.options.journal.appendSnapshot(next); } catch (error) { await this.options.audio.abortPreparedProject(next); throw error; } await this.options.audio.commitPreparedProject(next); this.projects.set(next.id, next); const history = this.getHistory(next.id, actor.id); history.undo.push({ kind: 'snapshot', label: `Merge branch: ${variant.name}`, before, after: clone(next) }); history.redo.length = 0; await this.options.trace.append({ version: 1, projectId: next.id, revision: next.revision, recordedAt: nowIso(), outcome: 'merge', actor, label: `Merge branch: ${variant.name}`, details: { variantId } }).catch(() => undefined); this.branches.delete(variantId); this.publish(); return { status: 'committed', revision: next.revision }; } catch (error) { return { status: 'engine-error', message: error instanceof Error ? error.message : String(error), conflict: { retryable: true } }; }
+    try { const installable = preservePassiveCompatibility(current, next); await this.options.audio.prepareProject(installable); try { await this.options.journal.appendSnapshot(installable); } catch (error) { await this.options.audio.abortPreparedProject(installable); throw error; } await this.options.audio.commitPreparedProject(installable); this.projects.set(installable.id, installable); const history = this.getHistory(installable.id, actor.id); history.undo.push({ kind: 'snapshot', label: `Merge branch: ${variant.name}`, before, after: clone(installable) }); history.redo.length = 0; await this.options.trace.append({ version: 1, projectId: installable.id, revision: installable.revision, recordedAt: nowIso(), outcome: 'merge', actor, label: `Merge branch: ${variant.name}`, details: { variantId } }).catch(() => undefined); this.branches.delete(variantId); this.publish(); return { status: 'committed', revision: installable.revision }; } catch (error) { return { status: 'engine-error', message: error instanceof Error ? error.message : String(error), conflict: { retryable: true } }; }
   }
 
   async discardBranch(variantId: Id, actor: Actor = HUMAN_ACTOR): Promise<ApplyTransactionResponse> { const main = [...this.projects.values()].find((project) => project.variants[variantId]); const variant = main?.variants[variantId]; if (!main || !variant) return { status: 'conflict', message: 'Branch does not exist.', conflict: { retryable: false } }; const tx: ProjectTransaction = { id: createId('tx'), clientOperationId: createId('branch-discard'), projectId: main.id, actor, label: `Discard branch: ${variant.name}`, createdAt: nowIso(), operations: [{ kind: 'variant.update', variantId, changes: { status: 'discarded' }, expectedRevision: variant.revision }], checkpointPolicy: 'none' }; const result = await this.apply(tx, actor, true); if (result.status === 'committed') this.branches.delete(variantId); return result; }

@@ -1,16 +1,15 @@
 # AIMuse
 
-AIMuse is an agent-native, Windows-first music and sound-design studio. One canonical engine serves both an attachable Electron editor and authenticated external MCP clients, so a creator can work directly while an agent observes and edits the same project.
+AIMuse is a native, agent-driven, Windows-first music and sound-design workstation. One canonical engine serves both an attachable Electron editor and authenticated external MCP clients, so a creator can work directly while an agent observes and edits the same project. AIMuse is not a built-in generative-content platform: it ships no external generation-provider adapter, provider credential store, generation job, or generation UI. External agents may create material with capabilities they control, then use AIMuse's ordinary import and editing tools.
 
 The repository is currently **`0.1.0-alpha.0`**. It contains a working foundation and packaged cross-surface alpha; it is deliberately not labeled `1.0.0` because the complete live audio graph, recording, third-party plug-in hosting, codec, performance, and exhaustive release gates in the v1 plan are not complete. See [the feature tracker](docs/FEATURE_TRACKER.md).
 
 ## What works now
 
 - Canonical Zod-validated project model, granular transactions, revisions, inverse operations, referential-integrity checks, idempotency, recovery journal, trace replay, checkpoints, variants, locks, and actor-scoped undo/redo.
-- Authenticated loopback MCP with 12 tool-first contracts (including model-callable help), owner-scoped job resources, state subscriptions, a 32-session cap, approval jobs, and headless/editor attachment lifecycle.
-- Song and SFX editor surfaces with arrangement, browser, inspector/activity/jobs/agents, lower editing dock, mixer controls, generation candidates, and SFX deliverable controls.
+- A one-time, no-secret stdio setup for external MCP clients backed by authenticated loopback MCP with 12 tool-first contracts (including model-callable help), owner-scoped job resources, state subscriptions, a reservation-safe 32-session cap, approval jobs, and headless/editor attachment lifecycle. Configured clients automatically follow fresh engine authority across restarts.
+- Song and SFX editor surfaces with arrangement, media browser, inspector/activity/jobs/agents, lower editing dock, mixer controls, and SFX deliverable controls.
 - Controlled audio/MIDI import, MIDI export, deterministic WAV/master/stem/audition rendering, SFX variation batches, DAWproject interchange reports, working folders, and ZIP64 portable packs.
-- Provider-neutral ElevenLabs, Stability, and opt-in experimental Lyria adapters with immutable candidates, provenance, charge ambiguity handling, and no silent retry or provider substitution.
 - A C++20 service protocol, two-phase graph prepare/commit, deterministic DSP kernels, isolated scanner/bridge process shells, crash degradation behavior, and staged native executables.
 - Pinned-miniaudio WASAPI shared playback with worker-rendered, background-prewarmed revision previews; play/pause/stop/exact seek/loop are native, ordinary edits preserve playback position, and ruler dragging scrubs continuously without blocking the Electron UI.
 - Hardened packaged Electron build with an exact-build UI/MCP end-to-end test.
@@ -33,23 +32,23 @@ The packaged app is written to `out\AIMuse-win32-x64`. Level 2 adds the exact pa
 
 ## Prepare on macOS
 
-The repository has an executable macOS development lane. On a macOS host, use `nvm install`, `nvm use`, `npm ci`, then `npm test` and `npm run verify:macos`; run `npm run macos:coreaudio-smoke` from a real user session for bounded shared-device soak/restart evidence, and `npm run package` for a verified local `out/AIMuse-darwin-<arch>/AIMuse.app`. The ordinary test entry point preserves the full Windows suite while routing exactly the sealed Windows-only partition away from Darwin. The exact arm64 development subject earned independent macOS Level 2 on 2026-08-10, including native Computer Use and both MCP/UI directions. This is not a release certificate: the app remains ad-hoc signed and not notarized; physical hot-plug/Keychain-denial evidence, SDK-backed plug-in hosting, compressed decode/export, x64-hardware/universal per-slice runtime, Developer ID/Gatekeeper/notarization/stapling and Level 3 remain unearned. See [macOS development](docs/MACOS_DEVELOPMENT.md) and the [macOS gate matrix](docs/MACOS_GATE_MATRIX.md).
+The repository has an executable macOS development lane. On a macOS host, use `nvm install`, `nvm use`, `npm ci`, then `npm test` and `npm run verify:macos`; run `npm run macos:coreaudio-smoke` from a real user session for bounded shared-device soak/restart evidence, and `npm run package` for a verified local `out/AIMuse-darwin-<arch>/AIMuse.app`. The ordinary test entry point preserves the full Windows suite while routing exactly the sealed Windows-only partition away from Darwin. The exact arm64 development subject earned independent macOS Level 2 on 2026-08-10, including native Computer Use and both MCP/UI directions. This is not a release certificate: the app remains ad-hoc signed and not notarized; physical hot-plug evidence, SDK-backed plug-in hosting, compressed decode/export, x64-hardware/universal per-slice runtime, Developer ID/Gatekeeper/notarization/stapling and Level 3 remain unearned. See [macOS development](docs/MACOS_DEVELOPMENT.md) and the [macOS gate matrix](docs/MACOS_GATE_MATRIX.md).
 
 ## Lifecycle
 
 ```powershell
 .\out\AIMuse-win32-x64\AIMuse.exe
-.\out\AIMuse-win32-x64\AIMuse.exe --headless --write-mcp-connection=C:\private\aimuse-mcp.json
+.\out\AIMuse-win32-x64\AIMuse.exe --headless
 .\out\AIMuse-win32-x64\AIMuse.exe --quit-engine
 ```
 
-Autonomous bootstrap can additionally use repeatable `--trust-folder=C:\absolute\folder` flags and `--authority-policy=C:\absolute\policy.json`. The connection file contains a bearer token: create its parent with an owner-only operating-system ACL before launch, re-read the handoff after every restart, and redact or remove it when the controller is done. Node's `0o600` mode alone is not a Windows ACL boundary. Closing the editor leaves the engine alive by design. `--quit-engine` shuts down both surfaces cleanly.
+Autonomous bootstrap can additionally use repeatable `--trust-folder=C:\absolute\folder` flags and `--authority-policy=C:\absolute\policy.json`. Use **Agents → Connect an external agent** once to copy the selected client's static stdio launcher settings. Those settings contain no bearer or per-launch value and pass only the intended engine profile; they never supply Chromium `--user-data-dir`. The AIMuse entry derives a deterministic sibling, creates only its final directory, rejects link/reparse/case aliases through canonical path and filesystem identity checks, and revalidates it around `app.setPath`, so accepted state cannot share the GUI/headless profile; macOS bridge activation is prohibited before validation and an unsafe entry exits immediately. The bridge can wait for the app, privately discovers the current PID/instance-bound engine authority, recovers a failed notification stream on the next client message, and reconnects automatically after GUI or headless restarts. No client-config rewrite, settings visit, password, Keychain, DPAPI, libsecret, Electron `safeStorage`, or other persistent protected-secret backend participates. AIMuse never edits third-party client configuration. A fresh relocated arm64 development package passed a real stdio-client headless lifecycle with static configuration, simultaneous clients, long idle, death and graceful restarts, stale-use rejection, private-state checks, exact-package alias refusal and zero survivors. Visual no-Dock/UI proof, interactive GUI, real devices, non-macOS packages and distribution acceptance remain open. Closing the editor leaves the engine alive by design. `--quit-engine` shuts down both surfaces cleanly.
 
 On macOS, invoke the packaged executable inside the app bundle when passing lifecycle flags:
 
 ```sh
 ./out/AIMuse-darwin-arm64/AIMuse.app/Contents/MacOS/AIMuse
-./out/AIMuse-darwin-arm64/AIMuse.app/Contents/MacOS/AIMuse --headless --write-mcp-connection=/absolute/owner-private/aimuse-mcp.json
+./out/AIMuse-darwin-arm64/AIMuse.app/Contents/MacOS/AIMuse --headless
 ./out/AIMuse-darwin-arm64/AIMuse.app/Contents/MacOS/AIMuse --quit-engine
 ```
 

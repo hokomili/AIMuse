@@ -70,11 +70,22 @@ export async function sha256File(path: string): Promise<{ sha256: string; byteLe
 
 export interface AtomicWriteFileHooks {
   write?: (handle: FileHandle, data: Uint8Array | string) => Promise<void>;
+  syncDirectory?: (path: string) => Promise<void>;
+  temporaryDirectory?: string;
+}
+
+export async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, 'r');
+  try { await handle.sync(); }
+  finally { await handle.close(); }
 }
 
 export async function atomicWriteFile(path: string, data: Uint8Array | string, validate?: (bytes: Buffer) => void, hooks: AtomicWriteFileHooks = {}): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}.tmp`;
+  const targetDirectory = dirname(path);
+  const temporaryDirectory = hooks.temporaryDirectory ?? targetDirectory;
+  await mkdir(targetDirectory, { recursive: true });
+  await mkdir(temporaryDirectory, { recursive: true });
+  const temporary = join(temporaryDirectory, `.${basename(path)}.${process.pid}.${Date.now()}.${randomBytes(8).toString('hex')}.tmp`);
   const expected = Buffer.from(data);
   let handle: FileHandle | undefined;
   let temporaryCreated = false;
@@ -91,6 +102,13 @@ export async function atomicWriteFile(path: string, data: Uint8Array | string, v
     if (!bytes.equals(expected)) throw new Error(`Atomic staging verification failed for ${path}.`);
     validate?.(bytes);
     await rename(temporary, path);
+    if (hooks.syncDirectory) {
+      await hooks.syncDirectory(targetDirectory);
+      if (temporaryDirectory !== targetDirectory) await hooks.syncDirectory(temporaryDirectory);
+    } else if (process.platform !== 'win32') {
+      await syncDirectory(targetDirectory);
+      if (temporaryDirectory !== targetDirectory) await syncDirectory(temporaryDirectory);
+    }
     committed = true;
   } catch (error) {
     operationError = error;

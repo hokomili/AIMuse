@@ -11,7 +11,6 @@ import {
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
-import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
 import { RecoveryJournal } from '../../src/main/journal';
 import { McpHost } from '../../src/main/mcp-host';
 import { MediaManager } from '../../src/main/media-manager';
@@ -59,16 +58,10 @@ describe('headless MCP media-analysis admission', () => {
     authority = new AuthorityManager();
     media = new MediaManager(join(root, 'managed'), projects, authority);
     const plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
-    const credentials: ProviderCredentials = {
-      get: async () => undefined,
-      set: async () => undefined,
-      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
-    };
-    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
     const exports = new ExportManager(projects, audio, authority);
     host = new McpHost({
       appVersion: 'test', profileId: 'F'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'),
-      cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, generation, exports,
+      cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, exports,
     });
     await projects.initialize();
     await plugins.initialize();
@@ -139,7 +132,7 @@ describe('headless MCP media-analysis admission', () => {
   it('fairly admits WAV analysis with zero-effect queued cancellation and literal cache-before-commit failure behavior', async () => {
     const audioStart = vi.spyOn(audio, 'start');
     const audioRender = vi.spyOn(audio, 'render');
-    const token = 'media-analysis-listener-token-0123456789';
+    const token = Buffer.alloc(32, 0x33).toString('base64url');
     const startedHost = await host.start(token);
     expect(startedHost.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
     expect(audioStart).not.toHaveBeenCalled();

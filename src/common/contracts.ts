@@ -9,7 +9,6 @@ import type {
   ProjectTransaction,
   TransportState,
 } from '@aimuse/core';
-import type { GenerationJobResult, GenerationRequest, ProviderCapabilities } from './generation';
 import type { AgentClientId, AgentClientSetupResult } from './agent-clients';
 
 export interface NewProjectOptions {
@@ -69,11 +68,8 @@ export interface AgentPresence {
 
 export interface McpConnectionInfo {
   running: boolean;
-  url?: string;
-  port?: number;
-  tokenHint?: string;
-  instanceId?: string;
-  profileId?: string;
+  connectionMode: 'stdio-bridge';
+  message?: string;
   sessions: AgentPresence[];
 }
 
@@ -164,12 +160,9 @@ export interface AIMuseDesktopAPI {
   stopAgents(projectId?: Id): Promise<number>;
   getEngineStatus(): Promise<EngineStatus>;
   setEngineStartAtLogin(enabled: boolean): Promise<EngineStatus>;
-  getMcpCredentials(): Promise<{ url?: string; token: string; instanceId: string; profileId: string }>;
-  configureAgentClient(clientId: AgentClientId): Promise<AgentClientSetupResult>;
-  configureCodex(): Promise<AgentClientSetupResult>;
+  getAgentClientSettings(clientId: AgentClientId): Promise<AgentClientSetupResult>;
   showApplicationMenu(): Promise<void>;
   mediaUrl(projectId: Id, assetId: Id): string;
-  candidateMediaUrl(jobId: Id, candidateId: Id): string;
   resolveJob(jobId: Id, decision: 'allow-once' | 'allow-session' | 'allow-always' | 'deny'): Promise<AsyncJob | undefined>;
   cancelJob(jobId: Id): Promise<AsyncJob | undefined>;
   importMedia(projectId?: Id): Promise<{ imported: number; warnings: string[] }>;
@@ -177,11 +170,6 @@ export interface AIMuseDesktopAPI {
   createCheckpoint(projectId: Id, name: string): Promise<{ checkpointId: Id }>;
   restoreCheckpoint(projectId: Id, checkpointId: Id): Promise<ApplyTransactionResponse>;
   scanPlugins(): Promise<{ jobId: Id }>;
-  generationStart(request: GenerationRequest): Promise<{ jobId: Id }>;
-  generationAccept(jobId: Id, candidateId: Id, trackId?: Id, startTick?: number): Promise<ApplyTransactionResponse>;
-  generationReject(jobId: Id, candidateId: Id): Promise<AsyncJob<GenerationJobResult> | undefined>;
-  setProviderCredential(provider: GenerationRequest['provider'], value: string): Promise<{ saved: boolean }>;
-  getProviderCapabilities(): Promise<ProviderCapabilities[]>;
   installAuthorityPolicy(policy: AuthorityPolicy): Promise<{ installed: boolean; reason?: string }>;
   replayTrace(projectId: Id, transactionId: Id): Promise<{ replaying: boolean; reason?: string }>;
   onEvent(callback: (event: WorkspaceEvent) => void): () => void;
@@ -192,10 +180,10 @@ export const IPC = {
   bootstrap: 'aimuse:bootstrap', newProject: 'aimuse:projects:new', activateProject: 'aimuse:projects:activate', applyTransaction: 'aimuse:project:apply',
   undo: 'aimuse:history:undo', redo: 'aimuse:history:redo', openProjects: 'aimuse:projects:open', saveProject: 'aimuse:projects:save', saveProjectAs: 'aimuse:projects:save-as', closeProject: 'aimuse:projects:close',
   acquireHumanLock: 'aimuse:locks:acquire', refreshHumanLock: 'aimuse:locks:refresh', holdHumanLock: 'aimuse:locks:hold', releaseHumanLock: 'aimuse:locks:release', updateSelection: 'aimuse:selection:update', transport: 'aimuse:transport', stopAgents: 'aimuse:agents:stop',
-  engineStatus: 'aimuse:engine:status', engineStartAtLogin: 'aimuse:engine:start-at-login', mcpCredentials: 'aimuse:mcp:credentials', configureAgentClient: 'aimuse:mcp:configure-agent-client', configureCodex: 'aimuse:mcp:configure-codex',
+  engineStatus: 'aimuse:engine:status', engineStartAtLogin: 'aimuse:engine:start-at-login', agentClientSettings: 'aimuse:mcp:agent-client-settings',
   showApplicationMenu: 'aimuse:menu:show',
   resolveJob: 'aimuse:jobs:resolve', cancelJob: 'aimuse:jobs:cancel', importMedia: 'aimuse:media:import', exportProject: 'aimuse:projects:export', checkpointCreate: 'aimuse:checkpoints:create', checkpointRestore: 'aimuse:checkpoints:restore',
-  scanPlugins: 'aimuse:plugins:scan', generationStart: 'aimuse:generation:start', generationAccept: 'aimuse:generation:accept', generationReject: 'aimuse:generation:reject', setProviderCredential: 'aimuse:generation:set-credential', providerCapabilities: 'aimuse:generation:capabilities',
+  scanPlugins: 'aimuse:plugins:scan',
   installAuthorityPolicy: 'aimuse:authority:install', replayTrace: 'aimuse:trace:replay', event: 'aimuse:event', newProjectRequested: 'aimuse:projects:new-requested',
 } as const;
 

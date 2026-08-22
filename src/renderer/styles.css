@@ -157,47 +157,14 @@ button.primary.subtle { background: #332a50; color: #d8ceff; }
 .browser-empty p { margin: 4px 0 10px; color: var(--quiet); font-size: 9px; line-height: 1.45; }
 .browser-empty button { padding: 6px 9px; border-radius: 6px; color: #cec4f6; background: #2b2541; font-size: 9px; }
 .empty-status { color: #6e7280; font-size: 8px; }
-.browser-tip, .candidate-rule { margin: 9px 4px; color: #676b79; font-size: 8px; line-height: 1.45; }
+.browser-tip { margin: 9px 4px; color: #676b79; font-size: 8px; line-height: 1.45; }
 .muted-copy { display: block; padding: 8px 3px; color: #686c79; font-size: 9px; line-height: 1.45; }
-
-.generate-browser > label { position: relative; display: flex; flex-direction: column; gap: 5px; margin: 10px 1px; color: var(--muted); font-size: 9px; }
-.generate-browser select, .generate-browser textarea, .generate-browser input[type="number"] { width: 100%; border: 1px solid #30333f; border-radius: 7px; color: #dfe0e6; background: #0e1016; font-size: 10px; outline: none; }
-.generate-browser select { height: 30px; padding: 0 7px; }
-.generate-browser textarea { padding: 8px; resize: vertical; line-height: 1.45; }
-.generate-browser textarea:focus, .generate-browser select:focus { border-color: #665393; }
-.generator-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 3px; border-radius: 8px; background: #0c0e13; }
-.generator-mode button { height: 27px; border-radius: 6px; color: var(--muted); font-size: 9px; }
-.generator-mode button.active { color: #e6e0ff; background: #29233d; }
-.provider-warning { display: flex; gap: 7px; padding: 8px; border: 1px solid #554226; border-radius: 7px; color: #d8ae68; background: #241d15; font-size: 8px; line-height: 1.35; }
-.provider-warning.configured { border-color: #285047; color: #7acbbb; background: #15231f; }
-.provider-warning span { flex: 1; }
-.provider-warning button, .provider-credential button { padding: 4px 6px; border-radius: 5px; color: #e1c291; background: #4a351e; font-size: 8px; }
-.provider-credential { margin: 7px 0; display: flex; gap: 5px; }
-.provider-credential input { min-width: 0; flex: 1; padding: 6px 7px; border: 1px solid #343744; border-radius: 6px; color: var(--text); background: #101217; font-size: 8px; }
-.generator-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
-.generator-pair label { position: relative; display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 9px; }
-.generator-pair label > span { position: absolute; right: 7px; bottom: 8px; color: var(--quiet); }
-.generator-pair input[type="number"] { height: 30px; padding: 0 22px 0 7px; }
-.generator-pair label.toggle-line { height: 30px; flex-direction: row; align-items: center; }
-.generate-browser .wide { width: 100%; height: 32px; display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 8px; font-size: 10px; }
-.candidate-card { margin: 6px 0; padding: 8px; border: 1px solid #2d303b; border-radius: 9px; background: #15171f; }
-.candidate-head { display: flex; align-items: center; gap: 6px; font-size: 9px; }
-.candidate-head strong { flex: 1; font-weight: 550; }
-.candidate-head small { color: var(--quiet); }
 .job-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--quiet); }
 .job-dot.running { background: var(--purple); box-shadow: 0 0 6px var(--purple); }
 .job-dot.completed { background: var(--teal); }
 .job-dot.failed { background: var(--danger); }
 .progress { height: 3px; margin: 8px 0; overflow: hidden; border-radius: 3px; background: #292c36; }
 .progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7556d8, #a888ff); transition: width .2s; }
-.candidate-item { margin-top: 7px; display: flex; align-items: center; gap: 5px; }
-.candidate-item > div { min-width: 0; flex: 1; display: flex; flex-direction: column; }
-.candidate-item strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.candidate-item small { color: var(--quiet); font-size: 8px; }
-.candidate-item button { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--muted); background: #22252e; }
-.candidate-item button:hover { color: white; background: #353943; }
-.candidate-play { color: #d8ceff !important; background: #30264c !important; font-size: 8px; }
-.candidate-item.accepted { opacity: .7; }.candidate-item.rejected { opacity: .48; }
 .job-error { color: #e88e98; font-size: 8px; line-height: 1.4; }
 .plugin-row { min-height: 40px; padding: 5px; display: flex; align-items: center; gap: 8px; border-radius: 7px; }
 .plugin-row:hover { background: #1b1e27; }
@@ -445,7 +412,7 @@ button.primary.subtle { background: #332a50; color: #d8ceff; }
 .job-card.failed { border-color: #563038; }
 .job-card > header { display: flex; align-items: center; gap: 7px; }
 .job-icon { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: 7px; color: #a594e7; background: #28223c; }
-.job-icon.approval { color: #e7af65; background: #3a2c1d; }.job-icon.generation { color: #bdaaff; }.job-icon.render { color: #79d8cc; background: #19332f; }
+.job-icon.approval { color: #e7af65; background: #3a2c1d; }.job-icon.render { color: #79d8cc; background: #19332f; }
 .job-card header > div { min-width: 0; flex: 1; display: flex; flex-direction: column; }.job-card header strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.job-card header small { margin-top: 3px; color: #696d79; font-size: 7px; }.job-card header em { color: #737785; font-size: 8px; font-style: normal; }
 .approval-card { margin: 8px -1px 0; padding: 8px; border: 1px solid #594325; border-radius: 7px; background: #271e15; }.approval-card p { margin: 0 0 7px; color: #d2b68e; font-size: 8px; line-height: 1.45; }.approval-card > div { display: flex; gap: 4px; justify-content: end; }.approval-card button { padding: 5px 6px; border-radius: 5px; color: #b7a78e; background: #35291c; font-size: 7px; }.approval-card button.primary { color: #21180d; background: #d0a35e; }
 .cancel-job { margin-top: 7px; display: flex; align-items: center; gap: 4px; color: #9a7076; font-size: 7px; }
@@ -502,5 +469,7 @@ button.primary.subtle { background: #332a50; color: #d8ceff; }
   .transport-toggles { display: none; }
   .welcome { grid-template-columns: 1fr; align-items: start; }.welcome-modes { display: none; }
 }
+
+.agent-setup-result.one-time { border-color: #594a75; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; } }

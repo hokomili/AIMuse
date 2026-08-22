@@ -42,6 +42,35 @@ describe('project folder and portable pack persistence', () => {
     expect(await readFile(path, 'utf8')).toBe('{"valid":true}');
   });
 
+  it('syncs the containing directory only after the atomic rename is visible', async () => {
+    const path = join(root, 'durable.json');
+    const observations: string[] = [];
+    await atomicWriteFile(path, '{"durable":true}', undefined, {
+      syncDirectory: async (directory) => {
+        observations.push(directory);
+        expect(await readFile(path, 'utf8')).toBe('{"durable":true}');
+      },
+    });
+    expect(observations).toEqual([root]);
+  });
+
+  it('can stage outside a strict authority directory and syncs both rename directories', async () => {
+    const authority = join(root, 'authority');
+    const staging = join(root, 'staging');
+    const path = join(authority, 'protected.json');
+    const observations: string[] = [];
+    await atomicWriteFile(path, '{"protected":true}', undefined, {
+      temporaryDirectory: staging,
+      syncDirectory: async (directory) => {
+        observations.push(directory);
+        expect(await readFile(path, 'utf8')).toBe('{"protected":true}');
+      },
+    });
+    expect(observations).toEqual([authority, staging]);
+    expect(await readdir(authority)).toEqual(['protected.json']);
+    expect(await readdir(staging)).toEqual([]);
+  });
+
   it.each([
     ['interrupted', true],
     ['silently truncated', false],

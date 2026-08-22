@@ -2,6 +2,7 @@
 #include "midi_port_registry.hpp"
 #include "protocol.hpp"
 #include "realtime_playback.hpp"
+#include "windows_midi_discovery.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -68,14 +69,13 @@ std::string playback_features_json() {
 #endif
 }
 
-std::string midi_discovery_json(const aimuse::midi::PortRegistry& ports, const bool backend_connected) {
-  const auto snapshot = ports.snapshot();
-  std::string result = "{\"backendConnected\":" + std::string(backend_connected ? "true" : "false") +
-    ",\"generation\":" + std::to_string(snapshot.generation) + ",\"ports\":[";
-  const auto port_count = backend_connected ? snapshot.ports.size() : 0U;
+std::string midi_discovery_json(const aimuse::midi::AdapterDiscoveryStatus& discovery) {
+  std::string result = "{\"backendConnected\":" + std::string(discovery.backend_connected ? "true" : "false") +
+    ",\"generation\":" + std::to_string(discovery.snapshot.generation) + ",\"ports\":[";
+  const auto port_count = discovery.snapshot.ports.size();
   for (std::size_t index = 0U; index < port_count; ++index) {
     if (index != 0U) result += ',';
-    const auto& port = snapshot.ports[index];
+    const auto& port = discovery.snapshot.ports[index];
     result += "{\"id\":\"" + aimuse::protocol::escape(port.id) + "\",\"direction\":\"";
     result += port.direction == aimuse::midi::PortDirection::input ? "input\"}" : "output\"}";
   }
@@ -106,7 +106,11 @@ int main(const int argc, char* argv[]) {
 
   EngineState state;
   aimuse::audio::RealtimePlayback playback(parsed_options.options.playback_mode);
+  aimuse::midi::WindowsRuntimeApartment midi_apartment;
   aimuse::midi::PortRegistry midi_ports;
+  aimuse::midi::WindowsMidiDiscoveryAdapter midi_discovery(midi_ports, midi_apartment);
+  const bool midi_discovery_started = midi_discovery.start();
+  (void)midi_discovery_started;
   std::string line;
   while (std::getline(std::cin, line)) {
     const auto id = aimuse::protocol::string_field(line, "id").value_or("unknown");
@@ -126,7 +130,7 @@ int main(const int argc, char* argv[]) {
         std::string(aimuse::audio::playback_mode_name(playback.requested_mode())) + "\",\"effectivePlaybackMode\":\"" +
         std::string(effective_playback_mode_name(playback)) + "\",\"sampleFormat\":\"float32\",\"realtimeBackendReady\":" +
         (playback.ready() ? "true" : "false") + ",\"sampleRate\":" + std::to_string(playback.sample_rate()) +
-        ",\"latencySamples\":" + std::to_string(playback.latency_samples()) + ",\"midiDiscovery\":" + midi_discovery_json(midi_ports, false) + ",\"diagnostic\":\"" +
+        ",\"latencySamples\":" + std::to_string(playback.latency_samples()) + ",\"midiDiscovery\":" + midi_discovery_json(midi_discovery.snapshot()) + ",\"diagnostic\":\"" +
         aimuse::protocol::escape(playback.diagnostic()) + "\",\"features\":" + playback_features_json() + "}";
       std::cout << aimuse::protocol::success(id, result) << '\n' << std::flush;
       continue;

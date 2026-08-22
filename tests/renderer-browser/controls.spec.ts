@@ -2,7 +2,6 @@ import { expect, test, type Page } from '@playwright/test';
 import { createProject, type AsyncJob } from '@aimuse/core';
 import { createServer, type ViteDevServer } from 'vite';
 import { resolve } from 'node:path';
-import type { GenerationJobResult } from '../../src/common/generation';
 import type { WorkspaceSnapshot } from '../../src/common/contracts';
 
 let server: ViteDevServer;
@@ -26,15 +25,6 @@ function snapshot(empty = false, waitingApproval = false): WorkspaceSnapshot {
     kind: 'audition', name: 'Audition fixture.wav', mimeType: 'audio/wav', sha256: 'b'.repeat(64), byteLength: 384_044,
     storage: 'managed-cache', sampleRate: 48_000, channels: 2, durationSamples: 96_000, source: 'render',
   };
-  const candidateJob: AsyncJob<GenerationJobResult> = {
-    id: 'generation-job_ui', ownerActorId: 'human-local', projectId: project.id, kind: 'generation', status: 'completed', progress: 1,
-    message: 'Candidate ready.', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), cancellable: false,
-    result: {
-      request: { projectId: project.id, provider: 'elevenlabs', model: 'music_v1', kind: 'music', prompt: 'Fixture', instrumental: true, durationMs: 3_000, resultCount: 1, referenceAssetIds: [], outputFormat: 'mp3', rightsDeclaration: 'original', providerOptions: {} },
-      candidates: [{ id: 'candidate_ui', asset: { id: 'asset_ui', revision: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), createdBy: 'human-local', updatedBy: 'human-local', kind: 'audio', name: 'Generated fixture.mp3', mimeType: 'audio/mpeg', sha256: 'a'.repeat(64), byteLength: 32, storage: 'managed-cache', source: 'generation' }, managedPath: 'fixture.mp3', providerMetadata: {} }],
-      acceptedCandidateIds: [], rejectedCandidateIds: [],
-    },
-  };
   const approvalJob: AsyncJob = {
     id: 'approval-job_ui', ownerActorId: 'agent-ui', projectId: project.id, kind: 'render', status: 'waiting-for-user', progress: 0,
     message: 'Export requires approval.', createdAt: timestamp, updatedAt: timestamp, cancellable: true,
@@ -44,20 +34,17 @@ function snapshot(empty = false, waitingApproval = false): WorkspaceSnapshot {
     projects: empty ? [] : [{ id: project.id, name: project.name, kind: project.kind, dirty: true, revision: project.revision }],
     activeProjectId: empty ? undefined : project.id,
     activeProject: empty ? undefined : project,
-    jobs: empty ? [] : [waitingApproval ? approvalJob : candidateJob], plugins: [], locks: [],
-    mcp: { running: true, url: 'http://127.0.0.1:48000/mcp', port: 48_000, tokenHint: 'abcd', sessions: [] },
+    jobs: empty || !waitingApproval ? [] : [approvalJob], plugins: [], locks: [],
+    mcp: { running: true, connectionMode: 'stdio-bridge', message: 'Ready for configured external agents.', sessions: [] },
     transport: { status: 'stopped', tick: 0, sample: 0, loopEnabled: false, loopStartTick: 0, loopEndTick: 15_360, metronomeEnabled: true, cpuLoad: 0, xruns: 0, latencySamples: 256, graphRevision: 0 },
     selection: undefined, canUndo: true, canRedo: true,
   };
 }
 
-interface ProviderFixture { configured?: boolean; failure?: string }
-
-async function openEditor(page: Page, empty = false, providerFixture: ProviderFixture = {}, waitingApproval = false): Promise<void> {
-  const initial = { state: snapshot(empty, waitingApproval), providerConfigured: providerFixture.configured ?? true, providerFailure: providerFixture.failure };
+async function openEditor(page: Page, empty = false, waitingApproval = false): Promise<void> {
+  const initial = { state: snapshot(empty, waitingApproval) };
   await page.addInitScript((seed) => {
     const state = structuredClone(seed.state);
-    let providerConfigured = seed.providerConfigured;
     let eventListener: ((event: unknown) => void) | undefined;
     const calls: Array<{ name: string; args: unknown[] }> = [];
     Object.defineProperty(window, '__aimuseCalls', { value: calls, configurable: true });
@@ -101,19 +88,14 @@ async function openEditor(page: Page, empty = false, providerFixture: ProviderFi
       transport: async (action: string, options?: Record<string, unknown>) => { record('transport', action, options); if (action === 'loop') state.transport.loopEnabled = Boolean(options?.loopEnabled); if (action === 'seek') state.transport.tick = Number(options?.tick ?? 0); state.transport.status = action === 'play' ? 'playing' : action === 'pause' ? 'paused' : action === 'stop' ? 'stopped' : state.transport.status; eventListener?.({ type: 'transport', state: structuredClone(state.transport) }); return structuredClone(state.transport); },
       stopAgents: async () => 0,
       getEngineStatus: async () => ({ running: true, uiAttached: true, startsAtLogin: false, startAtLoginSupported: true, mode: 'interactive', audio: { mode: 'fallback', connected: false, driver: 'offline' } }),
-      setEngineStartAtLogin: async () => ({}), getMcpCredentials: async () => ({ url: state.mcp.url, token: 'fixture-token' }),
-      configureAgentClient: async (clientId: string) => { record('configureAgentClient', clientId); return { status: 'manual', clientId, clientName: 'Fixture client', message: 'Fixture connection instructions.', restartRequired: false, restartInstruction: 'Reconnect.', documentationUrl: 'https://example.test/mcp', setupSnippet: clientId === 'generic' ? '{ "transport": "streamable-http" }' : undefined }; },
-      configureCodex: async () => ({ status: 'manual', clientId: 'codex', clientName: 'Codex', message: 'Fixture connection instructions.', restartRequired: false, restartInstruction: 'Reconnect.', documentationUrl: 'https://example.test/mcp' }),
+      setEngineStartAtLogin: async () => ({}),
+      getAgentClientSettings: async (clientId: string) => { record('getAgentClientSettings', clientId); return { status: 'one-time', clientId, clientName: 'Fixture client', message: 'Fixture one-time connection instructions.', restartRequired: true, restartInstruction: 'Restart once.', documentationUrl: 'https://example.test/mcp', setupSnippet: '{ "transport": "stdio", "command": "/Applications/AIMuse" }' }; },
       showApplicationMenu: async () => { record('showApplicationMenu'); },
       mediaUrl: (projectId: string, assetId: string) => `aimuse://media/project/${projectId}/${assetId}`,
-      candidateMediaUrl: (jobId: string, candidateId: string) => `aimuse://media/candidate/${jobId}/${candidateId}`,
       resolveJob: async () => undefined, cancelJob: async () => undefined,
       importMedia: async () => ({ imported: 0, warnings: [] }), exportProject: async () => ({ exported: false, cancelled: true, warnings: [] }),
       createCheckpoint: async () => ({ checkpointId: 'checkpoint_ui' }), restoreCheckpoint: async () => ({ status: 'committed' }),
-      scanPlugins: async () => ({ jobId: 'scan_ui' }), generationStart: async () => ({ jobId: 'generation_ui' }),
-      generationAccept: async () => ({ status: 'committed' }), generationReject: async () => undefined,
-      setProviderCredential: async (provider: string, value: string) => { record('setProviderCredential', provider, value); if (seed.providerFailure) throw new Error(seed.providerFailure); providerConfigured = Boolean(value); return { saved: true }; },
-      getProviderCapabilities: async () => { record('getProviderCapabilities'); return [{ provider: 'elevenlabs', configured: providerConfigured, experimental: false, models: [{ id: 'music_v1', label: 'Music v1', capabilities: ['text-to-music'], minDurationMs: 3_000, maxDurationMs: 600_000, formats: ['mp3'], costKnownBeforeRequest: false }] }]; },
+      scanPlugins: async () => ({ jobId: 'scan_ui' }),
       installAuthorityPolicy: async () => ({ installed: true }), replayTrace: async () => ({ replaying: true }),
       onEvent: (callback: (event: unknown) => void) => { eventListener = callback; return () => { eventListener = undefined; }; },
       onNewProjectRequested: () => () => undefined,
@@ -133,10 +115,6 @@ async function openEditor(page: Page, empty = false, providerFixture: ProviderFi
 
 async function callNames(page: Page): Promise<string[]> {
   return page.evaluate(() => (window as unknown as { __aimuseCalls: Array<{ name: string }> }).__aimuseCalls.map((entry) => entry.name));
-}
-
-async function calls(page: Page, name: string): Promise<Array<{ name: string; args: unknown[] }>> {
-  return page.evaluate((target) => (window as unknown as { __aimuseCalls: Array<{ name: string; args: unknown[] }> }).__aimuseCalls.filter((entry) => entry.name === target), name);
 }
 
 async function transactionLabels(page: Page): Promise<string[]> {
@@ -201,12 +179,9 @@ test('wires the main studio controls to durable UI actions', async ({ page }) =>
   await expect.poll(() => callNames(page)).toContain('closeProject');
 });
 
-test('previews generation candidates and opens agent connection without a project', async ({ page }) => {
+test('previews project media and opens agent connection without a project', async ({ page }) => {
   await openEditor(page);
   await page.getByRole('button', { name: 'Preview Audition fixture.wav' }).click();
-  await expect.poll(() => callNames(page)).toContain('audio.play');
-  await page.getByRole('button', { name: 'Generate' }).first().click();
-  await page.getByRole('button', { name: 'Preview Generated fixture.mp3' }).click();
   await expect.poll(() => callNames(page)).toContain('audio.play');
 
   await page.reload();
@@ -216,11 +191,12 @@ test('previews generation candidates and opens agent connection without a projec
   const client = page.getByLabel('MCP client');
   await expect(client.locator('option')).toHaveText(['Codex', 'Claude Code', 'OpenCode', 'Antigravity', 'Other MCP client']);
   await client.selectOption('antigravity');
-  await page.getByRole('button', { name: 'Configure Antigravity' }).click();
-  await expect(page.getByText('Fixture connection instructions.')).toBeVisible();
-  await expect.poll(() => callNames(page)).toContain('configureAgentClient');
-  await page.getByRole('button', { name: 'Reveal token' }).click();
-  await expect(page.getByText('fixture-token')).toBeVisible();
+  await page.getByRole('button', { name: 'Show Antigravity one-time setup' }).click();
+  await expect(page.getByText('Fixture one-time connection instructions.')).toBeVisible();
+  await expect.poll(() => callNames(page)).toContain('getAgentClientSettings');
+  await expect(page.getByRole('button', { name: 'Copy one-time setup' })).toBeVisible();
+  await expect(page.getByText('Automatic after AIMuse launches')).toBeVisible();
+  await expect(page.getByText(/bearer token/i)).toHaveCount(0);
 });
 
 test('exposes distinct Save As, clip move/trim/split, and song-structure workflows', async ({ page }) => {
@@ -276,7 +252,7 @@ test('holds a completed clip gesture for a visible bounded agent-conflict window
 });
 
 test('renders one admitted human approval request with one decision surface', async ({ page }) => {
-  await openEditor(page, false, {}, true);
+  await openEditor(page, false, true);
   await expect(page.locator('.right-toggle em')).toHaveText('1');
   await page.locator('.right-tabs').getByRole('button', { name: /^Jobs/ }).click();
   await expect(page.locator('.job-card.waiting-for-user')).toHaveCount(1);
@@ -286,50 +262,9 @@ test('renders one admitted human approval request with one decision surface', as
   await expect(page.getByRole('button', { name: 'Allow for session' })).toHaveCount(1);
 });
 
-test('configures, rotates, removes, and safely rejects provider credentials through the renderer setter', async ({ page, context }) => {
-  const first = 'fixture-renderer-provider-v1-never-persist';
-  const rotated = 'fixture-renderer-provider-v2-never-persist';
-  await openEditor(page, false, { configured: false });
-  await page.getByRole('button', { name: 'Generate' }).first().click();
-  await expect(page.getByText('Add a provider credential before generating.')).toBeVisible();
-
-  await page.getByRole('button', { name: 'Configure' }).click();
-  const credential = page.getByPlaceholder('elevenlabs API key');
-  await credential.fill(first);
-  await page.locator('.provider-credential').getByRole('button', { name: 'Save' }).click();
-  await expect.poll(() => calls(page, 'setProviderCredential')).toEqual([{ name: 'setProviderCredential', args: ['elevenlabs', first] }]);
-  await expect(credential).toBeHidden();
-  await expect(page.getByText('Credential stored in operating-system protected storage.')).toBeVisible();
-  await expect(page.locator('body')).not.toContainText(first);
-
-  await page.getByRole('button', { name: 'Manage' }).click();
-  await page.getByPlaceholder('elevenlabs API key').fill(rotated);
-  await page.locator('.provider-credential').getByRole('button', { name: 'Save' }).click();
-  await expect.poll(() => calls(page, 'setProviderCredential')).toHaveLength(2);
-  expect((await calls(page, 'setProviderCredential'))[1]?.args).toEqual(['elevenlabs', rotated]);
-  await expect(page.locator('body')).not.toContainText(rotated);
-
-  await page.getByRole('button', { name: 'Manage' }).click();
-  await page.getByRole('button', { name: 'Remove' }).click();
-  await expect.poll(() => calls(page, 'setProviderCredential')).toHaveLength(3);
-  expect((await calls(page, 'setProviderCredential'))[2]?.args).toEqual(['elevenlabs', '']);
-  await expect(page.getByText('Add a provider credential before generating.')).toBeVisible();
-
-  const denial = 'macOS Keychain-backed protected storage is unavailable.';
-  const rejected = 'fixture-renderer-denied-provider-never-persist';
-  const deniedPage = await context.newPage();
-  try {
-    await openEditor(deniedPage, false, { configured: false, failure: denial });
-    await deniedPage.getByRole('button', { name: 'Generate' }).first().click();
-    await deniedPage.getByRole('button', { name: 'Configure' }).click();
-    const deniedCredential = deniedPage.getByPlaceholder('elevenlabs API key');
-    await deniedCredential.fill(rejected);
-    await deniedPage.locator('.provider-credential').getByRole('button', { name: 'Save' }).click();
-    await expect(deniedCredential).toHaveValue('');
-    await expect(deniedPage.getByText(denial)).toBeVisible();
-    await expect(deniedPage.locator('body')).not.toContainText(rejected);
-    await expect(deniedPage.getByText('Add a provider credential before generating.')).toBeVisible();
-  } finally {
-    await deniedPage.close();
-  }
+test('does not expose built-in generation or provider credential controls', async ({ page }) => {
+  await openEditor(page);
+  await expect(page.getByRole('button', { name: 'Generate', exact: true })).toHaveCount(0);
+  await expect(page.getByText(/provider credential/i)).toHaveCount(0);
+  await expect(page.getByText(/API key/i)).toHaveCount(0);
 });

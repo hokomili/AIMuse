@@ -10,7 +10,6 @@ import {
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
-import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
 import { RecoveryJournal } from '../../src/main/journal';
 import { McpHost } from '../../src/main/mcp-host';
 import { MediaManager } from '../../src/main/media-manager';
@@ -50,7 +49,7 @@ describe('headless authenticated MCP export cancellation', () => {
   let authority: AuthorityManager;
   let host: McpHost;
   let url: string;
-  const token = 'export-cancellation-token-0123456789';
+  const token = Buffer.alloc(32, 0x38).toString('base64url');
   const clients: TestClient[] = [];
   const wav = encodeFloat32Wav([new Float32Array(2_048).fill(0.2), new Float32Array(2_048).fill(-0.2)], 48_000);
 
@@ -68,23 +67,16 @@ describe('headless authenticated MCP export cancellation', () => {
     const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
     const policy: AuthorityPolicy = {
       version: 1, id: 'headless-export-policy', issuedAt, expiresAt, maxRuntimeMinutes: 60,
-      budget: { currency: 'USD', maxSpendMinor: 0, maxGenerationRequests: 0, maxUnknownCostRequests: 0 },
-      providers: {}, readRoots: [root], writeRoots: [root], overwritePaths: [], pluginAllowlist: [],
+      readRoots: [root], writeRoots: [root], overwritePaths: [], pluginAllowlist: [],
       allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
     };
     await expect(authority.install(policy)).resolves.toEqual({ installed: true });
     const media = new MediaManager(join(root, 'managed'), projects, authority);
     const plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
-    const credentials: ProviderCredentials = {
-      get: async () => undefined,
-      set: async () => undefined,
-      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
-    };
-    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
     const exports = new ExportManager(projects, audio, authority);
     host = new McpHost({
       appVersion: 'test', profileId: '8'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'),
-      cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, generation, exports,
+      cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, exports,
     });
     await projects.initialize();
     await plugins.initialize();

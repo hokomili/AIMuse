@@ -13,6 +13,7 @@ export { assertPrivateWindowsAcl } from './qa-private-root.mjs';
 const INSTANCE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PROFILE_ID = /^[0-9a-f]{64}$/i;
 const SHA256 = /^[0-9a-f]{64}$/i;
+const EPHEMERAL_MCP_TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const PRIVATE_CREDENTIAL_KEYS = new Set(['apikey', 'authorization', 'password', 'secret', 'sessionid', 'token', 'tokenhint']);
 
 const HELP = `AIMuse isolated headless bootstrap/restart acceptance
@@ -218,6 +219,12 @@ export function validateRestartIdentity(firstValue, secondValue) {
   return { pidChanged: true, instanceChanged: true, profileRetained: true };
 }
 
+export function validateEphemeralAuthority(firstCredential, secondCredential) {
+  if (!EPHEMERAL_MCP_TOKEN.test(firstCredential) || !EPHEMERAL_MCP_TOKEN.test(secondCredential)) throw new Error('Each headless cycle must receive a 32-byte base64url MCP authority token.');
+  if (firstCredential === secondCredential) throw new Error('Headless restart reused engine-scoped MCP authority.');
+  return { authorityRotated: true };
+}
+
 async function assertNoCredentialBytes(root, credentials) {
   const needles = [...new Set(credentials.filter((value) => typeof value === 'string' && value.length))].map((value) => Buffer.from(value));
   const visit = async (path) => {
@@ -369,22 +376,22 @@ async function writeReport(path, summary) {
 
 - **PASS** for exact executable SHA-256 \`${summary.executable.sha256}\` at \`${summary.executable.path}\`.
 ${summary.packageSubject ? `- Package subject manifest \`${summary.packageSubject.manifestPath}\`, digest \`${summary.packageSubject.manifestSha256}\`, subject identity \`${summary.packageSubject.subjectIdentitySha256}\`.` : ''}
-- This is a test-owned headless lifecycle acceptance, not a Luna/high certificate and not evidence for provider credentials, provider traffic, real UI, Electron renderer serialization, or Computer Use.
+- This is a test-owned headless lifecycle acceptance, not a Luna/high certificate and not evidence for real UI, Electron renderer serialization, or Computer Use.
 
 ## Evidence
 
 - Fresh protected run root: \`${summary.runRoot}\`.
 - The root was absent before creation; ${rootProtection} before any localhost bearer token existed.
-- Authority policy installed with zero provider/generation budget and the exact run-owned trusted folder was returned by both private connection handoffs.
+- The exact run-owned trusted folder was returned by both private connection handoffs.
 ${cycleLines}
-- Restart used the same isolated profile identity but a distinct PID and fresh engine instance UUID. Each cycle authenticated from its newly read private handoff; the protected localhost token was ${summary.restart.credentialDisposition} across restart, and neither its value nor a derived hash is retained in this report.
-- After both graceful stops, connection and MCP client state were credential-redacted, neither live token occurred anywhere below the run root, the provider credential file was absent, and the exact executable hash was unchanged.
+- Restart used the same isolated profile identity but a distinct PID, fresh engine instance UUID, and fresh engine-scoped MCP authority. Each cycle authenticated from its newly read private handoff; neither authority value nor a derived hash is retained in this report.
+- After both graceful stops, connection and MCP client state were credential-redacted, neither live token occurred anywhere below the run root, and the exact executable hash was unchanged.
 - ${windowBoundary} The harness never requested show/attach and never acquired or injected desktop input.
 
 ## Boundaries
 
-- This test-owned run does not replace or amend any formal independent Computer Use report and does not earn real provider-safeStorage/Electron leakage assertions.
-- No provider was configured, no provider/external/paid request occurred, and no real user/global configuration or credential was read.
+- This test-owned run does not replace or amend any formal independent Computer Use report.
+- No real user/global configuration or credential was read.
 - No force termination or unrelated-process control was used.
 `;
   await writeFile(path, report, { encoding: 'utf8', mode: 0o600 });
@@ -423,22 +430,19 @@ async function main() {
     issuedAt: issuedAt.toISOString(),
     expiresAt: new Date(issuedAt.getTime() + 2 * 60 * 60_000).toISOString(),
     maxRuntimeMinutes: 120,
-    budget: { currency: 'USD', maxSpendMinor: 0, maxGenerationRequests: 0, maxUnknownCostRequests: 0 },
-    providers: {}, readRoots: [], writeRoots: [], overwritePaths: [], pluginAllowlist: [],
+    readRoots: [], writeRoots: [], overwritePaths: [], pluginAllowlist: [],
     allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
   };
   await atomicWriteJsonEvidence(authorityPolicy, policy, { validate: (value) => {
-    if (value.id !== policy.id || value.budget?.maxSpendMinor !== 0 || Object.keys(value.providers ?? {}).length) throw new Error('Invalid test-owned authority policy.');
+    if (value.id !== policy.id || !Array.isArray(value.readRoots) || !Array.isArray(value.writeRoots)) throw new Error('Invalid test-owned authority policy.');
   } });
   await inspectPrivatePath(authorityPolicy, privateRoot);
 
   const first = await runCycle({ cycleName: 'cycle-1', exe, profile, authorityPolicy, trustedFolder, runRoot, privateRoot, packageSubject });
   const restartPackageSubject = await reverifyHeadlessPackageSubjectAtRestart({ exe, request: packageSubjectRequest, before: packageSubject });
   const second = await runCycle({ cycleName: 'cycle-2', exe, profile, authorityPolicy, trustedFolder, runRoot, privateRoot, packageSubject: restartPackageSubject });
-  const restart = validateRestartIdentity(first.privateSummary, second.privateSummary);
-  const tokenContinuity = first.credential === second.credential;
+  const restart = { ...validateRestartIdentity(first.privateSummary, second.privateSummary), ...validateEphemeralAuthority(first.credential, second.credential) };
   await assertNoCredentialBytes(runRoot, [first.credential, second.credential]);
-  if (await pathExists(join(profile, 'credentials', 'providers.json'))) throw new Error('Headless acceptance unexpectedly created provider credential state.');
   const finalHash = await sha256(exe);
   if (finalHash !== expectedSha256) throw new Error('Executable hash changed during headless acceptance.');
   const finalProcesses = await relevantProcesses();
@@ -451,10 +455,10 @@ async function main() {
     executable: { path: exe, sha256: finalHash, byteLength: (await stat(exe)).size },
     ...(packageSubject ? { packageSubject } : {}),
     privateRoot: { platform: privateRoot.platform, owner: privateRoot.owner, allowedPrincipals: privateRoot.allowedPrincipals, inheritedFromBroadParent: privateRoot.inheritedFromBroadParent },
-    authority: { policy: authorityPolicy, trustedFolder, providersConfigured: false, maximumSpendMinor: 0 },
+    authority: { policy: authorityPolicy, trustedFolder },
     cycles: [first.privateSummary, second.privateSummary],
-    restart: { ...restart, credentialDisposition: tokenContinuity ? 'reused' : 'rotated' },
-    cleanup: { relevantProcesses: 0, liveCredentialBytesBelowRunRoot: 0, providerCredentialFilePresent: false, forceTerminationUsed: false },
+    restart,
+    cleanup: { relevantProcesses: 0, liveCredentialBytesBelowRunRoot: 0, forceTerminationUsed: false },
   };
   await atomicWriteJsonEvidence(join(runRoot, 'summary.json'), summary, { validate: (value) => {
     assertCredentialFreeEvidence(value, 'Headless acceptance summary');

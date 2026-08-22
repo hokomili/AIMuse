@@ -23,8 +23,6 @@ describe('AuthorityManager', () => {
     const now = Date.now();
     return {
       version: 1, id: 'test-policy', issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), maxRuntimeMinutes: 5,
-      budget: { currency: 'USD', maxSpendMinor: 500, maxGenerationRequests: 2, maxUnknownCostRequests: 1 },
-      providers: { elevenlabs: { enabled: true, models: ['music_v1'] } },
       readRoots: [approved], writeRoots: [approved], overwritePaths: [overwrite], pluginAllowlist: ['vst3:allowed'],
       allowMicrophone: false, allowMidiInput: true, allowMidiOutput: false,
     };
@@ -38,18 +36,6 @@ describe('AuthorityManager', () => {
     const sibling = join(root, 'approved-escape', 'file.wav');
     expect((await authority.file(sibling, 'write', false)).allowed).toBe(false);
     expect((await authority.file(join(approved, 'other.wav'), 'write', true)).approvalKind).toBe('overwrite');
-  });
-
-  it('exhausts generation request, spend, and unknown-cost limits without implicit grants', async () => {
-    const authority = new AuthorityManager();
-    await authority.install(policy());
-    expect(authority.generation('elevenlabs', 'music_v1', 300).allowed).toBe(true);
-    authority.consumeGeneration(300);
-    expect(authority.generation('elevenlabs', 'music_v1', 250).allowed).toBe(false);
-    expect(authority.generation('stability', 'stable-audio-2.5', 10).allowed).toBe(false);
-    expect(authority.generation('elevenlabs', 'music_v1').allowed).toBe(true);
-    authority.consumeGeneration();
-    expect(authority.generation('elevenlabs', 'music_v1').allowed).toBe(false);
   });
 
   it('denies microphone and unlisted plug-ins by default', async () => {

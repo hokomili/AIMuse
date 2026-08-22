@@ -7,7 +7,6 @@ import { type Actor, type AsyncJob, type AuthorityPolicy, type PluginDescriptor 
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
-import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
 import { RecoveryJournal } from '../../src/main/journal';
 import { McpHost } from '../../src/main/mcp-host';
 import { MediaManager } from '../../src/main/media-manager';
@@ -52,7 +51,7 @@ describe('headless authenticated plug-in scan terminality', () => {
   let findCandidates: ReturnType<typeof vi.fn<(roots: string[]) => Promise<string[]>>>;
   let scanModule: ReturnType<typeof vi.fn<(executable: string, pluginPath: string, timeoutMs: number) => Promise<PluginScannerOutput[]>>>;
   let persistCatalog: ReturnType<typeof vi.fn<(catalogPath: string, payload: string) => Promise<void>>>;
-  const token = 'plugin-scan-cancellation-token-0123456789';
+  const token = Buffer.alloc(32, 0x3a).toString('base64url');
   const clients: TestClient[] = [];
   const retainedPlugin: PluginDescriptor = {
     id: 'clap:retained-catalog', format: 'clap', name: 'Retained Catalog Plug-in', vendor: 'Fixture', version: '1',
@@ -76,7 +75,7 @@ describe('headless authenticated plug-in scan terminality', () => {
     const now = Date.now();
     const policy: AuthorityPolicy = {
       version: 1, id: 'plugin-scan-cancellation-authority', issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), maxRuntimeMinutes: 5,
-      budget: { currency: 'USD', maxSpendMinor: 0, maxGenerationRequests: 0, maxUnknownCostRequests: 0 }, providers: {}, readRoots: [root], writeRoots: [], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
+      readRoots: [root], writeRoots: [], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
     };
     await expect(authority.install(policy)).resolves.toEqual({ installed: true });
     const media = new MediaManager(join(root, 'managed'), projects, authority);
@@ -86,16 +85,10 @@ describe('headless authenticated plug-in scan terminality', () => {
     plugins = new PluginManager(catalogPath, 'injected-scanner-never-executed', projects, authority, {
       scannerAvailable: async () => true, findCandidates, scanModule, persistCatalog,
     });
-    const credentials: ProviderCredentials = {
-      get: async () => undefined,
-      set: async () => undefined,
-      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
-    };
-    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
     const exports = new ExportManager(projects, audio, authority);
     host = new McpHost({
       appVersion: 'test', profileId: '7'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'), cacheRoot: join(root, 'managed'),
-      projects, audio, authority, media, plugins, generation, exports,
+      projects, audio, authority, media, plugins, exports,
     });
     await projects.initialize(); await plugins.initialize(); url = (await host.start(token)).url;
   });

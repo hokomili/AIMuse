@@ -284,7 +284,7 @@ describe('QA-10 private-root drift and follow-up TOCTOU guards', () => {
     const server = createServer((request, response) => {
       const authorized = request.headers.authorization === 'Bearer TEST_ONLY_PRIVATE_BEARER';
       requests.push({ method: request.method, url: request.url, authorized });
-      if (request.method === 'GET' && request.url === '/health') {
+      if (request.method === 'GET' && request.url === '/health' && authorized) {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify(healthBody));
         return;
@@ -317,9 +317,9 @@ describe('QA-10 private-root drift and follow-up TOCTOU guards', () => {
     expect(output.okay).toBe(true);
     expect(output.mcpAuthentication).toEqual({ verified: true, httpStatus: 400, result: 'initialization_required' });
     expect(requests).toEqual([
-      { method: 'GET', url: '/health', authorized: false },
+      { method: 'GET', url: '/health', authorized: true },
       { method: 'GET', url: '/mcp', authorized: true },
-      { method: 'GET', url: '/health', authorized: false },
+      { method: 'GET', url: '/health', authorized: true },
     ]);
     expect(dependencies.writeOutput.mock.calls[0][0]).not.toContain('TEST_ONLY_PRIVATE_BEARER');
   });

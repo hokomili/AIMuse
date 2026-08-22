@@ -147,16 +147,17 @@ async function waitForExit(child, timeoutMs = 10_000) {
     child.once('exit', (code) => { globalThis.clearTimeout(timeout); resolveExit(code ?? 0); });
   });
 }
-async function fetchHealth(url) {
+async function fetchHealth(url, token) {
+  if (typeof token !== 'string' || !token) throw new Error('Authenticated health probing requires the private engine authority.');
   const healthUrl = new globalThis.URL(url); healthUrl.pathname = '/health'; healthUrl.search = '';
-  const response = await globalThis.fetch(healthUrl, { signal: globalThis.AbortSignal.timeout(1_500) });
+  const response = await globalThis.fetch(healthUrl, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' }, signal: globalThis.AbortSignal.timeout(1_500) });
   if (!response.ok) throw new Error(`Health endpoint returned ${response.status}.`);
   let body;
   try { body = await response.json(); } catch { throw new Error('Health endpoint did not return JSON.'); }
   return { url: healthUrl.toString(), body };
 }
-async function health(url, expectedPid, expectedInstanceId, expectedProfileId) {
-  const probe = await fetchHealth(url);
+async function health(url, expectedPid, expectedInstanceId, expectedProfileId, token) {
+  const probe = await fetchHealth(url, token);
   return { ...probe, ...validateHealthIdentity(probe.body, expectedPid, expectedInstanceId, expectedProfileId) };
 }
 function isProcessAlive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
@@ -262,7 +263,7 @@ async function waitForConnection(connectionPath, expectedPid, expectedProfileId,
     now: () => Date.now(),
     statConnection: (path) => stat(path),
     readConnection: (path) => readFile(path, 'utf8'),
-    probeHealth: (url, pid, instanceId, profileId) => health(url, pid, instanceId, profileId),
+    probeHealth: (url, pid, instanceId, profileId, token) => health(url, pid, instanceId, profileId, token),
     sleep: (milliseconds) => new Promise((resolveWait) => globalThis.setTimeout(resolveWait, milliseconds)),
   });
 }
@@ -387,7 +388,8 @@ async function guardedInspectStatusProcess(context, pid) {
 }
 async function guardedProbeHealth(context, url, pid, instanceId, profileId) {
   await revalidatePrivateContext(context);
-  return (context.dependencies.probeHealth ?? health)(url, pid, instanceId, profileId);
+  const connection = await readGuardedConnection(context);
+  return (context.dependencies.probeHealth ?? health)(url, pid, instanceId, profileId, connection.token);
 }
 async function guardedProbeMcpAuthentication(context, url, token) {
   await revalidatePrivateContext(context);
@@ -536,7 +538,7 @@ export async function stop(values, dependencies = {}) {
     now: dependencies.now ?? (() => Date.now()),
     sleep: dependencies.sleep ?? ((milliseconds) => new Promise((resolveWait) => globalThis.setTimeout(resolveWait, milliseconds))),
     inspectProcess: (pid) => guardedInspectProcess(context, pid),
-    probeHealth: async (url) => { await revalidatePrivateContext(context); try { return await (dependencies.fetchHealth ?? fetchHealth)(url); } catch { return { unavailable: true }; } },
+    probeHealth: async (url) => { await revalidatePrivateContext(context); try { return await (dependencies.fetchHealth ?? fetchHealth)(url, connection.token); } catch { return { unavailable: true }; } },
     redact: () => redactConnection(context),
   });
   const updated = buildStopManifest(manifest, completion);

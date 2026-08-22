@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { protectedStorageLabel } from '../../src/main/credentials';
 import { profileIdForPath } from '../../src/main/profile-identity';
 import { nativeAudioBackendLabel, nativeAudioDriverForPlatform, nativeExecutableName, profileIdentityInput } from '../../src/main/platform';
 
@@ -12,11 +11,9 @@ describe('desktop platform seams', () => {
     expect(profileIdForPath('/Users/AIMuse', 'darwin')).not.toBe(profileIdForPath('/Users/aimuse', 'darwin'));
   });
 
-  it('declares CoreAudio and Keychain platform boundaries', () => {
+  it('declares native audio platform boundaries', () => {
     expect(nativeAudioDriverForPlatform('win32')).toBe('wasapi');
     expect(nativeAudioDriverForPlatform('darwin')).toBe('coreaudio');
     expect(nativeAudioBackendLabel('darwin')).toBe('CoreAudio');
-    expect(protectedStorageLabel('win32')).toBe('Windows protected storage');
-    expect(protectedStorageLabel('darwin')).toBe('macOS Keychain-backed protected storage');
   });
 });

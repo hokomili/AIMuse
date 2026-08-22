@@ -7,7 +7,6 @@ import { type Actor, type AsyncJob } from '@aimuse/core';
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
-import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
 import { RecoveryJournal } from '../../src/main/journal';
 import { McpHost } from '../../src/main/mcp-host';
 import { MediaManager } from '../../src/main/media-manager';
@@ -47,7 +46,7 @@ describe('headless authenticated approved project-save cancellation', () => {
   let authority: AuthorityManager;
   let host: McpHost;
   let url: string;
-  const token = 'approved-save-cancellation-token';
+  const token = Buffer.alloc(32, 0x3d).toString('base64url');
   const clients: TestClient[] = [];
 
   beforeEach(async () => {
@@ -62,16 +61,10 @@ describe('headless authenticated approved project-save cancellation', () => {
     authority = new AuthorityManager();
     const media = new MediaManager(join(root, 'managed'), projects, authority);
     const plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
-    const credentials: ProviderCredentials = {
-      get: async () => undefined,
-      set: async () => undefined,
-      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
-    };
-    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
     const exports = new ExportManager(projects, audio, authority);
     host = new McpHost({
       appVersion: 'test', profileId: '7'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'),
-      cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, generation, exports,
+      cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, exports,
     });
     await projects.initialize();
     await plugins.initialize();

@@ -124,7 +124,7 @@ try {
   const fuses = await getCurrentFuseWire(executable);
   const expected = new Map([
     [FuseV1Options.RunAsNode, FuseState.DISABLE],
-    [FuseV1Options.EnableCookieEncryption, FuseState.ENABLE],
+    [FuseV1Options.EnableCookieEncryption, FuseState.DISABLE],
     [FuseV1Options.EnableNodeOptionsEnvironmentVariable, FuseState.DISABLE],
     [FuseV1Options.EnableNodeCliInspectArguments, FuseState.DISABLE],
     [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseState.ENABLE],

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HUMAN_ACTOR, createId, nowIso, type Actor, type AsyncJob, type ProjectOperation, type ProjectTransaction } from '@aimuse/core';
+import { HUMAN_ACTOR, createId, entityBase, nowIso, validateProjectIntegrity, type Actor, type AsyncJob, type Checkpoint, type GenerationProvenance, type MediaAsset, type ProjectOperation, type ProjectTransaction } from '@aimuse/core';
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { RecoveryJournal } from '../../src/main/journal';
-import { readProjectFolder } from '../../src/main/persistence';
+import { readProjectFolder, saveProjectFolder } from '../../src/main/persistence';
 import { ProjectService } from '../../src/main/project-service';
 import { TransactionTraceStore } from '../../src/main/trace-store';
 import type { WorkspaceEvent } from '../../src/common/contracts';
@@ -85,6 +86,173 @@ describe('ProjectService collaboration invariants', () => {
     const project = projects.getActiveProject()!;
     return { id: createId('tx'), clientOperationId, projectId: project.id, actor, label, createdAt: nowIso(), operations, checkpointPolicy: 'none' };
   }
+
+  async function openHistoricalProvenanceProject(): Promise<{ projectId: string; provenanceId: string }> {
+    const project = projects.getActiveProject()!;
+    const source = join(root, 'historical-generated.wav');
+    const bytes = Buffer.from('historical generated fixture\n');
+    await writeFile(source, bytes);
+    const asset: MediaAsset = {
+      ...entityBase('asset', HUMAN_ACTOR), kind: 'audio', name: 'Historical generated asset', mimeType: 'audio/wav', sha256: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.byteLength,
+      storage: 'linked', externalPath: source, source: 'generation',
+    };
+    const provenance: GenerationProvenance = {
+      ...entityBase('provenance', HUMAN_ACTOR), assetId: asset.id, provider: 'stability', model: 'legacy-model', kind: 'music',
+      prompt: 'Legacy project metadata', referenceAssetIds: [], rightsDeclaration: 'original', transformations: ['authored-before-removal'], experimental: false,
+    };
+    project.assets[asset.id] = asset;
+    project.provenance[provenance.id] = provenance;
+    const saved = await saveProjectFolder(project, join(root, 'historical-provenance'), { appVersion: 'test' });
+    await expect(projects.open([saved.projectPath])).resolves.toEqual({ opened: [project.id], warnings: [] });
+    expect(projects.getActiveProject()!.provenance[provenance.id]).toEqual(provenance);
+    return { projectId: project.id, provenanceId: provenance.id };
+  }
+
+  it('keeps historical generation metadata readable but rejects every live compatibility write', async () => {
+    const before = projects.getActiveProject()!;
+    const provenance = {
+      ...entityBase('provenance', HUMAN_ACTOR), assetId: createId('asset'), provider: 'stability' as const, model: 'legacy-model', kind: 'music' as const,
+      prompt: 'Legacy project metadata', referenceAssetIds: [], rightsDeclaration: 'original' as const, transformations: [], experimental: false,
+    };
+
+    await expect(projects.apply(transaction(HUMAN_ACTOR, [{ kind: 'provenance.register', provenance }]), HUMAN_ACTOR)).resolves.toMatchObject({
+      status: 'conflict', conflict: { retryable: false }, message: expect.stringMatching(/retained only to read and recover/i),
+    });
+    await expect(projects.apply(transaction(HUMAN_ACTOR, [{ kind: 'asset.add', asset: {
+      ...entityBase('asset', HUMAN_ACTOR), kind: 'audio', name: 'Legacy generated asset', mimeType: 'audio/wav', sha256: 'a'.repeat(64), byteLength: 1,
+      storage: 'embedded', source: 'generation',
+    } }]), HUMAN_ACTOR)).resolves.toMatchObject({
+      status: 'conflict', conflict: { retryable: false }, message: expect.stringMatching(/historical generation metadata/i),
+    });
+    expect(projects.getActiveProject()).toMatchObject({ revision: before.revision, provenance: {} });
+  });
+
+  it('rejects direct deletion of historical provenance without changing its bytes or meaning', async () => {
+    const { provenanceId } = await openHistoricalProvenanceProject();
+    const beforeProject = projects.getActiveProject()!;
+    const before = structuredClone(beforeProject.provenance);
+    const beforeBytes = JSON.stringify(before);
+    const deletion = { kind: 'provenance.delete', provenanceId, expectedRevision: before[provenanceId].revision } as unknown as ProjectOperation;
+
+    await expect(projects.apply(transaction(HUMAN_ACTOR, [deletion], 'Reject historical provenance deletion'), HUMAN_ACTOR)).resolves.toMatchObject({
+      status: 'conflict', conflict: { retryable: false }, message: expect.stringMatching(/provenance\.delete.*retained only to read and recover/i),
+    });
+    const afterProject = projects.getActiveProject()!;
+    expect(afterProject.revision).toBe(beforeProject.revision);
+    expect(afterProject.provenance).toEqual(before);
+    expect(JSON.stringify(afterProject.provenance)).toBe(beforeBytes);
+  });
+
+  it('rejects branch deletion of historical provenance without changing branch or main bytes', async () => {
+    const { projectId, provenanceId } = await openHistoricalProvenanceProject();
+    const { variantId } = await projects.createBranch(projectId, 'Historical compatibility branch', AGENT_A);
+    const beforeMain = structuredClone(projects.getActiveProject()!.provenance);
+    const beforeMainBytes = JSON.stringify(beforeMain);
+    const beforeBranch = (await projects.getBranch(variantId))!;
+    const beforeBranchProvenance = structuredClone(beforeBranch.provenance);
+    const beforeBranchBytes = JSON.stringify(beforeBranchProvenance);
+    const deletion = { kind: 'provenance.delete', provenanceId, expectedRevision: beforeBranchProvenance[provenanceId].revision } as unknown as ProjectOperation;
+
+    await expect(projects.applyBranch(variantId, transaction(AGENT_A, [deletion], 'Reject branch provenance deletion'), AGENT_A)).resolves.toMatchObject({
+      status: 'conflict', conflict: { retryable: false }, message: expect.stringMatching(/provenance\.delete.*retained only to read and recover/i),
+    });
+    const afterBranch = (await projects.getBranch(variantId))!;
+    expect(afterBranch.revision).toBe(beforeBranch.revision);
+    expect(afterBranch.provenance).toEqual(beforeBranchProvenance);
+    expect(JSON.stringify(afterBranch.provenance)).toBe(beforeBranchBytes);
+    expect(projects.getActiveProject()!.provenance).toEqual(beforeMain);
+    expect(JSON.stringify(projects.getActiveProject()!.provenance)).toBe(beforeMainBytes);
+  });
+
+  it('keeps passive provenance and generation-source assets byte-stable across checkpoint restore, undo, and redo', async () => {
+    const current = projects.getActiveProject()!;
+    current.name = 'Current historical project';
+    const currentSource = join(root, 'current-historical-generation.wav');
+    const currentBytes = Buffer.from('current historical generated fixture\n');
+    await writeFile(currentSource, currentBytes);
+    const currentAsset: MediaAsset = {
+      ...entityBase('asset', HUMAN_ACTOR), kind: 'audio', name: 'Current historical generation', mimeType: 'audio/wav',
+      sha256: createHash('sha256').update(currentBytes).digest('hex'), byteLength: currentBytes.byteLength,
+      storage: 'linked', externalPath: currentSource, source: 'generation',
+    };
+    const currentProvenance: GenerationProvenance = {
+      ...entityBase('provenance', HUMAN_ACTOR), assetId: currentAsset.id, provider: 'stability', model: 'current-legacy-model', kind: 'music',
+      prompt: 'Current passive provenance', referenceAssetIds: [], rightsDeclaration: 'original', transformations: ['current-only'], experimental: false,
+    };
+    current.assets[currentAsset.id] = currentAsset;
+    current.provenance[currentProvenance.id] = currentProvenance;
+
+    const checkpointSource = join(root, 'checkpoint-historical-generation.wav');
+    const checkpointSourceBytes = Buffer.from('checkpoint historical generated fixture\n');
+    await writeFile(checkpointSource, checkpointSourceBytes);
+    const checkpointAsset: MediaAsset = {
+      ...entityBase('asset', HUMAN_ACTOR), kind: 'audio', name: 'Checkpoint historical generation', mimeType: 'audio/wav',
+      sha256: createHash('sha256').update(checkpointSourceBytes).digest('hex'), byteLength: checkpointSourceBytes.byteLength,
+      storage: 'linked', externalPath: checkpointSource, source: 'generation',
+    };
+    const checkpointProvenance: GenerationProvenance = {
+      ...entityBase('provenance', HUMAN_ACTOR), assetId: checkpointAsset.id, provider: 'stability', model: 'checkpoint-legacy-model', kind: 'music',
+      prompt: 'Divergent checkpoint provenance', referenceAssetIds: [], rightsDeclaration: 'original', transformations: ['checkpoint-only'], experimental: false,
+    };
+    const historicalSnapshot = structuredClone(current);
+    historicalSnapshot.name = 'Restored historical checkpoint';
+    historicalSnapshot.assets = { [checkpointAsset.id]: checkpointAsset };
+    historicalSnapshot.provenance = { [checkpointProvenance.id]: checkpointProvenance };
+    historicalSnapshot.checkpoints = {};
+    historicalSnapshot.projectPath = undefined;
+    historicalSnapshot.dirty = false;
+    validateProjectIntegrity(historicalSnapshot);
+
+    const snapshotPath = join(root, 'divergent-historical-checkpoint.json');
+    const snapshotBytes = Buffer.from(`${JSON.stringify(historicalSnapshot)}\n`);
+    await writeFile(snapshotPath, snapshotBytes);
+    const snapshotAsset: MediaAsset = {
+      ...entityBase('asset', HUMAN_ACTOR), kind: 'checkpoint', name: 'Divergent historical checkpoint.json', mimeType: 'application/vnd.aimuse.checkpoint+json',
+      sha256: createHash('sha256').update(snapshotBytes).digest('hex'), byteLength: snapshotBytes.byteLength,
+      storage: 'linked', externalPath: snapshotPath, source: 'system',
+    };
+    const checkpoint: Checkpoint = {
+      ...entityBase('checkpoint', HUMAN_ACTOR), name: 'Divergent historical checkpoint', projectRevision: historicalSnapshot.revision,
+      snapshotAssetId: snapshotAsset.id, automatic: false,
+    };
+    current.assets[snapshotAsset.id] = snapshotAsset;
+    current.checkpoints[checkpoint.id] = checkpoint;
+    validateProjectIntegrity(current);
+
+    const saved = await saveProjectFolder(current, join(root, 'divergent-historical-project'), { appVersion: 'test' });
+    await expect(projects.open([saved.projectPath])).resolves.toEqual({ opened: [current.id], warnings: [] });
+    const opened = projects.getActiveProject()!;
+    const passiveProvenance = structuredClone(opened.provenance);
+    const passiveProvenanceBytes = JSON.stringify(passiveProvenance);
+    const generationAssets = Object.fromEntries(Object.entries(opened.assets).filter(([, asset]) => asset.source === 'generation'));
+    const generationAssetBytes = JSON.stringify(generationAssets);
+    const expectPassiveCompatibilityUnchanged = (project: typeof opened) => {
+      const actualGenerationAssets = Object.fromEntries(Object.entries(project.assets).filter(([, asset]) => asset.source === 'generation'));
+      expect(project.provenance).toEqual(passiveProvenance);
+      expect(JSON.stringify(project.provenance)).toBe(passiveProvenanceBytes);
+      expect(actualGenerationAssets).toEqual(generationAssets);
+      expect(JSON.stringify(actualGenerationAssets)).toBe(generationAssetBytes);
+      expect(project.provenance).not.toHaveProperty(checkpointProvenance.id);
+      expect(project.assets).not.toHaveProperty(checkpointAsset.id);
+      expect(project.assets[snapshotAsset.id]).toEqual(snapshotAsset);
+      expect(() => validateProjectIntegrity(project)).not.toThrow();
+    };
+
+    await expect(projects.restoreCheckpoint(opened.id, checkpoint.id, HUMAN_ACTOR)).resolves.toMatchObject({ status: 'committed', checkpointId: checkpoint.id });
+    let after = projects.getActiveProject()!;
+    expect(after.name).toBe(historicalSnapshot.name);
+    expectPassiveCompatibilityUnchanged(after);
+
+    await expect(projects.undo(opened.id, HUMAN_ACTOR)).resolves.toMatchObject({ status: 'committed' });
+    after = projects.getActiveProject()!;
+    expect(after.name).toBe(current.name);
+    expectPassiveCompatibilityUnchanged(after);
+
+    await expect(projects.redo(opened.id, HUMAN_ACTOR)).resolves.toMatchObject({ status: 'committed' });
+    after = projects.getActiveProject()!;
+    expect(after.name).toBe(historicalSnapshot.name);
+    expectPassiveCompatibilityUnchanged(after);
+  });
 
   it('authenticates attribution, deduplicates commits, and keeps undo isolated per actor', async () => {
     const initial = projects.getActiveProject()!;

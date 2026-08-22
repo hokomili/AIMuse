@@ -10,7 +10,7 @@ export const SUBJECT_SCHEMA_VERSION = 1;
 const FILE_ROLES = ['applicationExecutable', 'applicationAsar', 'audioHelper', 'pluginScanner', 'pluginBridge'];
 const EXPECTED_FUSES = new Map([
   [FuseV1Options.RunAsNode, FuseState.DISABLE],
-  [FuseV1Options.EnableCookieEncryption, FuseState.ENABLE],
+  [FuseV1Options.EnableCookieEncryption, FuseState.DISABLE],
   [FuseV1Options.EnableNodeOptionsEnvironmentVariable, FuseState.DISABLE],
   [FuseV1Options.EnableNodeCliInspectArguments, FuseState.DISABLE],
   [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseState.ENABLE],

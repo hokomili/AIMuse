@@ -383,18 +383,17 @@ export interface AIMuseProject {
   activity: ActivityEntry[];
 }
 
-export type JobKind = 'approval' | 'generation' | 'analysis' | 'media' | 'plugin-scan' | 'plugin-host' | 'render' | 'save' | 'pack';
+export type JobKind = 'approval' | 'analysis' | 'media' | 'plugin-scan' | 'plugin-host' | 'render' | 'save' | 'pack';
 export type JobStatus = 'queued' | 'waiting-for-user' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface JobError {
   code: string;
   message: string;
   retryable: boolean;
-  ambiguousCharge?: boolean;
 }
 
 export interface ApprovalRequest {
-  kind: 'file-read' | 'file-write' | 'overwrite' | 'generation' | 'recording' | 'plugin' | 'unknown-cost';
+  kind: 'file-read' | 'file-write' | 'overwrite' | 'recording' | 'plugin';
   summary: string;
   request: Record<string, unknown>;
   expiresAt: string;

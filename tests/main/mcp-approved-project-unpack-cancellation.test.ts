@@ -7,7 +7,6 @@ import { type Actor, type AsyncJob, type AuthorityPolicy } from '@aimuse/core';
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
-import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
 import { RecoveryJournal } from '../../src/main/journal';
 import { McpHost } from '../../src/main/mcp-host';
 import { MediaManager } from '../../src/main/media-manager';
@@ -50,7 +49,7 @@ describe('headless authenticated approved project-unpack terminality', () => {
   let url: string;
   let unpackRuntime: Omit<UnpackProjectPackOptions, 'observe'>;
   let unpackInvocations: number;
-  const token = 'approved-project-unpack-token';
+  const token = Buffer.alloc(32, 0x37).toString('base64url');
   const clients: TestClient[] = [];
 
   beforeEach(async () => {
@@ -64,17 +63,11 @@ describe('headless authenticated approved project-unpack terminality', () => {
     authority = new AuthorityManager();
     const media = new MediaManager(join(root, 'managed'), projects, authority);
     const plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
-    const credentials: ProviderCredentials = {
-      get: async () => undefined,
-      set: async () => undefined,
-      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
-    };
-    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
     const exports = new ExportManager(projects, audio, authority);
     unpackRuntime = {}; unpackInvocations = 0;
     host = new McpHost({
       appVersion: 'test', profileId: 'b'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'), cacheRoot: join(root, 'managed'),
-      projects, audio, authority, media, plugins, generation, exports,
+      projects, audio, authority, media, plugins, exports,
       unpackProjectPack: async (packPath, destinationRoot, options) => {
         unpackInvocations += 1;
         return unpackProjectPack(packPath, destinationRoot, { ...unpackRuntime, ...options });
@@ -149,7 +142,7 @@ describe('headless authenticated approved project-unpack terminality', () => {
     const now = Date.now();
     const policy: AuthorityPolicy = {
       version: 1, id: 'approved-project-unpack-authority', issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), maxRuntimeMinutes: 5,
-      budget: { currency: 'USD', maxSpendMinor: 0, maxGenerationRequests: 0, maxUnknownCostRequests: 0 }, providers: {}, readRoots: [root], writeRoots: [root], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
+      readRoots: [root], writeRoots: [root], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
     };
     await expect(authority.install(policy)).resolves.toEqual({ installed: true });
   }

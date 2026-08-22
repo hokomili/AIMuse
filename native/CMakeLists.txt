@@ -29,10 +29,14 @@ target_include_directories(aimuse-dsp PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(aimuse-dsp PUBLIC AIMUSE_NATIVE_VERSION="${PROJECT_VERSION}")
 
 add_library(aimuse-playback STATIC
+  src/midi_discovery_publisher.cpp
+  src/midi_discovery_publisher.hpp
   src/midi_port_registry.cpp
   src/midi_port_registry.hpp
   src/realtime_playback.cpp
   src/realtime_playback.hpp
+  src/windows_midi_discovery.cpp
+  src/windows_midi_discovery.hpp
 )
 target_include_directories(aimuse-playback PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 if(AIMUSE_ENABLE_WASAPI)
@@ -44,6 +48,22 @@ if(AIMUSE_ENABLE_WASAPI)
   endif()
   target_include_directories(aimuse-playback PRIVATE "${miniaudio_SOURCE_DIR}")
   target_compile_definitions(aimuse-playback PRIVATE AIMUSE_ENABLE_WASAPI=1 NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
+if(WIN32)
+  # The Windows SDK C++/WinRT projection supplies the MIDI selectors and
+  # DeviceWatcher contract; WindowsApp resolves that projection at link time.
+  find_path(AIMUSE_CPPWINRT_INCLUDE_DIR winrt/base.h
+    HINTS
+      "$ENV{WindowsSdkDir}/Include/$ENV{WindowsSDKVersion}/cppwinrt"
+      "C:/Program Files (x86)/Windows Kits/10/Include/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/cppwinrt"
+  )
+  if(NOT AIMUSE_CPPWINRT_INCLUDE_DIR)
+    message(FATAL_ERROR "Windows MIDI discovery requires the Windows SDK C++/WinRT projection (winrt/base.h).")
+  endif()
+  target_include_directories(aimuse-playback PRIVATE "${AIMUSE_CPPWINRT_INCLUDE_DIR}")
+  target_compile_definitions(aimuse-playback PRIVATE AIMUSE_ENABLE_WINDOWS_MIDI_DISCOVERY=1)
+  target_link_libraries(aimuse-playback PRIVATE windowsapp)
 endif()
 
 if(AIMUSE_ENABLE_COREAUDIO)

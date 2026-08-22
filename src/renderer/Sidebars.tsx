@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Activity, AudioLines, Bot, Check, ChevronDown, Clock3, Copy, Database, Download,
-  FileAudio, FolderKanban, HardDrive, KeyRound, Layers3, Music2, PackageOpen, PlugZap, RefreshCw,
-  Search, ShieldAlert, SlidersHorizontal, Sparkles, Square, Wand2, X,
+  Activity, AudioLines, Bot, ChevronDown, Clock3, Database, Download,
+  FileAudio, FolderKanban, HardDrive, Layers3, Music2, PackageOpen, PlugZap, RefreshCw,
+  Search, ShieldAlert, SlidersHorizontal, Square, X,
 } from 'lucide-react';
 import type { AIMuseProject, AsyncJob, BuiltinDeviceKind, Clip, Device, Marker, MediaAsset, PluginDescriptor, ProjectTransaction, SfxDeliverable, SongSection, Track } from '@aimuse/core';
 import type { AgentPresence, McpConnectionInfo, TimelineSelection } from '../common/contracts';
-import type { GenerationJobResult, GenerationRequest, ProviderCapabilities } from '../common/generation';
 import { CommitNumberInput, CommitRange, CommitTextInput } from './CommitControls';
 import { db, entity, transaction } from './editor-helpers';
 
-export type BrowserTab = 'media' | 'generate' | 'instruments' | 'effects' | 'plugins' | 'sfx';
+export type BrowserTab = 'media' | 'instruments' | 'effects' | 'plugins' | 'sfx';
 export type RightTab = 'inspector' | 'structure' | 'activity' | 'jobs' | 'agents';
 
 const instruments: Array<{ kind: BuiltinDeviceKind; name: string; detail: string; glyph: string }> = [
@@ -30,23 +29,18 @@ interface LeftBrowserProps {
   project: AIMuseProject;
   jobs: AsyncJob[];
   plugins: PluginDescriptor[];
-  capabilities: ProviderCapabilities[];
   tab: BrowserTab;
   onTab(tab: BrowserTab): void;
   onImport(): void;
   onAddDevice(kind: BuiltinDeviceKind): void;
   onScanPlugins(): void;
-  onGenerate(request: GenerationRequest): void;
-  onSaveCredential(provider: GenerationRequest['provider'], value: string): Promise<boolean>;
-  onAccept(jobId: string, candidateId: string): void;
-  onReject(jobId: string, candidateId: string): void;
   onApply(edit: ProjectTransaction): Promise<boolean>;
   onCreateSfx(): void;
   notify(message: string): void;
 }
 
 const browserTabs: Array<{ id: BrowserTab; label: string; icon: typeof FileAudio }> = [
-  { id: 'media', label: 'Media', icon: FileAudio }, { id: 'generate', label: 'Generate', icon: Sparkles },
+  { id: 'media', label: 'Media', icon: FileAudio },
   { id: 'instruments', label: 'Instruments', icon: Music2 }, { id: 'effects', label: 'Effects', icon: SlidersHorizontal },
   { id: 'plugins', label: 'Plug-ins', icon: PlugZap }, { id: 'sfx', label: 'SFX', icon: Layers3 },
 ];
@@ -77,43 +71,6 @@ function AssetRow({ projectId, asset, playing, onPreview }: { projectId: string;
   const duration = asset.durationSamples && asset.sampleRate ? asset.durationSamples / asset.sampleRate : undefined;
   const content = <><span className={`asset-icon ${asset.kind}`}><AudioLines size={15} /></span><span><strong>{asset.name}</strong><small>{asset.kind.toUpperCase()} {duration ? `· ${duration.toFixed(1)} s` : ''}</small></span><em>{playing ? '■' : asset.channels ? `${asset.channels}ch` : ''}</em></>;
   return asset.mimeType.startsWith('audio/') ? <button className={`asset-row ${playing ? 'active' : ''}`} onClick={() => onPreview(`asset:${asset.id}`, window.aimuse.mediaUrl(projectId, asset.id))} aria-label={`${playing ? 'Stop' : 'Preview'} ${asset.name}`} aria-pressed={playing} title={playing ? 'Stop preview' : 'Preview audio'}>{content}</button> : <div className="asset-row" title="MIDI is placed in the arrangement when imported">{content}</div>;
-}
-
-function GenerateBrowser({ project, jobs, capabilities, onGenerate, onSaveCredential, onAccept, onReject, query, playingId, onPreview }: Pick<LeftBrowserProps, 'project' | 'jobs' | 'capabilities' | 'onGenerate' | 'onSaveCredential' | 'onAccept' | 'onReject'> & { query: string; playingId?: string; onPreview(id: string, url: string): void }) {
-  const configured = capabilities.filter((provider) => provider.configured);
-  const [provider, setProvider] = useState<GenerationRequest['provider']>(configured[0]?.provider ?? 'elevenlabs');
-  const activeProvider = capabilities.find((entry) => entry.provider === provider);
-  const [model, setModel] = useState(activeProvider?.models[0]?.id ?? 'music_v1');
-  const [kind, setKind] = useState<GenerationRequest['kind']>(project.kind === 'sfx' ? 'sfx' : 'music');
-  const [prompt, setPrompt] = useState(project.kind === 'sfx' ? 'A crisp magical UI confirmation, glass shimmer with a warm low tail' : 'Dreamy indie electronic song, intimate and hopeful, warm analog synths');
-  const [duration, setDuration] = useState(project.kind === 'sfx' ? 4 : 30);
-  const [instrumental, setInstrumental] = useState(true);
-  const [credentialOpen, setCredentialOpen] = useState(false);
-  const [credential, setCredential] = useState('');
-  const generationJobs = jobs.filter((job) => job.kind === 'generation' && job.projectId === project.id);
-  const start = () => {
-    const selectedModel = activeProvider?.models.find((entry) => entry.id === model) ?? activeProvider?.models[0];
-    if (!activeProvider?.configured || !selectedModel) return;
-    onGenerate({ projectId: project.id, provider, model: selectedModel.id, kind, prompt, instrumental, durationMs: duration * 1_000, resultCount: 1, referenceAssetIds: [], seamlessLoop: project.kind === 'sfx', outputFormat: 'mp3', rightsDeclaration: 'original', providerOptions: {} });
-  };
-  return <div className="browser-section generate-browser">
-    <div className="generator-mode"><button className={kind === 'music' ? 'active' : ''} onClick={() => setKind('music')}>Music</button><button className={kind === 'sfx' ? 'active' : ''} onClick={() => setKind('sfx')}>Sound effect</button></div>
-    <label>Provider<select value={provider} onChange={(event) => { const next = event.target.value as GenerationRequest['provider']; setProvider(next); setModel(capabilities.find((entry) => entry.provider === next)?.models[0]?.id ?? ''); }}><option value="elevenlabs">ElevenLabs</option><option value="stability">Stable Audio</option><option value="lyria">Google Lyria 3 · experimental</option></select></label>
-    <div className={`provider-warning ${activeProvider?.configured ? 'configured' : ''}`}><KeyRound size={14} /><span>{activeProvider?.unavailableReason ?? (activeProvider?.configured ? 'Credential stored in operating-system protected storage.' : 'Add a provider credential before generating.')}</span><button onClick={() => { setCredential(''); setCredentialOpen((open) => !open); }}>{activeProvider?.configured ? 'Manage' : 'Configure'}</button></div>
-    {credentialOpen && <div className="provider-credential"><input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={`${provider} API key`} autoComplete="off" /><button disabled={!credential.trim()} onClick={() => { const value = credential.trim(); setCredential(''); void onSaveCredential(provider, value).then((saved) => { if (saved) setCredentialOpen(false); }); }}>Save</button>{activeProvider?.configured && <button onClick={() => { setCredential(''); void onSaveCredential(provider, '').then((saved) => { if (saved) setCredentialOpen(false); }); }}>Remove</button>}</div>}
-    <label>Model<select value={model} onChange={(event) => setModel(event.target.value)}>{activeProvider?.models.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}</select></label>
-    <label>Describe it<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={5} maxLength={3_000} /></label>
-    <div className="generator-pair"><label>Duration<input type="number" value={duration} min="1" max="300" onChange={(event) => setDuration(Number(event.target.value))} /><span>s</span></label>{kind === 'music' && <label className="toggle-line"><input type="checkbox" checked={instrumental} onChange={(event) => setInstrumental(event.target.checked)} /> Instrumental</label>}</div>
-    <button className="primary wide" onClick={start} disabled={!prompt.trim() || !activeProvider?.configured}><Wand2 size={15} /> Generate candidate</button>
-    <p className="candidate-rule">Candidates stay outside the arrangement until you accept them. Chargeable requests never retry automatically.</p>
-    <div className="browser-subhead">Candidates</div>
-    {generationJobs.length === 0 && <span className="muted-copy">No candidates in this session.</span>}
-    {generationJobs.map((job) => {
-      const result = job.result as GenerationJobResult | undefined;
-      const candidates = result?.candidates.filter((candidate) => !query || `${candidate.asset.name} ${result.request.provider} ${result.request.model}`.toLowerCase().includes(query));
-      return <div className="candidate-card" key={job.id}><div className="candidate-head"><span className={`job-dot ${job.status}`} /><strong>{job.status === 'completed' ? 'Generated take' : job.message}</strong><small>{Math.round(job.progress * 100)}%</small></div>{job.status === 'running' && <div className="progress"><i style={{ width: `${job.progress * 100}%` }} /></div>}{candidates?.map((candidate) => { const accepted = result!.acceptedCandidateIds.includes(candidate.id); const rejected = result!.rejectedCandidateIds.includes(candidate.id); const playing = playingId === `candidate:${candidate.id}`; return <div className={`candidate-item ${accepted ? 'accepted' : rejected ? 'rejected' : ''}`} key={candidate.id}><button className="candidate-play" onClick={() => onPreview(`candidate:${candidate.id}`, window.aimuse.candidateMediaUrl(job.id, candidate.id))} aria-label={playing ? `Stop ${candidate.asset.name}` : `Preview ${candidate.asset.name}`}>{playing ? <Square size={9} fill="currentColor" /> : '▶'}</button><div><strong>{candidate.asset.name}</strong><small>{result!.request.provider} · {result!.request.model}</small></div><button title={accepted ? 'Already accepted' : 'Accept into arrangement'} disabled={accepted} onClick={() => onAccept(job.id, candidate.id)}><Check size={14} /></button><button title={rejected ? 'Already rejected' : 'Reject candidate'} disabled={rejected} onClick={() => onReject(job.id, candidate.id)}><X size={14} /></button></div>; })}{job.error && <p className="job-error">{job.error.message}</p>}</div>;
-    })}
-  </div>;
 }
 
 function DeviceBrowser({ entries, onAdd, query }: { entries: typeof instruments | typeof effects; onAdd(kind: BuiltinDeviceKind): void; query: string }) {
@@ -152,7 +109,7 @@ export function LeftBrowser(props: LeftBrowserProps) {
   }, [props.tab]);
   const normalizedQuery = query.trim().toLowerCase();
   const preview = useMediaPreview(props.notify);
-  return <aside className="left-browser" aria-label="Studio browser"><nav className="browser-tabs">{browserTabs.map(({ id, label, icon: Icon }) => <button key={id} className={props.tab === id ? 'active' : ''} onClick={() => props.onTab(id)} title={label}><Icon size={17} /><span>{label}</span></button>)}</nav><div className="browser-main"><div className="browser-title"><strong>{browserTabs.find((entry) => entry.id === props.tab)?.label}</strong><span><ChevronDown size={14} /></span></div><label className="browser-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${props.tab}`} aria-label={`Search ${props.tab}`} /></label>{props.tab === 'media' && <MediaBrowser project={props.project} onImport={props.onImport} query={normalizedQuery} playingId={preview.playingId} onPreview={preview.toggle} />}{props.tab === 'generate' && <GenerateBrowser {...props} query={normalizedQuery} playingId={preview.playingId} onPreview={preview.toggle} />}{props.tab === 'instruments' && <DeviceBrowser entries={instruments} onAdd={props.onAddDevice} query={normalizedQuery} />}{props.tab === 'effects' && <DeviceBrowser entries={effects} onAdd={props.onAddDevice} query={normalizedQuery} />}{props.tab === 'plugins' && <PluginBrowser plugins={props.plugins} onScanPlugins={props.onScanPlugins} query={normalizedQuery} />}{props.tab === 'sfx' && <SfxBrowser {...props} query={normalizedQuery} />}</div></aside>;
+  return <aside className="left-browser" aria-label="Studio browser"><nav className="browser-tabs">{browserTabs.map(({ id, label, icon: Icon }) => <button key={id} className={props.tab === id ? 'active' : ''} onClick={() => props.onTab(id)} title={label}><Icon size={17} /><span>{label}</span></button>)}</nav><div className="browser-main"><div className="browser-title"><strong>{browserTabs.find((entry) => entry.id === props.tab)?.label}</strong><span><ChevronDown size={14} /></span></div><label className="browser-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${props.tab}`} aria-label={`Search ${props.tab}`} /></label>{props.tab === 'media' && <MediaBrowser project={props.project} onImport={props.onImport} query={normalizedQuery} playingId={preview.playingId} onPreview={preview.toggle} />}{props.tab === 'instruments' && <DeviceBrowser entries={instruments} onAdd={props.onAddDevice} query={normalizedQuery} />}{props.tab === 'effects' && <DeviceBrowser entries={effects} onAdd={props.onAddDevice} query={normalizedQuery} />}{props.tab === 'plugins' && <PluginBrowser plugins={props.plugins} onScanPlugins={props.onScanPlugins} query={normalizedQuery} />}{props.tab === 'sfx' && <SfxBrowser {...props} query={normalizedQuery} />}</div></aside>;
 }
 
 interface RightSidebarProps {
@@ -161,7 +118,6 @@ interface RightSidebarProps {
   jobs: AsyncJob[];
   mcp: McpConnectionInfo;
   tab: RightTab;
-  mcpToken?: string;
   onTab(tab: RightTab): void;
   onApply: (edit: ProjectTransaction) => Promise<boolean>;
   onResolveJob(jobId: string, decision: 'allow-once' | 'allow-session' | 'allow-always' | 'deny'): void;
@@ -169,7 +125,6 @@ interface RightSidebarProps {
   onCheckpoint(): void;
   onRestoreCheckpoint(checkpointId: string): void;
   onStopAgents(): void;
-  onRevealCredentials(): void;
   onConnectAgent(): void;
   onBrowseDevices(trackId: string): void;
   notify(message: string): void;
@@ -232,12 +187,11 @@ function ActivityPanel({ project, onRestoreCheckpoint, onCheckpoint }: Pick<Righ
 
 function JobPanel({ jobs, onResolveJob, onCancelJob }: Pick<RightSidebarProps, 'jobs' | 'onResolveJob' | 'onCancelJob'>) {
   const ordered = [...jobs].reverse();
-  return <div className="job-panel">{ordered.map((job) => <div className={`job-card ${job.status}`} key={job.id}><header><span className={`job-icon ${job.kind}`}>{job.kind === 'approval' ? <ShieldAlert size={15} /> : job.kind === 'generation' ? <Sparkles size={15} /> : job.kind === 'render' ? <Download size={15} /> : <Clock3 size={15} />}</span><div><strong>{job.message}</strong><small>{job.kind} · {job.status.replaceAll('-', ' ')}</small></div><em>{Math.round(job.progress * 100)}%</em></header>{job.status === 'running' && <div className="progress"><i style={{ width: `${job.progress * 100}%` }} /></div>}{job.approval && <div className="approval-card"><p>{job.approval.summary}</p><div><button onClick={() => onResolveJob(job.id, 'deny')}>Deny</button><button onClick={() => onResolveJob(job.id, 'allow-once')}>Allow once</button><button className="primary" onClick={() => onResolveJob(job.id, 'allow-session')}>Allow for session</button></div></div>}{job.error && <p className="job-error">{job.error.message}{job.error.ambiguousCharge && <strong> Charge status is ambiguous; AIMuse will not retry.</strong>}</p>}{job.cancellable && ['queued', 'running', 'waiting-for-user'].includes(job.status) && <button className="cancel-job" onClick={() => onCancelJob(job.id)}><Square size={10} /> Cancel</button>}</div>)}{!ordered.length && <BrowserEmpty icon={<Clock3 size={24} />} title="No jobs" detail="Renders, generation, analysis, scans, and approval requests appear here." action="Everything is caught up" />}</div>;
+  return <div className="job-panel">{ordered.map((job) => <div className={`job-card ${job.status}`} key={job.id}><header><span className={`job-icon ${job.kind}`}>{job.kind === 'approval' ? <ShieldAlert size={15} /> : job.kind === 'render' ? <Download size={15} /> : <Clock3 size={15} />}</span><div><strong>{job.message}</strong><small>{job.kind} · {job.status.replaceAll('-', ' ')}</small></div><em>{Math.round(job.progress * 100)}%</em></header>{job.status === 'running' && <div className="progress"><i style={{ width: `${job.progress * 100}%` }} /></div>}{job.approval && <div className="approval-card"><p>{job.approval.summary}</p><div><button onClick={() => onResolveJob(job.id, 'deny')}>Deny</button><button onClick={() => onResolveJob(job.id, 'allow-once')}>Allow once</button><button className="primary" onClick={() => onResolveJob(job.id, 'allow-session')}>Allow for session</button></div></div>}{job.error && <p className="job-error">{job.error.message}</p>}{job.cancellable && ['queued', 'running', 'waiting-for-user'].includes(job.status) && <button className="cancel-job" onClick={() => onCancelJob(job.id)}><Square size={10} /> Cancel</button>}</div>)}{!ordered.length && <BrowserEmpty icon={<Clock3 size={24} />} title="No jobs" detail="Renders, analysis, scans, and approval requests appear here." action="Everything is caught up" />}</div>;
 }
 
-function AgentsPanel({ mcp, mcpToken, onStopAgents, onRevealCredentials, onConnectAgent, notify }: Pick<RightSidebarProps, 'mcp' | 'mcpToken' | 'onStopAgents' | 'onRevealCredentials' | 'onConnectAgent' | 'notify'>) {
-  const copy = (value: string) => void navigator.clipboard.writeText(value).then(() => notify('Copied to clipboard')).catch((cause) => notify(`Copy failed: ${cause instanceof Error ? cause.message : String(cause)}`));
-  return <div className="agents-panel"><div className="engine-connection"><span className={mcp.running ? 'connected' : ''}><Database size={17} /></span><div><strong>Agent control server</strong><small>{mcp.running ? `Listening on localhost:${mcp.port}` : 'Not running'}</small></div><em>{mcp.running ? 'Private' : 'Offline'}</em></div><div className="connection-field"><label>MCP URL</label><div><code>{mcp.url ?? 'Starting…'}</code>{mcp.url && <button onClick={() => copy(mcp.url!)}><Copy size={13} /></button>}</div></div><div className="connection-field"><label>Bearer token</label><div><code>{mcpToken ?? `••••••••••••${mcp.tokenHint ?? ''}`}</code>{mcpToken ? <button onClick={() => copy(mcpToken)}><Copy size={13} /></button> : <button onClick={onRevealCredentials}>Reveal</button>}</div></div><button className="configure-agent" onClick={onConnectAgent}><Bot size={15} /> Connect an external agent</button><div className="browser-subhead">Present now · {mcp.sessions.length}</div>{mcp.sessions.map((presence) => <AgentRow presence={presence} key={presence.actor.id} />)}{mcp.sessions.length === 0 && <p className="muted-copy">No external agents are connected. The editor remains fully functional on its own.</p>}<div className="agent-policy"><ShieldAlert size={14} /><span><strong>Human-priority editing</strong>Human gestures lock affected entities and ranges. Broad agent changes checkpoint first.</span></div><button className="stop-agents" disabled={!mcp.sessions.length} onClick={onStopAgents}><Square size={11} fill="currentColor" /> Stop agents</button></div>;
+function AgentsPanel({ mcp, onStopAgents, onConnectAgent }: Pick<RightSidebarProps, 'mcp' | 'onStopAgents' | 'onConnectAgent'>) {
+  return <div className="agents-panel"><div className="engine-connection"><span className={mcp.running ? 'connected' : ''}><Database size={17} /></span><div><strong>Agent control server</strong><small>{mcp.running ? 'Private bridge ready' : (mcp.message ?? 'Not running')}</small></div><em>{mcp.running ? 'Private' : 'Offline'}</em></div><div className="connection-field"><label>Client transport</label><div><code>AIMuse stdio bridge</code></div></div><div className="connection-field"><label>Restart behavior</label><div><code>Automatic · no token transfer</code></div></div><button className="configure-agent" onClick={onConnectAgent}><Bot size={15} /> Connect an external agent</button><div className="browser-subhead">Present now · {mcp.sessions.length}</div>{mcp.sessions.map((presence) => <AgentRow presence={presence} key={presence.actor.id} />)}{mcp.sessions.length === 0 && <p className="muted-copy">No external agents are connected. Configured clients can wait for AIMuse and reconnect after engine restarts.</p>}<div className="agent-policy"><ShieldAlert size={14} /><span><strong>Human-priority editing</strong>Human gestures lock affected entities and ranges. Broad agent changes checkpoint first.</span></div><button className="stop-agents" disabled={!mcp.sessions.length} onClick={onStopAgents}><Square size={11} fill="currentColor" /> Stop agents</button></div>;
 }
 
 function AgentRow({ presence }: { presence: AgentPresence }) {

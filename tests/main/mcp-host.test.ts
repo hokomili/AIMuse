@@ -1,17 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { request as httpRequest, type ClientRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
-import { createId, entityBase, HUMAN_ACTOR, nowIso, type AsyncJob, type AuthorityPolicy, type MediaAsset, type MidiClip, type ProjectTransaction } from '@aimuse/core';
+import { createId, entityBase, HUMAN_ACTOR, nowIso, type AsyncJob, type AuthorityPolicy, type GenerationProvenance, type MediaAsset, type MidiClip, type ProjectTransaction } from '@aimuse/core';
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
-import { GenerationManager, type ProviderCredentials } from '../../src/main/generation-manager';
 import { RecoveryJournal } from '../../src/main/journal';
-import { McpHost } from '../../src/main/mcp-host';
+import { McpHost, type McpSessionLifecycleHooks } from '../../src/main/mcp-host';
 import { MediaManager } from '../../src/main/media-manager';
+import { saveProjectFolder } from '../../src/main/persistence';
 import { PluginManager } from '../../src/main/plugin-manager';
 import { ProjectService } from '../../src/main/project-service';
 import { TransactionTraceStore } from '../../src/main/trace-store';
@@ -20,15 +21,19 @@ import type { WorkspaceEvent } from '../../src/common/contracts';
 
 interface RpcResponse { jsonrpc: '2.0'; id?: string | number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown>; error?: Record<string, unknown> }
 interface NotificationStream { messages: RpcResponse[]; done: Promise<void>; abort: () => void; failure: () => unknown }
+interface RawHttpResponse { status: number; headers: Record<string, string | string[] | undefined>; body: string }
 
 describe('authenticated localhost MCP contract', () => {
   let root: string;
   let audio: AudioEngineController;
   let projects: ProjectService;
   let authority: AuthorityManager;
+  let media: MediaManager;
+  let plugins: PluginManager;
+  let exports: ExportManager;
   let host: McpHost;
   let url: string;
-  const token = 'test-token-0123456789-abcdefghijklmnopqrstuvwxyz';
+  const token = Buffer.alloc(32, 0x74).toString('base64url');
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'aimuse-mcp-'));
@@ -39,16 +44,10 @@ describe('authenticated localhost MCP contract', () => {
       trace: new TransactionTraceStore(join(root, 'traces')), audio,
     });
     authority = new AuthorityManager();
-    const media = new MediaManager(join(root, 'managed'), projects, authority);
-    const plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
-    const credentials: ProviderCredentials = {
-      get: async () => undefined,
-      set: async () => undefined,
-      status: async () => ({ elevenlabs: false, stability: false, lyria: false }),
-    };
-    const generation = new GenerationManager(join(root, 'generation'), projects, authority, credentials);
-    const exports = new ExportManager(projects, audio, authority);
-    host = new McpHost({ appVersion: 'test', profileId: 'A'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'), cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, generation, exports });
+    media = new MediaManager(join(root, 'managed'), projects, authority);
+    plugins = new PluginManager(join(root, 'plugins.json'), undefined, projects, authority);
+    exports = new ExportManager(projects, audio, authority);
+    host = new McpHost({ appVersion: 'test', profileId: 'A'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'), cacheRoot: join(root, 'managed'), projects, audio, authority, media, plugins, exports });
     await audio.start();
     await projects.initialize();
     await plugins.initialize();
@@ -81,6 +80,10 @@ describe('authenticated localhost MCP contract', () => {
     return { response, message: JSON.parse(text) as RpcResponse };
   }
 
+  function getHealth(): Promise<Response> {
+    return fetch(url.replace('/mcp', '/health'), { headers: { authorization: `Bearer ${token}`, accept: 'application/json' } });
+  }
+
   async function initialize(): Promise<{ sessionId: string; message: RpcResponse }> {
     const initialized = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'AIMuse contract test', version: '1' } } });
     expect(initialized.response.status).toBe(200);
@@ -88,6 +91,59 @@ describe('authenticated localhost MCP contract', () => {
     expect(sessionId).toBeTruthy();
     await request({ jsonrpc: '2.0', method: 'notifications/initialized' }, sessionId!);
     return { sessionId: sessionId!, message: initialized.message! };
+  }
+
+  async function restartHostWithLifecycleHooks(sessionLifecycleHooks: McpSessionLifecycleHooks): Promise<void> {
+    await host.stop();
+    host = new McpHost({
+      appVersion: 'test', profileId: 'A'.repeat(64), portSettingsPath: join(root, 'mcp-port.json'), cacheRoot: join(root, 'managed'),
+      projects, audio, authority, media, plugins, exports, sessionLifecycleHooks,
+    });
+    url = (await host.start(token)).url;
+  }
+
+  function beginChunkedPost(target: string, authority: string, firstChunk: string, sessionId?: string): { request: ClientRequest; response: Promise<RawHttpResponse> } {
+    let clientRequest!: ClientRequest;
+    const response = new Promise<RawHttpResponse>((resolvePromise, reject) => {
+      clientRequest = httpRequest(target, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${authority}`,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          connection: 'close',
+          ...(sessionId ? { 'mcp-session-id': sessionId } : {}),
+        },
+      }, (incoming) => {
+        const chunks: Buffer[] = [];
+        incoming.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        incoming.once('end', () => resolvePromise({ status: incoming.statusCode ?? 0, headers: incoming.headers, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      clientRequest.once('error', reject);
+    });
+    clientRequest.write(firstChunk);
+    return { request: clientRequest, response };
+  }
+
+  async function openHistoricalProvenanceProject(): Promise<{ projectId: string; provenanceId: string }> {
+    const project = projects.getActiveProject()!;
+    const source = join(root, 'historical-generated.wav');
+    const bytes = Buffer.from('historical generated MCP fixture\n');
+    await writeFile(source, bytes);
+    const asset: MediaAsset = {
+      ...entityBase('asset', HUMAN_ACTOR), kind: 'audio', name: 'Historical generated asset', mimeType: 'audio/wav', sha256: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.byteLength,
+      storage: 'linked', externalPath: source, source: 'generation',
+    };
+    const provenance: GenerationProvenance = {
+      ...entityBase('provenance', HUMAN_ACTOR), assetId: asset.id, provider: 'stability', model: 'legacy-model', kind: 'music',
+      prompt: 'Legacy MCP compatibility metadata', referenceAssetIds: [], rightsDeclaration: 'original', transformations: ['authored-before-removal'], experimental: false,
+    };
+    project.assets[asset.id] = asset;
+    project.provenance[provenance.id] = provenance;
+    const saved = await saveProjectFolder(project, join(root, 'historical-mcp-provenance'), { appVersion: 'test' });
+    await expect(projects.open([saved.projectPath])).resolves.toEqual({ opened: [project.id], warnings: [] });
+    expect(projects.getActiveProject()!.provenance[provenance.id]).toEqual(provenance);
+    return { projectId: project.id, provenanceId: provenance.id };
   }
 
   async function openNotificationStream(sessionId: string): Promise<NotificationStream> {
@@ -147,10 +203,12 @@ describe('authenticated localhost MCP contract', () => {
   function createRequestId(): number { sequence += 1; return sequence; }
 
   it('rejects unauthenticated and malformed requests before creating state', async () => {
-    const { instanceId, profileId } = host.credentials();
+    const { instanceId, profileId } = host.connection();
     expect(instanceId).toMatch(/^[0-9a-f-]{36}$/);
     expect(profileId).toBe('A'.repeat(64));
-    const health = await fetch(url.replace('/mcp', '/health'));
+    const unauthenticatedHealth = await fetch(url.replace('/mcp', '/health'));
+    expect(unauthenticatedHealth.status).toBe(401);
+    const health = await getHealth();
     expect(health.status).toBe(200);
     await expect(health.json()).resolves.toMatchObject({ name: 'AIMuse Engine', status: 'ok', pid: process.pid, instanceId, profileId, uiRequired: false });
 
@@ -165,6 +223,62 @@ describe('authenticated localhost MCP contract', () => {
     const oversized = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ value: 'x'.repeat(4 * 1024 * 1024) }) });
     expect(oversized.status).toBe(413);
     await expect(oversized.json()).resolves.toMatchObject({ error: 'body_too_large' });
+  });
+
+  it('discards engine-scoped MCP authority when the listener stops', async () => {
+    expect(host.connection()).toMatchObject({ url, token });
+    const portSettings = await readFile(join(root, 'mcp-port.json'), 'utf8');
+    expect(portSettings).not.toContain(token);
+    expect(JSON.parse(portSettings)).toMatchObject({ version: 1, preferredPort: expect.any(Number) });
+    await host.stop();
+    expect(host.connection()).toMatchObject({ url: undefined, token: '' });
+  });
+
+  it('does not make the listener depend on persisted port preferences', async () => {
+    await host.stop();
+    const blockedParent = join(root, 'not-a-directory');
+    await writeFile(blockedParent, 'blocks preference persistence\n');
+    const secondToken = Buffer.alloc(32, 0x75).toString('base64url');
+    const secondary = new McpHost({
+      appVersion: 'test', profileId: 'B'.repeat(64), portSettingsPath: join(blockedParent, 'mcp-port.json'), cacheRoot: join(root, 'secondary-managed'),
+      projects, audio, authority,
+      media: new MediaManager(join(root, 'secondary-managed'), projects, authority),
+      plugins: new PluginManager(join(root, 'secondary-plugins.json'), undefined, projects, authority),
+      exports: new ExportManager(projects, audio, authority),
+    });
+    try {
+      const started = await secondary.start(secondToken);
+      expect(started.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/u);
+      expect(secondary.connection()).toMatchObject({ url: started.url, token: secondToken });
+      await expect(access(join(blockedParent, 'mcp-port.json'))).rejects.toThrow();
+    } finally {
+      await secondary.stop();
+    }
+  });
+
+  it('rejects authenticated MCP deletion of historical provenance without changing its bytes or meaning', async () => {
+    const { projectId, provenanceId } = await openHistoricalProvenanceProject();
+    const beforeProject = projects.getActiveProject()!;
+    const before = structuredClone(beforeProject.provenance);
+    const beforeBytes = JSON.stringify(before);
+    const { sessionId } = await initialize();
+    const joined = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'session_manage', arguments: { action: 'join', name: 'Legacy Boundary Agent' } } }, sessionId);
+    expect(joined.message?.error).toBeUndefined();
+
+    const applied = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'project_apply', arguments: {
+      projectId, clientOperationId: 'reject-mcp-provenance-delete', label: 'Reject MCP provenance deletion', commitMode: 'direct',
+      operations: [{ kind: 'provenance.delete', provenanceId, expectedRevision: before[provenanceId].revision }],
+    } } }, sessionId);
+    expect(applied.message?.error).toBeUndefined();
+    expect(applied.message?.result?.isError).not.toBe(true);
+    const content = applied.message?.result?.content as Array<{ text: string }>;
+    expect(JSON.parse(content[0].text)).toMatchObject({
+      status: 'conflict', message: expect.stringMatching(/provenance\.delete.*historical generation provenance is read-only/i),
+    });
+    const afterProject = projects.getActiveProject()!;
+    expect(afterProject.revision).toBe(beforeProject.revision);
+    expect(afterProject.provenance).toEqual(before);
+    expect(JSON.stringify(afterProject.provenance)).toBe(beforeBytes);
   });
 
   it('reports MIDI input capture unavailable before authority, approval, or transport can imply a backend', async () => {
@@ -185,7 +299,7 @@ describe('authenticated localhost MCP contract', () => {
     const now = Date.now();
     await expect(authority.install({
       version: 1, id: 'midi-input-authorized-without-backend', issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), maxRuntimeMinutes: 5,
-      budget: { currency: 'USD', maxSpendMinor: 0, maxGenerationRequests: 0, maxUnknownCostRequests: 0 }, providers: {}, readRoots: [], writeRoots: [], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: true, allowMidiOutput: false,
+      readRoots: [], writeRoots: [], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: true, allowMidiOutput: false,
     })).resolves.toEqual({ installed: true });
     await expect(callMidiRecord()).resolves.toMatchObject({ error: 'midi_input_unavailable', retryable: false });
     expect(transport).not.toHaveBeenCalled();
@@ -194,18 +308,18 @@ describe('authenticated localhost MCP contract', () => {
 
   it('publishes credential-free receiver acknowledgements and poisons duplicate request IDs', async () => {
     const requestId = '33333333-3333-4333-8333-333333333333';
-    const { instanceId, profileId } = host.credentials();
+    const { instanceId, profileId } = host.connection();
     expect(host.beginShowAcknowledgement(requestId)).toBe(true);
-    const pending = await (await fetch(url.replace('/mcp', '/health'))).json() as { showAcknowledgements: Array<Record<string, unknown>> };
+    const pending = await (await getHealth()).json() as { showAcknowledgements: Array<Record<string, unknown>> };
     expect(pending.showAcknowledgements).toEqual([expect.objectContaining({ requestId, status: 'pending', pid: process.pid, instanceId, profileId, attempts: 1 })]);
     expect(pending.showAcknowledgements[0]).not.toHaveProperty('acknowledgedAt');
     expect(host.completeShowAcknowledgement(requestId, 'accepted')).toBe(true);
-    const accepted = await (await fetch(url.replace('/mcp', '/health'))).json() as { showAcknowledgements: Array<Record<string, unknown>> };
+    const accepted = await (await getHealth()).json() as { showAcknowledgements: Array<Record<string, unknown>> };
     expect(accepted.showAcknowledgements).toEqual([expect.objectContaining({ requestId, status: 'accepted', pid: process.pid, instanceId, profileId, attempts: 1 })]);
     expect(JSON.stringify(accepted.showAcknowledgements)).not.toContain(token);
 
     expect(host.beginShowAcknowledgement(requestId)).toBe(false);
-    const duplicated = await (await fetch(url.replace('/mcp', '/health'))).json() as { showAcknowledgements: Array<Record<string, unknown>> };
+    const duplicated = await (await getHealth()).json() as { showAcknowledgements: Array<Record<string, unknown>> };
     expect(duplicated.showAcknowledgements).toEqual([expect.objectContaining({ requestId, status: 'rejected', reason: 'duplicate-request', attempts: 2 })]);
     expect(host.completeShowAcknowledgement(requestId, 'accepted')).toBe(false);
     expect(host.beginShowAcknowledgement('malformed')).toBe(false);
@@ -306,7 +420,7 @@ describe('authenticated localhost MCP contract', () => {
     expect(listed.message?.error).toBeUndefined();
     type ToolContract = { name: string; description?: string; inputSchema: Record<string, unknown>; outputSchema?: Record<string, unknown>; annotations?: Record<string, boolean> };
     const tools = listed.message?.result?.tools as ToolContract[];
-    expect(tools).toHaveLength(13);
+    expect(tools).toHaveLength(12);
     for (const tool of tools) {
       expect(tool.description?.length).toBeGreaterThan(30);
       expect(tool.inputSchema).toMatchObject({ type: 'object' });
@@ -321,7 +435,6 @@ describe('authenticated localhost MCP contract', () => {
     expect(branch('transport_manage', 'seek').required).toEqual(['action', 'tick']);
     expect(branch('media_manage', 'import').required).toEqual(['action', 'paths']);
     expect(branch('plugin_manage', 'set-parameter').required).toEqual(['action', 'deviceId', 'parameterId', 'value']);
-    expect(branch('generation_manage', 'accept').required).toEqual(['action', 'jobId', 'candidateId']);
     expect(branch('job_manage', 'wait').required).toEqual(['action', 'jobId']);
     expect((contract('project_manage').inputSchema.properties as Record<string, { description?: string }>).destination.description).toContain('authority');
     expect((contract('project_apply').inputSchema.properties as Record<string, { description?: string }>).clientOperationId.description).toContain('idempotency');
@@ -420,13 +533,13 @@ describe('authenticated localhost MCP contract', () => {
     }
   });
 
-  it('publishes the thirteen tool-first contracts and applies edits with server-authenticated attribution', async () => {
+  it('publishes the twelve tool-first contracts and applies edits with server-authenticated attribution', async () => {
     const { sessionId, message } = await initialize();
     expect(message.result).toMatchObject({ protocolVersion: LATEST_PROTOCOL_VERSION, serverInfo: { name: 'aimuse', version: 'test' } });
 
     const listed = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/list', params: {} }, sessionId);
     const tools = (listed.message?.result?.tools as Array<{ name: string }>).map((tool) => tool.name).sort();
-    expect(tools).toEqual(['aimuse_help', 'export_manage', 'generation_manage', 'history_manage', 'job_manage', 'media_manage', 'plugin_manage', 'project_apply', 'project_manage', 'project_observe', 'session_manage', 'trace_replay', 'transport_manage']);
+    expect(tools).toEqual(['aimuse_help', 'export_manage', 'history_manage', 'job_manage', 'media_manage', 'plugin_manage', 'project_apply', 'project_manage', 'project_observe', 'session_manage', 'trace_replay', 'transport_manage']);
 
     const joined = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name: 'session_manage', arguments: { action: 'join', name: 'Composer Agent', client: { product: 'contract-test', model: 'fixture' } } } }, sessionId);
     const joinPayload = JSON.parse((((joined.message?.result?.content as Array<{ text: string }>)[0]).text)) as { actor: { id: string } };
@@ -637,7 +750,7 @@ describe('authenticated localhost MCP contract', () => {
     const timestamp = nowIso();
     const projectId = projects.getActiveProject()!.id;
     const ownerOnly = 'owner-a-private-payload-sentinel';
-    const cancellable: AsyncJob = { id: 'job-owner-cancellable', ownerActorId: firstActorId, projectId, kind: 'generation', status: 'running', progress: 0.4, message: 'Owner job running.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, result: { ownerOnly } };
+    const cancellable: AsyncJob = { id: 'job-owner-cancellable', ownerActorId: firstActorId, projectId, kind: 'analysis', status: 'running', progress: 0.4, message: 'Owner job running.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, result: { ownerOnly } };
     const completed: AsyncJob = { id: 'job-owner-completed', ownerActorId: firstActorId, projectId, kind: 'analysis', status: 'completed', progress: 1, message: 'Owner job complete.', createdAt: timestamp, updatedAt: timestamp, cancellable: false, result: { ownerOnly, output: 'analysis-result' } };
     const approval: AsyncJob = { id: 'job-owner-approval', ownerActorId: firstActorId, projectId, kind: 'approval', status: 'waiting-for-user', progress: 0, message: 'Owner approval required.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, approval: { kind: 'file-read', summary: 'Read owner fixture', request: { ownerOnly, path: join(root, 'owner-fixture.wav') }, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
     projects.upsertJob(cancellable); projects.upsertJob(completed); projects.upsertJob(approval);
@@ -646,16 +759,14 @@ describe('authenticated localhost MCP contract', () => {
     const foreignInspect = await callTool(second.sessionId, 'job_manage', { action: 'inspect', jobId: completed.id });
     const foreignWait = await callTool(second.sessionId, 'job_manage', { action: 'wait', jobId: cancellable.id, timeoutMs: 1 });
     const foreignDependency = await callTool(second.sessionId, 'job_manage', { action: 'approval-dependency', jobId: approval.id });
-    const foreignGenerationInspect = await callTool(second.sessionId, 'generation_manage', { action: 'inspect', jobId: completed.id });
     const beforeForeignCancel = projects.getJob(cancellable.id);
     const foreignCancel = await callTool(second.sessionId, 'job_manage', { action: 'cancel', jobId: cancellable.id });
     expect(foreignList).toEqual([]);
     expect(foreignInspect).toEqual({ error: 'job_not_found' });
     expect(foreignWait).toEqual({ error: 'job_not_found' });
     expect(foreignDependency).toEqual({ error: 'job_not_found' });
-    expect(foreignGenerationInspect).toEqual({ error: 'generation_job_not_found' });
     expect(foreignCancel).toEqual({ error: 'job_not_found' });
-    expect(JSON.stringify([foreignList, foreignInspect, foreignWait, foreignDependency, foreignGenerationInspect, foreignCancel])).not.toContain(ownerOnly);
+    expect(JSON.stringify([foreignList, foreignInspect, foreignWait, foreignDependency, foreignCancel])).not.toContain(ownerOnly);
     expect(projects.getJob(cancellable.id)).toEqual(beforeForeignCancel);
 
     const ownerList = await callTool(first.sessionId, 'job_manage', { action: 'list' }) as Array<{ id: string }>;
@@ -680,7 +791,7 @@ describe('authenticated localhost MCP contract', () => {
     const now = Date.now();
     const policy: AuthorityPolicy = {
       version: 1, id: 'mcp-file-authority', issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 60_000).toISOString(), maxRuntimeMinutes: 5,
-      budget: { currency: 'USD', maxSpendMinor: 0, maxGenerationRequests: 0, maxUnknownCostRequests: 0 }, providers: {}, readRoots: [], writeRoots: [allowedRoot], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
+      readRoots: [], writeRoots: [allowedRoot], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false,
     };
     await expect(authority.install(policy)).resolves.toEqual({ installed: true });
 
@@ -822,15 +933,262 @@ describe('authenticated localhost MCP contract', () => {
     await expect(access(finalDestination)).rejects.toThrow();
   });
 
-  it('caps concurrent sessions at 32 and releases capacity on MCP DELETE', async () => {
-    const sessions: string[] = [];
-    for (let index = 0; index < 32; index += 1) sessions.push((await initialize()).sessionId);
-    const overflow = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'overflow', version: '1' } } });
-    expect(overflow.response.status).toBe(503);
-    expect(overflow.response.headers.get('retry-after')).toBe('5');
+  it('reserves the 32-session capacity across genuinely parallel initializes and recovers it after MCP DELETE', async () => {
+    const closes = new Map<string, number>();
+    await restartHostWithLifecycleHooks({ sessionClosed: (reservationId) => closes.set(reservationId, (closes.get(reservationId) ?? 0) + 1) });
+    const attempts = await Promise.all(Array.from({ length: 33 }, (_, index) => request({
+      jsonrpc: '2.0', id: createRequestId(), method: 'initialize',
+      params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: `parallel-${index}`, version: '1' } },
+    })));
+    const accepted = attempts.filter(({ response }) => response.status === 200);
+    const rejected = attempts.filter(({ response }) => response.status === 503);
+    expect(accepted).toHaveLength(32);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].response.headers.get('retry-after')).toBe('5');
+    expect(rejected[0].message).toMatchObject({ error: 'session_limit' });
+    const sessions = accepted.map(({ response }) => response.headers.get('mcp-session-id'));
+    expect(sessions.every(Boolean)).toBe(true);
+    expect(new Set(sessions).size).toBe(32);
+    expect(closes.size).toBe(0);
 
-    const removed = await fetch(url, { method: 'DELETE', headers: { authorization: `Bearer ${token}`, accept: 'application/json, text/event-stream', 'mcp-session-id': sessions[0] } });
+    const removed = await fetch(url, { method: 'DELETE', headers: { authorization: `Bearer ${token}`, accept: 'application/json, text/event-stream', 'mcp-session-id': sessions[0]! } });
     expect([200, 202, 204]).toContain(removed.status);
+    expect([...closes.values()]).toEqual([1]);
     expect((await initialize()).sessionId).toBeTruthy();
+    expect([...closes.values()]).toEqual([1]);
+  });
+
+  it('releases failed and client-aborted initialize reservations and closes each unadopted session exactly once', async () => {
+    const closes = new Map<string, number>();
+    let failBeforeConnect = true;
+    await restartHostWithLifecycleHooks({
+      beforeConnect: async () => { if (failBeforeConnect) { failBeforeConnect = false; throw new Error('simulated session allocation failure'); } },
+      sessionClosed: (reservationId) => closes.set(reservationId, (closes.get(reservationId) ?? 0) + 1),
+    });
+    const failed = await request({
+      jsonrpc: '2.0', id: createRequestId(), method: 'initialize',
+      params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'failed-allocation', version: '1' } },
+    });
+    expect(failed.response.status).toBe(500);
+    expect(failed.response.headers.get('mcp-session-id')).toBeNull();
+    expect([...closes.values()]).toEqual([1]);
+    expect((await initialize()).sessionId).toBeTruthy();
+    const rejected = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: {} });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.response.headers.get('mcp-session-id')).toBeNull();
+    expect(rejected.message?.error).toBeTruthy();
+    expect([...closes.values()]).toEqual([1, 1]);
+
+    let releaseInitialize!: () => void;
+    let initializeEntered!: () => void;
+    let abortObserved!: () => void;
+    const initializeRelease = new Promise<void>((resolvePromise) => { releaseInitialize = resolvePromise; });
+    const initializeStarted = new Promise<void>((resolvePromise) => { initializeEntered = resolvePromise; });
+    const initializeAbortObserved = new Promise<void>((resolvePromise) => { abortObserved = resolvePromise; });
+    let pauseNextInitialize = true;
+    await restartHostWithLifecycleHooks({
+      beforeInitializeHandle: async () => { if (pauseNextInitialize) { pauseNextInitialize = false; initializeEntered(); await initializeRelease; } },
+      initializationAborted: () => abortObserved(),
+      sessionClosed: (reservationId) => closes.set(reservationId, (closes.get(reservationId) ?? 0) + 1),
+    });
+    closes.clear();
+    let abortingRequest!: ClientRequest;
+    const aborted = new Promise<void>((resolvePromise) => {
+      abortingRequest = httpRequest(url, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      }, (response) => { response.resume(); response.once('end', resolvePromise); });
+      abortingRequest.once('error', () => resolvePromise());
+      abortingRequest.once('close', () => resolvePromise());
+      abortingRequest.end(JSON.stringify({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'aborted-initialize', version: '1' } } }));
+    });
+    await initializeStarted;
+    abortingRequest.destroy();
+    await aborted;
+    await initializeAbortObserved;
+    releaseInitialize();
+    const deadline = Date.now() + 2_000;
+    while (!closes.size && Date.now() < deadline) await new Promise((resolvePromise) => setTimeout(resolvePromise, 5));
+    expect([...closes.values()]).toEqual([1]);
+    expect((await initialize()).sessionId).toBeTruthy();
+  });
+
+  it('invalidates and cleans a late allocation before repeated stop calls settle', async () => {
+    const closes = new Map<string, number>();
+    let releaseConnect!: () => void;
+    let connectEntered!: () => void;
+    const connectRelease = new Promise<void>((resolvePromise) => { releaseConnect = resolvePromise; });
+    const connectStarted = new Promise<void>((resolvePromise) => { connectEntered = resolvePromise; });
+    await restartHostWithLifecycleHooks({
+      beforeConnect: async () => { connectEntered(); await connectRelease; },
+      sessionClosed: (reservationId) => closes.set(reservationId, (closes.get(reservationId) ?? 0) + 1),
+    });
+    const initializing = fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'late-allocation', version: '1' } } }),
+    });
+    await connectStarted;
+    let stopped = false;
+    const firstStop = host.stop().then(() => { stopped = true; });
+    const repeatedStop = host.stop();
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(stopped).toBe(false);
+    expect([...closes.values()]).toEqual([1]);
+    releaseConnect();
+    await Promise.all([firstStop, repeatedStop]);
+    await Promise.allSettled([initializing]);
+    await host.stop();
+    expect([...closes.values()]).toEqual([1]);
+    expect(host.connection()).toMatchObject({ url: undefined, token: '' });
+  });
+
+  it('awaits and cleans a connected initialize that races with stop without adopting it', async () => {
+    const closes = new Map<string, number>();
+    let releaseInitialize!: () => void;
+    let initializeEntered!: () => void;
+    const initializeRelease = new Promise<void>((resolvePromise) => { releaseInitialize = resolvePromise; });
+    const initializeStarted = new Promise<void>((resolvePromise) => { initializeEntered = resolvePromise; });
+    await restartHostWithLifecycleHooks({
+      beforeInitializeHandle: async () => { initializeEntered(); await initializeRelease; },
+      sessionClosed: (reservationId) => closes.set(reservationId, (closes.get(reservationId) ?? 0) + 1),
+    });
+    const initializing = fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'stop-racing-initialize', version: '1' } } }),
+    });
+    await initializeStarted;
+    let stopped = false;
+    const stopping = host.stop().then(() => { stopped = true; });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(stopped).toBe(false);
+    expect([...closes.values()]).toEqual([1]);
+    releaseInitialize();
+    await stopping;
+    await Promise.allSettled([initializing]);
+    expect([...closes.values()]).toEqual([1]);
+    expect(host.connection()).toMatchObject({ url: undefined, token: '' });
+  });
+
+  it('reauthenticates slow authenticated POST bodies against the live shutdown generation before routing', async () => {
+    let armed = false;
+    let admitted!: (generation: number) => void;
+    const admittedGenerations: number[] = [];
+    const armNextPost = () => new Promise<number>((resolvePromise) => { armed = true; admitted = resolvePromise; });
+    await restartHostWithLifecycleHooks({
+      requestAuthenticated: (method, pathname, generation) => {
+        if (!armed || method !== 'POST' || pathname !== '/mcp') return;
+        armed = false;
+        admittedGenerations.push(generation);
+        admitted(generation);
+      },
+    });
+
+    const expectStoppedChunkedPost = async (firstChunk: string, finalChunk: string, sessionId?: string) => {
+      const admittedRequest = armNextPost();
+      const pending = beginChunkedPost(url, token, firstChunk, sessionId);
+      await admittedRequest;
+      const stopping = host.stop();
+      pending.request.end(finalChunk);
+      const result = await pending.response;
+      expect(result.status).toBe(401);
+      expect(result.headers['www-authenticate']).toContain('Bearer');
+      expect(result.body).toBe('{"error":"invalid_token"}');
+      expect(result.body).not.toContain(host.connection().instanceId);
+      expect(result.body).not.toContain(host.connection().profileId);
+      await stopping;
+    };
+
+    const existing = await initialize();
+    await expectStoppedChunkedPost(
+      `{"jsonrpc":"2.0","id":${createRequestId()},"method":"tools/`,
+      'list","params":{}}',
+      existing.sessionId,
+    );
+
+    url = (await host.start(token)).url;
+    await expectStoppedChunkedPost(
+      `{"jsonrpc":"2.0","id":${createRequestId()},"method":"init`,
+      `ialize","params":{"protocolVersion":"${LATEST_PROTOCOL_VERSION}","capabilities":{},"clientInfo":{"name":"slow-initialize","version":"1"}}}`,
+    );
+
+    url = (await host.start(token)).url;
+    await expectStoppedChunkedPost('{not-', 'json');
+    expect(admittedGenerations).toHaveLength(3);
+    expect(admittedGenerations[1]).toBeGreaterThan(admittedGenerations[0]);
+    expect(admittedGenerations[2]).toBeGreaterThan(admittedGenerations[1]);
+
+    const rotatedToken = Buffer.alloc(32, 0x76).toString('base64url');
+    url = (await host.start(rotatedToken)).url;
+    const stale = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'stale-after-restart', version: '1' } } }),
+    });
+    expect(stale.status).toBe(401);
+    await expect(stale.text()).resolves.toBe('{"error":"invalid_token"}');
+    const current = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${rotatedToken}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'fresh-after-restart', version: '1' } } }),
+    });
+    expect(current.status).toBe(200);
+    expect(current.headers.get('mcp-session-id')).toBeTruthy();
+  });
+
+  it('rejects blank, invalid, wrong, and stale authority on every TCP route while stop is blocked', async () => {
+    let releaseInitialize!: () => void;
+    let initializeEntered!: () => void;
+    const initializeRelease = new Promise<void>((resolvePromise) => { releaseInitialize = resolvePromise; });
+    const initializeStarted = new Promise<void>((resolvePromise) => { initializeEntered = resolvePromise; });
+    await restartHostWithLifecycleHooks({ beforeInitializeHandle: async () => { initializeEntered(); await initializeRelease; } });
+
+    const stoppingUrl = url;
+    const initializing = fetch(stoppingUrl, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: createRequestId(), method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'blocked-stop-authentication', version: '1' } } }),
+    });
+    await initializeStarted;
+    let stopped = false;
+    const stopping = host.stop().then(() => { stopped = true; });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    expect(stopped).toBe(false);
+
+    const wrongToken = Buffer.alloc(32, 0x75).toString('base64url');
+    const authorities: Array<string | undefined> = [undefined, 'Bearer ', 'Bearer malformed', `Bearer ${wrongToken}`, `Bearer ${token}`];
+    const routes: Array<{ path: string; method: string; body?: string }> = [
+      { path: '/health', method: 'GET' },
+      { path: '/mcp', method: 'OPTIONS' },
+      { path: '/mcp', method: 'GET' },
+      { path: '/mcp', method: 'POST', body: '{not-json' },
+      { path: '/mcp', method: 'DELETE' },
+      { path: '/not-a-route', method: 'GET' },
+    ];
+
+    try {
+      for (const route of routes) {
+        for (const authorization of authorities) {
+          const response = await fetch(new URL(route.path, stoppingUrl), {
+            method: route.method,
+            headers: { ...(authorization === undefined ? {} : { authorization }), ...(route.body === undefined ? {} : { 'content-type': 'application/json' }) },
+            ...(route.body === undefined ? {} : { body: route.body }),
+          });
+          expect(response.status, `${route.method} ${route.path} with ${authorization ?? '<absent>'}`).toBe(401);
+          expect(response.headers.get('www-authenticate')).toContain('Bearer');
+          const text = await response.text();
+          expect(text).toBe('{"error":"invalid_token"}');
+          expect(text).not.toContain('AIMuse Engine');
+          expect(text).not.toContain(host.connection().instanceId);
+          expect(text).not.toContain(host.connection().profileId);
+        }
+      }
+    } finally {
+      releaseInitialize();
+      await Promise.allSettled([initializing, stopping]);
+    }
+    expect(stopped).toBe(true);
+    expect(host.connection()).toMatchObject({ url: undefined, token: '' });
   });
 });

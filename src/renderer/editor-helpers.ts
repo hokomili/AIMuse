@@ -107,7 +107,6 @@ function expectedRevision(project: AIMuseProject, operation: ProjectOperation): 
     case 'sidechain.upsert': return project.sidechains[operation.route.id]?.revision;
     case 'sidechain.delete': return project.sidechains[operation.routeId]?.revision;
     case 'asset.delete': return project.assets[operation.assetId]?.revision;
-    case 'provenance.update': return project.provenance[operation.provenanceId]?.revision;
     case 'sfx-deliverable.update': case 'sfx-deliverable.delete': return project.sfxDeliverables[operation.deliverableId]?.revision;
     case 'checkpoint.delete': return project.checkpoints[operation.checkpointId]?.revision;
     case 'variant.update': return project.variants[operation.variantId]?.revision;
