@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { link, lstat, mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
@@ -91,35 +91,24 @@ async function sourceBoundary(workspace) {
     if (neverTrackRootNames.has(path.split('/')[0])) throw new Error(`The source boundary manifest enters protected root ${path}.`);
   }
 
-  const listed = [];
-  async function addFile(path) {
+  for (const path of [...rootFiles, ...files]) {
     const info = await lstat(resolve(workspace, ...path.split('/')));
     if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Manifest source input must be a real file: ${path}`);
-    listed.push(path);
   }
-  async function collectTree(tree) {
-    async function visit(directory) {
-      const entries = await readdir(resolve(workspace, ...directory.split('/')), { withFileTypes: true });
-      for (const entry of entries) {
-        const path = posix.join(directory, entry.name);
-        if (entry.isSymbolicLink()) throw new Error(`Manifest source tree contains a symbolic link: ${path}`);
-        if (entry.isDirectory()) await visit(path);
-        else if (entry.isFile()) listed.push(path);
-        else throw new Error(`Manifest source tree contains an unsupported object: ${path}`);
-      }
-    }
-    await visit(tree);
+  for (const tree of trees) {
+    const info = await lstat(resolve(workspace, ...tree.split('/')));
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Manifest source tree must be a real directory: ${tree}`);
   }
-  for (const path of [...rootFiles, ...files]) await addFile(path);
-  for (const tree of trees) await collectTree(tree);
-  const paths = [...new Set(listed)].sort((left, right) => left.localeCompare(right, 'en'));
-  if (paths.length !== listed.length) throw new Error('The source boundary manifest resolves the same file more than once.');
-  if (!paths.includes(SOURCE_BOUNDARY_MANIFEST)) throw new Error('The source boundary manifest must include its own bytes through an authorized declaration.');
+  const literalPaths = [...rootFiles, ...files];
+  const authorizes = (path) => literalPaths.includes(path) || trees.some((tree) => path.startsWith(`${tree}/`));
+  if (!authorizes(SOURCE_BOUNDARY_MANIFEST)) throw new Error('The source boundary manifest must include its own bytes through an authorized declaration.');
   return {
     manifest,
     manifestSha256: sha256Bytes(manifestBytes),
     pathspecs: declaredRoots,
-    paths,
+    literalPaths,
+    trees,
+    authorizes,
   };
 }
 
@@ -142,9 +131,12 @@ export async function captureSourceInputs(workspace = process.cwd()) {
   const status = run('git', ['status', '--short', '--untracked-files=all', '-z', ...scopedArguments], root);
   if (status.length !== 0) throw new Error('A formal package requires every manifest-authorized source input to be clean and committed.');
   const headPaths = run('git', ['ls-tree', '-r', '-z', '--name-only', 'HEAD', ...scopedArguments], root).split('\0').filter(Boolean).sort((left, right) => left.localeCompare(right, 'en'));
-  if (stableStringify(headPaths) !== stableStringify(boundary.paths)) throw new Error('The clean commit source set does not exactly match the declared source manifest.');
+  if (new Set(headPaths).size !== headPaths.length || headPaths.some((path) => !boundary.authorizes(path))) throw new Error('The clean commit source set escapes the declared source manifest.');
+  for (const path of boundary.literalPaths) if (!headPaths.includes(path)) throw new Error(`Declared source file is not committed at HEAD: ${path}`);
+  for (const tree of boundary.trees) if (!headPaths.some((path) => path.startsWith(`${tree}/`))) throw new Error(`Declared source tree has no committed files at HEAD: ${tree}`);
+  if (!headPaths.includes(SOURCE_BOUNDARY_MANIFEST)) throw new Error('The committed source set does not contain its boundary manifest.');
   const entries = [];
-  for (const path of boundary.paths) entries.push(await digestWorkspaceFile(root, path));
+  for (const path of headPaths) entries.push(await digestWorkspaceFile(root, path));
   const entriesSha256 = sha256Bytes(Buffer.from(stableStringify(entries)));
   return {
     scope: 'manifest-authorized-clean-commit',

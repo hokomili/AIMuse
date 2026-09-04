@@ -129,7 +129,7 @@ describe('frozen package subjects', () => {
     roots.push(root);
     execFileSync('git', ['init', '-q'], { cwd: root });
     await mkdir(join(root, 'scripts'), { recursive: true });
-    await writeFile(join(root, '.gitignore'), '/protected/\n');
+    await writeFile(join(root, '.gitignore'), '/protected/\n/scripts/local-noise.txt\n');
     await writeFile(join(root, 'source.txt'), 'declared');
     await writeFile(join(root, 'scripts', 'initial-snapshot-manifest.json'), `${JSON.stringify({
       version: 1,
@@ -142,7 +142,9 @@ describe('frozen package subjects', () => {
     execFileSync('git', ['-c', 'user.name=AIMuse Test', '-c', 'user.email=test@aimuse.invalid', 'commit', '-qm', 'fixture'], { cwd: root });
     await mkdir(join(root, 'protected'), { recursive: true });
     await writeFile(join(root, 'protected', 'do-not-read.txt'), 'secret');
+    await writeFile(join(root, 'scripts', 'local-noise.txt'), 'ignored local metadata');
     if (process.platform !== 'win32') await chmod(join(root, 'protected', 'do-not-read.txt'), 0o000);
+    if (process.platform !== 'win32') await chmod(join(root, 'scripts', 'local-noise.txt'), 0o000);
     const observed = await captureSourceInputs(root);
     expect(observed).toMatchObject({
       scope: 'manifest-authorized-clean-commit',
@@ -153,5 +155,35 @@ describe('frozen package subjects', () => {
     expect(observed.entries.map((entry) => entry.path)).toEqual(['.gitignore', 'scripts/initial-snapshot-manifest.json', 'source.txt']);
     await writeFile(join(root, 'source.txt'), 'dirty');
     await expect(captureSourceInputs(root)).rejects.toThrow(/clean and committed/u);
+  });
+
+  it('independently verifies committed tree inputs without reading ignored files inside that tree', async () => {
+    const value = await fixture();
+    await chmod(value.runRoot, 0o700);
+    execFileSync('git', ['init', '-q'], { cwd: value.root });
+    await writeFile(join(value.root, '.gitignore'), '/out/\n/test-results/\n/scripts/local-noise.txt\n');
+    await writeFile(join(value.root, 'source.txt'), 'declared');
+    await mkdir(join(value.root, 'scripts'), { recursive: true });
+    await writeFile(join(value.root, 'scripts', 'initial-snapshot-manifest.json'), `${JSON.stringify({
+      version: 1,
+      rootFiles: ['.gitignore', 'source.txt'],
+      trees: ['scripts'],
+      files: [],
+      neverTrackRootNames: ['out', 'test-results'],
+    }, null, 2)}\n`);
+    execFileSync('git', ['add', '.'], { cwd: value.root });
+    execFileSync('git', ['-c', 'user.name=AIMuse Test', '-c', 'user.email=test@aimuse.invalid', 'commit', '-qm', 'fixture'], { cwd: value.root });
+    await writeFile(join(value.root, 'scripts', 'local-noise.txt'), 'ignored local metadata');
+    if (process.platform !== 'win32') await chmod(join(value.root, 'scripts', 'local-noise.txt'), 0o000);
+    const sourceInputs = await captureSourceInputs(value.root);
+    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs, inspect: async () => inspection });
+    await expect(verifyPackageSubject({
+      workspace: value.root,
+      manifestPath: created.manifestPath,
+      expectedManifestSha256: created.manifestSha256,
+      formalRunRoot: value.runRoot,
+      platform: 'darwin',
+      inspect: async () => inspection,
+    })).resolves.toMatchObject({ manifestSha256: created.manifestSha256 });
   });
 });
