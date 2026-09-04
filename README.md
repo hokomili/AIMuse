@@ -28,7 +28,7 @@ node scripts/npm-node24.mjs ci
 node scripts/npm-node24.mjs run test:level1:auto
 ```
 
-The packaged app is written to `out\AIMuse-win32-x64`. Level 2 adds the exact packaged Playwright regression; Level 3 builds release artifacts, performance evidence, checksums and license reports. Each command is only the automated portion: formal AIDraw-style certification also requires a fresh independent Luna/high task, isolated MCP, native Computer Use and both cross-surface directions as defined in [TESTING.md](docs/TESTING.md).
+The packaged app is written to the explicitly selected Forge output (`out\AIMuse-win32-x64` for ordinary development and the protected formal root for formal QA). Formal Levels 1/2 capture only the tracked source allowlist, publish schema-2 content observations with no producer verdict, and require a separately pinned read-only verifier. Level 2 adds the exact packaged Playwright regression; Level 3 builds release artifacts, performance evidence, checksums and license reports. Each command is only the automated portion: formal AIDraw-style certification also requires a fresh independent Luna/high task, isolated MCP, native Computer Use and both cross-surface directions as defined in [TESTING.md](docs/TESTING.md).
 
 ## Prepare on macOS
 

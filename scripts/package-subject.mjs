@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { link, lstat, mkdir, readFile, readlink, realpath, stat, unlink, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { link, lstat, mkdir, readFile, readdir, realpath, stat, unlink, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { FuseState, FuseV1Options, getCurrentFuseWire } from '@electron/fuses';
 
-export const SUBJECT_SCHEMA_VERSION = 1;
+export const SUBJECT_SCHEMA_VERSION = 2;
+export const SOURCE_BOUNDARY_MANIFEST = 'scripts/initial-snapshot-manifest.json';
 const FILE_ROLES = ['applicationExecutable', 'applicationAsar', 'audioHelper', 'pluginScanner', 'pluginBridge'];
 const EXPECTED_FUSES = new Map([
   [FuseV1Options.RunAsNode, FuseState.DISABLE],
@@ -66,29 +67,100 @@ export function resolveSubjectManifestPath({ workspace = process.cwd(), manifest
   return selected;
 }
 
+function sourceManifestEntry(value, label) {
+  if (typeof value !== 'string' || !value || value.includes('\\') || isAbsolute(value) || value.split('/').includes('..') || posix.normalize(value) !== value) {
+    throw new Error(`${label} contains an unsafe source path: ${String(value)}`);
+  }
+  return value;
+}
+
+async function sourceBoundary(workspace) {
+  const manifestPath = resolve(workspace, SOURCE_BOUNDARY_MANIFEST);
+  const manifestBytes = await readFile(manifestPath);
+  const manifest = JSON.parse(manifestBytes.toString('utf8'));
+  if (manifest?.version !== 1) throw new Error('The source boundary manifest schema is unsupported.');
+  const groups = ['rootFiles', 'files', 'trees', 'neverTrackRootNames'];
+  for (const group of groups) if (!Array.isArray(manifest[group])) throw new Error(`The source boundary manifest is missing ${group}.`);
+  const rootFiles = manifest.rootFiles.map((path) => sourceManifestEntry(path, 'rootFiles'));
+  const files = manifest.files.map((path) => sourceManifestEntry(path, 'files'));
+  const trees = manifest.trees.map((path) => sourceManifestEntry(path, 'trees'));
+  const neverTrackRootNames = new Set(manifest.neverTrackRootNames.map((path) => sourceManifestEntry(path, 'neverTrackRootNames')));
+  const declaredRoots = [...rootFiles, ...files, ...trees];
+  if (new Set(declaredRoots).size !== declaredRoots.length) throw new Error('The source boundary manifest contains duplicate declarations.');
+  for (const path of declaredRoots) {
+    if (neverTrackRootNames.has(path.split('/')[0])) throw new Error(`The source boundary manifest enters protected root ${path}.`);
+  }
+
+  const listed = [];
+  async function addFile(path) {
+    const info = await lstat(resolve(workspace, ...path.split('/')));
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Manifest source input must be a real file: ${path}`);
+    listed.push(path);
+  }
+  async function collectTree(tree) {
+    async function visit(directory) {
+      const entries = await readdir(resolve(workspace, ...directory.split('/')), { withFileTypes: true });
+      for (const entry of entries) {
+        const path = posix.join(directory, entry.name);
+        if (entry.isSymbolicLink()) throw new Error(`Manifest source tree contains a symbolic link: ${path}`);
+        if (entry.isDirectory()) await visit(path);
+        else if (entry.isFile()) listed.push(path);
+        else throw new Error(`Manifest source tree contains an unsupported object: ${path}`);
+      }
+    }
+    await visit(tree);
+  }
+  for (const path of [...rootFiles, ...files]) await addFile(path);
+  for (const tree of trees) await collectTree(tree);
+  const paths = [...new Set(listed)].sort((left, right) => left.localeCompare(right, 'en'));
+  if (paths.length !== listed.length) throw new Error('The source boundary manifest resolves the same file more than once.');
+  if (!paths.includes(SOURCE_BOUNDARY_MANIFEST)) throw new Error('The source boundary manifest must include its own bytes through an authorized declaration.');
+  return {
+    manifest,
+    manifestSha256: sha256Bytes(manifestBytes),
+    pathspecs: declaredRoots,
+    paths,
+  };
+}
+
 async function digestWorkspaceFile(workspace, path) {
   const absolute = resolve(workspace, path);
   const info = await lstat(absolute);
-  const content = info.isSymbolicLink() ? Buffer.from(await readlink(absolute)) : await readFile(absolute);
-  return `${path}\0${info.mode & 0o7777}\0${sha256Bytes(content)}\0`;
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Manifest source input must remain a real file: ${path}`);
+  const content = await readFile(absolute);
+  return { path, mode: info.mode & 0o7777, bytes: content.length, sha256: sha256Bytes(content) };
 }
 
 export async function captureSourceInputs(workspace = process.cwd()) {
   const root = resolve(workspace);
+  const boundary = await sourceBoundary(root);
   const head = run('git', ['rev-parse', 'HEAD'], root).trim();
+  const tree = run('git', ['rev-parse', 'HEAD^{tree}'], root).trim();
   const branch = run('git', ['branch', '--show-current'], root).trim();
-  const index = run('git', ['ls-files', '--stage', '-z'], root);
-  const status = run('git', ['status', '--short', '--untracked-files=all', '-z'], root);
-  const listed = run('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], root).split('\0').filter(Boolean).sort();
-  const workspaceHash = createHash('sha256');
-  for (const path of listed) workspaceHash.update(await digestWorkspaceFile(root, path));
+  const scopedArguments = ['--', ...boundary.pathspecs];
+  const index = run('git', ['ls-files', '--stage', '-z', ...scopedArguments], root);
+  const status = run('git', ['status', '--short', '--untracked-files=all', '-z', ...scopedArguments], root);
+  if (status.length !== 0) throw new Error('A formal package requires every manifest-authorized source input to be clean and committed.');
+  const headPaths = run('git', ['ls-tree', '-r', '-z', '--name-only', 'HEAD', ...scopedArguments], root).split('\0').filter(Boolean).sort((left, right) => left.localeCompare(right, 'en'));
+  if (stableStringify(headPaths) !== stableStringify(boundary.paths)) throw new Error('The clean commit source set does not exactly match the declared source manifest.');
+  const entries = [];
+  for (const path of boundary.paths) entries.push(await digestWorkspaceFile(root, path));
+  const entriesSha256 = sha256Bytes(Buffer.from(stableStringify(entries)));
   return {
+    scope: 'manifest-authorized-clean-commit',
+    sourceManifestPath: SOURCE_BOUNDARY_MANIFEST,
+    sourceManifestSha256: boundary.manifestSha256,
+    sourceManifestVersion: boundary.manifest.version,
+    rootWasEnumerated: false,
+    protectedRootsAccessed: false,
     gitHead: head,
+    gitTree: tree,
     gitBranch: branch,
     indexSha256: sha256Bytes(Buffer.from(index)),
     dirtyStatusSha256: sha256Bytes(Buffer.from(status)),
-    workspaceInputsSha256: workspaceHash.digest('hex').toUpperCase(),
-    workspaceInputFiles: listed.length,
+    workspaceInputsSha256: entriesSha256,
+    workspaceInputFiles: entries.length,
+    entries,
   };
 }
 
@@ -181,7 +253,7 @@ function subjectIdentity(subject) {
 }
 
 async function publishExclusive(path, bytes) {
-  await mkdir(resolve(path, '..'), { recursive: true });
+  await mkdir(resolve(path, '..'), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
   try { await link(temporary, path); }
@@ -222,6 +294,7 @@ export async function createPackageSubject({
   const manifest = {
     schemaVersion: SUBJECT_SCHEMA_VERSION,
     createdAt: new Date().toISOString(),
+    acceptanceVerdict: null,
     inputs: sourceInputs ?? await captureSourceInputs(root),
     subject,
   };
@@ -229,36 +302,6 @@ export async function createPackageSubject({
   await assertPublicationPath(selectedManifest, root, formalRunRoot);
   await publishExclusive(selectedManifest, bytes);
   return { manifest, manifestPath: selectedManifest, manifestSha256: sha256Bytes(bytes) };
-}
-
-function validateManifestShape(manifest) {
-  if (!manifest || typeof manifest !== 'object' || manifest.schemaVersion !== SUBJECT_SCHEMA_VERSION || !manifest.inputs || !manifest.subject) throw new Error('Invalid AIMuse package subject manifest schema.');
-  if (manifest.subject.identitySha256 !== subjectIdentity(manifest.subject)) throw new Error('Package subject identity digest does not match its declared metadata.');
-  for (const role of FILE_ROLES) if (!manifest.subject.files?.[role]) throw new Error(`Package subject manifest is missing ${role}.`);
-}
-
-export async function verifyPackageSubject({ workspace = process.cwd(), manifestPath, expectedManifestSha256, platform = process.platform, inspect = inspectPackage } = {}) {
-  if (!manifestPath) throw new Error('A package subject manifest path is required.');
-  const root = resolve(workspace);
-  const bytes = await readFile(resolve(manifestPath));
-  const digest = sha256Bytes(bytes);
-  if (!expectedManifestSha256 || digest !== expectedManifestSha256.toUpperCase()) throw new Error(`Package subject manifest byte digest drifted: expected ${expectedManifestSha256 || '<required>'}, observed ${digest}.`);
-  const manifest = JSON.parse(bytes.toString('utf8'));
-  validateManifestShape(manifest);
-  if (manifest.subject.platform !== platform) throw new Error(`Package subject platform ${manifest.subject.platform} does not match ${platform}.`);
-  const locations = packageLocations(root, manifest.subject.platform, manifest.subject.architecture, dirname(resolveSubjectPath(root, manifest.subject.packageDirectory)));
-  if (relativeSubjectPath(root, locations.app) !== manifest.subject.app) throw new Error('Package subject app path does not match its platform/architecture package location.');
-  for (const role of FILE_ROLES) {
-    const declared = manifest.subject.files[role];
-    const path = resolveSubjectPath(root, declared.path);
-    if (path !== locations.files[role]) throw new Error(`Package subject ${role} path does not match its canonical package location.`);
-    const observed = await describeFile(root, path);
-    if (stableStringify(observed) !== stableStringify(declared)) throw new Error(`Package subject ${role} bytes drifted after manifest creation.`);
-  }
-  const inspected = await inspect({ platform: manifest.subject.platform, architecture: manifest.subject.architecture, locations });
-  assertInspectionContract(manifest.subject.platform, manifest.subject.architecture, inspected);
-  for (const key of ['architectures', 'signature', 'bundle', 'hardenedFuses']) if (stableStringify(inspected[key]) !== stableStringify(manifest.subject[key])) throw new Error(`Package subject ${key} drifted after manifest creation.`);
-  return { manifest, manifestPath: resolve(manifestPath), manifestSha256: digest };
 }
 
 function parseCli(arguments_) {
@@ -285,13 +328,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify({ created: true, manifestPath: result.manifestPath, manifestSha256: result.manifestSha256, subjectIdentitySha256: result.manifest.subject.identitySha256 }, null, 2)}\n`);
     return;
   }
-  if (command === 'verify') {
-    const expectedManifestSha256 = values.get('expected-manifest-sha256') || process.env.AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256;
-    const result = await verifyPackageSubject({ manifestPath, expectedManifestSha256 });
-    process.stdout.write(`${JSON.stringify({ verified: true, manifestPath: result.manifestPath, manifestSha256: result.manifestSha256, subjectIdentitySha256: result.manifest.subject.identitySha256 }, null, 2)}\n`);
-    return;
-  }
-  throw new Error('Usage: node scripts/package-subject.mjs create|verify --manifest <path> [--formal-run-root <path>] [--expected-manifest-sha256 <sha256>]');
+  throw new Error('Usage: node scripts/package-subject.mjs create --manifest <path> [--formal-run-root <path>]');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch((error) => { process.stderr.write(`AIMuse package subject failed: ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });

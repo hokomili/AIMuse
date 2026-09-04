@@ -17,7 +17,7 @@ async function fixture(): Promise<{ root: string; executable: string; manifestPa
   const executableBytes = Buffer.from('exact application bytes');
   await writeFile(executable, executableBytes);
   const relativeExecutable = relative(root, executable).split(sep).join('/');
-  const manifest = { schemaVersion: 1, subject: { platform: process.platform, architecture: process.arch, files: { applicationExecutable: { path: relativeExecutable, bytes: executableBytes.length, sha256: sha256(executableBytes) } } } };
+  const manifest = { schemaVersion: 2, acceptanceVerdict: null, subject: { platform: process.platform, architecture: process.arch, files: { applicationExecutable: { path: relativeExecutable, bytes: executableBytes.length, sha256: sha256(executableBytes) } } } };
   const manifestPath = join(root, 'subject.json');
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
   await writeFile(manifestPath, manifestBytes);

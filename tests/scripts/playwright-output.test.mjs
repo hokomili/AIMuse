@@ -7,8 +7,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   FORMAL_RUN_ROOT_ENV,
   PACKAGED_E2E_OUTPUT_ENV,
+  RENDERER_OUTPUT_ENV,
   packagedE2ePathsOverlap,
   resolvePackagedE2eOutputSelection,
+  resolveRendererOutputSelection,
 } from '../../scripts/playwright-output.mjs';
 
 const createdRoots = [];
@@ -36,6 +38,24 @@ describe('packaged Playwright output isolation', () => {
     expect(selection.outputDir).toBe(join(workspace, 'test-results', 'playwright', 'packaged-e2e'));
     expect(selection.htmlReportDir).toBe(`${selection.outputDir}-html-report`);
     expect(selection.testResultsRoot).toBe(join(workspace, 'test-results'));
+  });
+
+  it('keeps formal renderer artifacts inside the protected run root', async () => {
+    const workspace = await temporaryWorkspace();
+    const formalRunRoot = join(workspace, 'test-results', 'luna-high', 'renderer-run');
+    await mkdir(formalRunRoot, { recursive: true });
+    const selection = resolveRendererOutputSelection({
+      workspace,
+      environment: { [FORMAL_RUN_ROOT_ENV]: formalRunRoot },
+    });
+    expect(selection.outputDir).toBe(join(formalRunRoot, 'renderer-playwright'));
+    expect(() => resolveRendererOutputSelection({
+      workspace,
+      environment: {
+        [FORMAL_RUN_ROOT_ENV]: formalRunRoot,
+        [RENDERER_OUTPUT_ENV]: join(workspace, 'test-results', 'renderer-outside'),
+      },
+    })).toThrow(/strict descendant/u);
   });
 
   it('uses case-insensitive containment and overlap semantics on Windows', () => {

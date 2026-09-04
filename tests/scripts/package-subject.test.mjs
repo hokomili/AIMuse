@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -7,8 +7,8 @@ import {
   createPackageSubject,
   captureSourceInputs,
   resolveSubjectManifestPath,
-  verifyPackageSubject,
 } from '../../scripts/package-subject.mjs';
+import { verifyPackageSubject } from '../../scripts/package-subject-verifier.mjs';
 
 const roots = [];
 afterEach(async () => {
@@ -43,6 +43,12 @@ async function fixture(platform = 'darwin', architecture = 'arm64') {
     writeFile(join(resources, 'native', `aimuse-plugin-scanner${extension}`), 'scanner'),
     writeFile(join(resources, 'native', `aimuse-plugin-bridge${extension}`), 'bridge'),
   ]);
+  await Promise.all([
+    executable,
+    join(resources, 'native', `aimuse-audio${extension}`),
+    join(resources, 'native', `aimuse-plugin-scanner${extension}`),
+    join(resources, 'native', `aimuse-plugin-bridge${extension}`),
+  ].map((path) => chmod(path, 0o755)));
   const runRoot = join(root, 'test-results', 'luna-high', 'run-1');
   await mkdir(runRoot, { recursive: true });
   return { root, runRoot, executable, resources };
@@ -66,16 +72,17 @@ describe('frozen package subjects', () => {
   it('fails on drift of every frozen component and on manifest-byte drift', async () => {
     const value = await fixture();
     const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs: inputs, inspect: async () => inspection });
-    await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'darwin', inspect: async () => inspection })).resolves.toMatchObject({ manifestSha256: created.manifestSha256 });
+    const verifierDependencies = { observeSourceInputs: async () => inputs };
+    await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'darwin', inspect: async () => inspection }, verifierDependencies)).resolves.toMatchObject({ manifestSha256: created.manifestSha256 });
     for (const [role, declared] of Object.entries(created.manifest.subject.files)) {
       const path = join(value.root, ...declared.path.split('/'));
       const original = await readFile(path);
       await writeFile(path, Buffer.concat([original, Buffer.from(`-${role}-drift`)]));
-      await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'darwin', inspect: async () => inspection })).rejects.toThrow(new RegExp(`${role} bytes drifted`, 'u'));
+      await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'darwin', inspect: async () => inspection }, verifierDependencies)).rejects.toThrow(new RegExp(`${role} bytes drifted`, 'u'));
       await writeFile(path, original);
     }
     await writeFile(created.manifestPath, `${await readFile(created.manifestPath, 'utf8')} `);
-    await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'darwin', inspect: async () => inspection })).rejects.toThrow(/manifest byte digest drifted/u);
+    await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'darwin', inspect: async () => inspection }, verifierDependencies)).rejects.toThrow(/manifest byte digest drifted/u);
   });
 
   it('keeps the Windows package path and helper suffix contract', async () => {
@@ -84,7 +91,7 @@ describe('frozen package subjects', () => {
     const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs: inputs, platform: 'win32', architecture: 'x64', inspect: async () => windowsInspection });
     expect(created.manifest.subject.files.applicationExecutable.path.endsWith('AIMuse.exe')).toBe(true);
     expect(created.manifest.subject.files.audioHelper.path.endsWith('aimuse-audio.exe')).toBe(true);
-    await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'win32', inspect: async () => windowsInspection })).resolves.toBeTruthy();
+    await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'win32', inspect: async () => windowsInspection }, { observeSourceInputs: async () => inputs })).resolves.toBeTruthy();
   });
 
   it('rejects broad and unrelated manifest destinations', async () => {
@@ -99,6 +106,14 @@ describe('frozen package subjects', () => {
     execFileSync('git', ['init', '-q'], { cwd: root });
     await writeFile(join(root, '.gitignore'), 'out/\ntest-results/\n');
     await writeFile(join(root, 'input.txt'), 'source');
+    await mkdir(join(root, 'scripts'), { recursive: true });
+    await writeFile(join(root, 'scripts', 'initial-snapshot-manifest.json'), `${JSON.stringify({
+      version: 1,
+      rootFiles: ['.gitignore', 'input.txt'],
+      trees: ['scripts'],
+      files: [],
+      neverTrackRootNames: ['out', 'test-results'],
+    }, null, 2)}\n`);
     execFileSync('git', ['add', '.'], { cwd: root });
     execFileSync('git', ['-c', 'user.name=AIMuse Test', '-c', 'user.email=test@aimuse.invalid', 'commit', '-qm', 'fixture'], { cwd: root });
     const before = await captureSourceInputs(root);
@@ -107,5 +122,36 @@ describe('frozen package subjects', () => {
     await mkdir(join(root, 'test-results', 'luna-high', 'run'), { recursive: true });
     await writeFile(join(root, 'test-results', 'luna-high', 'run', 'preflight.json'), 'ignored evidence');
     expect(await captureSourceInputs(root)).toEqual(before);
+  });
+
+  it('enumerates only manifest-authorized inputs and rejects dirty authorized source', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aimuse-input-boundary-'));
+    roots.push(root);
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    await mkdir(join(root, 'scripts'), { recursive: true });
+    await writeFile(join(root, '.gitignore'), '/protected/\n');
+    await writeFile(join(root, 'source.txt'), 'declared');
+    await writeFile(join(root, 'scripts', 'initial-snapshot-manifest.json'), `${JSON.stringify({
+      version: 1,
+      rootFiles: ['.gitignore', 'source.txt'],
+      trees: ['scripts'],
+      files: [],
+      neverTrackRootNames: ['protected'],
+    }, null, 2)}\n`);
+    execFileSync('git', ['add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=AIMuse Test', '-c', 'user.email=test@aimuse.invalid', 'commit', '-qm', 'fixture'], { cwd: root });
+    await mkdir(join(root, 'protected'), { recursive: true });
+    await writeFile(join(root, 'protected', 'do-not-read.txt'), 'secret');
+    if (process.platform !== 'win32') await chmod(join(root, 'protected', 'do-not-read.txt'), 0o000);
+    const observed = await captureSourceInputs(root);
+    expect(observed).toMatchObject({
+      scope: 'manifest-authorized-clean-commit',
+      rootWasEnumerated: false,
+      protectedRootsAccessed: false,
+      workspaceInputFiles: 3,
+    });
+    expect(observed.entries.map((entry) => entry.path)).toEqual(['.gitignore', 'scripts/initial-snapshot-manifest.json', 'source.txt']);
+    await writeFile(join(root, 'source.txt'), 'dirty');
+    await expect(captureSourceInputs(root)).rejects.toThrow(/clean and committed/u);
   });
 });

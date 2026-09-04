@@ -7,6 +7,7 @@ This checklist complements `FEATURE_TRACKER.md`; it cannot override an open trac
 - [ ] Choose a SemVer prerelease and add a dated changelog entry.
 - [ ] Create a fresh owner-private formal root plus disjoint Playwright output, then run the documented package-once Level 2 workflow on the target platform.
 - [ ] Retain the exclusively created post-package subject manifest and prove executable/ASAR/native-helper hashes, architecture, signature, bundle, and fuses remain unchanged after verification, packaged E2E, coordinator handoff, and cleanup.
+- [ ] Retain the schema-2 content-only automation observations, confirm source capture stayed within `scripts/initial-snapshot-manifest.json`, and have a caller-pinned `release-evidence-verifier.mjs` derive the result; neither producer manifest may contain an acceptance verdict.
 - [ ] Complete an independent Level 2 Luna/high MCP + Computer Use report against that exact manifest-bound package.
 - [ ] Run fresh registry/version checks and `npm run audit:release` for the exact dependency graph; retain signature/attestation results where supported.
 - [ ] Reconcile README, tracker, parity audit, limitations, and dependency/security evidence.

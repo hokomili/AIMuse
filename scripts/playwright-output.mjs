@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join, posix, resolve, win32 } from 'node
 
 export const PACKAGED_E2E_OUTPUT_ENV = 'AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR';
 export const FORMAL_RUN_ROOT_ENV = 'AIMUSE_FORMAL_RUN_ROOT';
+export const RENDERER_OUTPUT_ENV = 'AIMUSE_RENDERER_PLAYWRIGHT_OUTPUT_DIR';
 
 function pathKey(path, platform) {
   const pathApi = platform === 'win32' ? win32 : posix;
@@ -125,4 +126,26 @@ export function resolvePackagedE2eOutputSelection({
     htmlReportDir,
     formalRunRoot,
   };
+}
+
+export function resolveRendererOutputSelection({
+  workspace = process.cwd(),
+  environment = process.env,
+  platform = process.platform,
+} = {}) {
+  const workspaceRoot = assertCanonicalPath(resolve(workspace), 'AIMuse workspace', platform);
+  const formalRunValue = environment[FORMAL_RUN_ROOT_ENV];
+  if (formalRunValue === undefined) return {
+    outputDir: assertCanonicalPath(join(workspaceRoot, 'test-results', 'renderer-headless'), 'Renderer Playwright output directory', platform),
+    formalRunRoot: undefined,
+  };
+  const formalRunRoot = assertCanonicalPath(absoluteEnvironmentPath(formalRunValue, FORMAL_RUN_ROOT_ENV), 'Formal run root', platform);
+  const configured = environment[RENDERER_OUTPUT_ENV];
+  const outputDir = assertCanonicalPath(
+    configured === undefined ? join(formalRunRoot, 'renderer-playwright') : absoluteEnvironmentPath(configured, RENDERER_OUTPUT_ENV),
+    'Renderer Playwright output directory',
+    platform,
+  );
+  if (!strictDescendant(formalRunRoot, outputDir, platform)) throw new Error(`Formal renderer Playwright output must be a strict descendant of ${formalRunRoot}; received ${outputDir}.`);
+  return { outputDir, formalRunRoot };
 }

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { listPackage } from '@electron/asar';
 import { FuseState, FuseV1Options, getCurrentFuseWire } from '@electron/fuses';
-import { resolveSubjectPath, verifyPackageSubject } from './package-subject.mjs';
+import { resolveSubjectPath, verifyPackageSubject } from './package-subject-verifier.mjs';
 
 if (process.platform !== 'win32' && process.platform !== 'darwin') {
   process.stderr.write(`AIMuse package verification is unsupported on ${process.platform}.\n`);

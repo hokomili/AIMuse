@@ -10,7 +10,7 @@ Run for every packaged candidate:
 node scripts/npm-node24.mjs run test:level1:auto
 ```
 
-Formal use requires a fresh owner-private `test-results/luna-high/<run>` root and disjoint `test-results/playwright/<run>` output. Level 1 packages once, declares the immutable subject only after packaging, verifies exact executable/ASAR/native-helper/bundle/fuse identity, exercises one UI→MCP and one MCP→UI edit, then gracefully shuts down and redacts the run handoff.
+Formal use requires a fresh owner-private `test-results/luna-high/<run>` root and disjoint `test-results/playwright/<run>` output. Source capture is limited to `scripts/initial-snapshot-manifest.json`. Level 1 packages once, emits content-only observations with no producer verdict, then requires the caller-pinned independent verifier before the subject can proceed to UI→MCP/MCP→UI work, graceful shutdown and redaction.
 
 ## Regression
 

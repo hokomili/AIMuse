@@ -58,6 +58,24 @@ describe('native agent-driven DAW product boundary', () => {
     for (const entitlement of entitlements) expect(entitlement).not.toMatch(/keychain-access-groups|application-identifier/u);
   });
 
+  it('keeps release evidence production separate from caller-controlled acceptance', async () => {
+    const [producer, workflow, subjectVerifier, releaseVerifier] = await Promise.all([
+      readFile(resolve('scripts/package-subject.mjs'), 'utf8'),
+      readFile(resolve('scripts/formal-package-workflow.mjs'), 'utf8'),
+      readFile(resolve('scripts/package-subject-verifier.mjs'), 'utf8'),
+      readFile(resolve('scripts/release-evidence-verifier.mjs'), 'utf8'),
+    ]);
+    expect(producer).not.toContain('export async function verifyPackageSubject');
+    expect(producer).not.toContain('verified: true');
+    expect(producer).toContain("acceptanceVerdict: null");
+    expect(workflow).not.toContain('formalAutomationPassed');
+    expect(workflow).not.toContain("from './release-evidence-verifier.mjs'");
+    expect(workflow).toContain("kind: 'aimuse-formal-release-observations'");
+    expect(subjectVerifier).toContain('Independent verification requires every manifest-authorized source input');
+    expect(releaseVerifier).toContain('caller-controlled digest');
+    expect(releaseVerifier).toContain("verdict: 'PASS'");
+  });
+
   it('does not retain removed direct validation or config-writer dependencies', async () => {
     const packageJson = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { dependencies: Record<string, string> };
     expect(packageJson.dependencies).not.toHaveProperty('ajv');

@@ -4,7 +4,8 @@ import { isAbsolute, relative, resolve } from 'node:path';
 
 interface SubjectFile { path: string; bytes: number; sha256: string }
 interface PackageSubjectManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  acceptanceVerdict: null;
   subject: {
     platform: string;
     architecture: string;
@@ -30,7 +31,7 @@ export function packagedE2eSubject(environment: NodeJS.ProcessEnv = process.env,
   const manifestSha256 = sha256(manifestBytes);
   if (manifestSha256 !== expectedManifestSha256.toUpperCase()) throw new Error(`Packaged E2E subject manifest drifted: expected ${expectedManifestSha256}, observed ${manifestSha256}.`);
   const manifest = JSON.parse(manifestBytes.toString('utf8')) as PackageSubjectManifest;
-  if (manifest.schemaVersion !== 1 || manifest.subject?.platform !== process.platform) throw new Error('Packaged E2E subject manifest does not match this platform.');
+  if (manifest.schemaVersion !== 2 || manifest.subject?.platform !== process.platform || manifest.acceptanceVerdict !== null) throw new Error('Packaged E2E subject manifest does not match the content-only schema or this platform.');
   const declared = manifest.subject.files?.applicationExecutable;
   if (!declared || isAbsolute(declared.path) || declared.path.split(/[\\/]/u).includes('..')) throw new Error('Packaged E2E subject executable path is invalid.');
   const workspaceRoot = resolve(workspace);

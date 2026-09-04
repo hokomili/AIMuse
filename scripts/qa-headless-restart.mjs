@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { atomicWriteJsonEvidence } from './qa-evidence.mjs';
-import { resolveSubjectPath, verifyPackageSubject } from './package-subject.mjs';
+import { resolveSubjectPath, verifyPackageSubject } from './package-subject-verifier.mjs';
 import { inspectOwnerPrivatePath as inspectPrivatePath, protectOwnerPrivateRoot as protectRunRoot } from './qa-private-root.mjs';
 
 export { assertPrivateWindowsAcl } from './qa-private-root.mjs';

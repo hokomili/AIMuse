@@ -63,7 +63,8 @@
 | Command | Result | Duration | Evidence/notes |
 | --- | --- | ---: | --- |
 | Formal environment plus `node scripts/npm-node24.mjs run test:levelN:auto` with preserved `pipefail`/`tee` exit | Pass/Fail/Blocked | | |
-| Post-automation `package-subject.mjs verify` at handoff | Pass/Fail/Blocked | | |
+| Post-automation `package-subject-verifier.mjs` at handoff | Pass/Fail/Blocked | | |
+| Caller-pinned `release-evidence-verifier.mjs` over content-only observations | Pass/Fail/Blocked | | |
 
 ## MCP cases
 

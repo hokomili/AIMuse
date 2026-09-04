@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { atomicWriteJsonEvidence, buildRedactedConnection, validateRedactedConnection } from './qa-evidence.mjs';
 import { buildStopManifest, coordinateShow, coordinateStop, normalizeInstanceId, normalizeProfileId, profileIdForPath, validateHealthIdentity, waitForConnectionReadiness, waitForStopCompletion } from './qa-lifecycle.mjs';
-import { resolveSubjectPath, verifyPackageSubject } from './package-subject.mjs';
+import { resolveSubjectPath, verifyPackageSubject } from './package-subject-verifier.mjs';
 import { assertOwnerPrivateRoot, assertPrivateRootDeclaration, normalizePrivateRootIdentity } from './qa-private-root.mjs';
 
 const LEGACY_CERTIFIED_EXECUTABLES = new Set([

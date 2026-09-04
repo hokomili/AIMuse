@@ -1,5 +1,6 @@
 export const PACKAGED_E2E_OUTPUT_ENV: 'AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR';
 export const FORMAL_RUN_ROOT_ENV: 'AIMUSE_FORMAL_RUN_ROOT';
+export const RENDERER_OUTPUT_ENV: 'AIMUSE_RENDERER_PLAYWRIGHT_OUTPUT_DIR';
 
 export interface PackagedE2eOutputSelection {
   workspaceRoot: string;
@@ -17,3 +18,14 @@ export function resolvePackagedE2eOutputSelection(options?: {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 }): PackagedE2eOutputSelection;
+
+export interface RendererOutputSelection {
+  outputDir: string;
+  formalRunRoot: string | undefined;
+}
+
+export function resolveRendererOutputSelection(options?: {
+  workspace?: string;
+  environment?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): RendererOutputSelection;
