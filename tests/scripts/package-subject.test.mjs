@@ -30,7 +30,8 @@ const inspection = {
 async function fixture(platform = 'darwin', architecture = 'arm64') {
   const root = await mkdtemp(join(tmpdir(), 'aimuse-subject-test-'));
   roots.push(root);
-  const packageRoot = join(root, 'out', `AIMuse-${platform}-${architecture}`);
+  const outDirectory = join(root, 'out');
+  const packageRoot = join(outDirectory, `AIMuse-${platform}-${architecture}`);
   const resources = platform === 'darwin' ? join(packageRoot, 'AIMuse.app', 'Contents', 'Resources') : join(packageRoot, 'resources');
   const executable = platform === 'darwin' ? join(packageRoot, 'AIMuse.app', 'Contents', 'MacOS', 'AIMuse') : join(packageRoot, 'AIMuse.exe');
   await mkdir(join(resources, 'native'), { recursive: true });
@@ -51,7 +52,7 @@ async function fixture(platform = 'darwin', architecture = 'arm64') {
   ].map((path) => chmod(path, 0o755)));
   const runRoot = join(root, 'test-results', 'luna-high', 'run-1');
   await mkdir(runRoot, { recursive: true });
-  return { root, runRoot, executable, resources };
+  return { root, runRoot, executable, resources, outDirectory };
 }
 
 describe('frozen package subjects', () => {
@@ -60,18 +61,18 @@ describe('frozen package subjects', () => {
     const sibling = join(value.runRoot, 'preflight.json');
     await writeFile(sibling, 'immutable evidence');
     const manifestPath = join(value.runRoot, 'subject', 'package-subject.json');
-    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, manifestPath, sourceInputs: inputs, inspect: async () => inspection });
+    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, manifestPath, sourceInputs: inputs, outDirectory: value.outDirectory, inspect: async () => inspection });
     expect(created.manifest.inputs).toEqual(inputs);
     expect(created.manifest.subject.files.applicationAsar.sha256).toMatch(/^[A-F\d]{64}$/u);
     expect(created.manifest.subject.identitySha256).toMatch(/^[A-F\d]{64}$/u);
     expect(await readFile(sibling, 'utf8')).toBe('immutable evidence');
-    await expect(createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, manifestPath, sourceInputs: inputs, inspect: async () => inspection })).rejects.toThrow(/Refusing to overwrite/u);
+    await expect(createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, manifestPath, sourceInputs: inputs, outDirectory: value.outDirectory, inspect: async () => inspection })).rejects.toThrow(/Refusing to overwrite/u);
     expect(await readFile(sibling, 'utf8')).toBe('immutable evidence');
   });
 
   it('fails on drift of every frozen component and on manifest-byte drift', async () => {
     const value = await fixture();
-    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs: inputs, inspect: async () => inspection });
+    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs: inputs, outDirectory: value.outDirectory, inspect: async () => inspection });
     const verifierDependencies = { observeSourceInputs: async () => inputs };
     await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'darwin', inspect: async () => inspection }, verifierDependencies)).resolves.toMatchObject({ manifestSha256: created.manifestSha256 });
     for (const [role, declared] of Object.entries(created.manifest.subject.files)) {
@@ -88,7 +89,7 @@ describe('frozen package subjects', () => {
   it('keeps the Windows package path and helper suffix contract', async () => {
     const value = await fixture('win32', 'x64');
     const windowsInspection = { ...inspection, architectures: { applicationExecutable: ['x64'], audioHelper: ['x64'], pluginScanner: ['x64'], pluginBridge: ['x64'] }, signature: { kind: 'not-inspected', valid: null } };
-    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs: inputs, platform: 'win32', architecture: 'x64', inspect: async () => windowsInspection });
+    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs: inputs, outDirectory: value.outDirectory, platform: 'win32', architecture: 'x64', inspect: async () => windowsInspection });
     expect(created.manifest.subject.files.applicationExecutable.path.endsWith('AIMuse.exe')).toBe(true);
     expect(created.manifest.subject.files.audioHelper.path.endsWith('aimuse-audio.exe')).toBe(true);
     await expect(verifyPackageSubject({ workspace: value.root, manifestPath: created.manifestPath, expectedManifestSha256: created.manifestSha256, platform: 'win32', inspect: async () => windowsInspection }, { observeSourceInputs: async () => inputs })).resolves.toBeTruthy();
@@ -176,7 +177,7 @@ describe('frozen package subjects', () => {
     await writeFile(join(value.root, 'scripts', 'local-noise.txt'), 'ignored local metadata');
     if (process.platform !== 'win32') await chmod(join(value.root, 'scripts', 'local-noise.txt'), 0o000);
     const sourceInputs = await captureSourceInputs(value.root);
-    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs, inspect: async () => inspection });
+    const created = await createPackageSubject({ workspace: value.root, formalRunRoot: value.runRoot, sourceInputs, outDirectory: value.outDirectory, inspect: async () => inspection });
     await expect(verifyPackageSubject({
       workspace: value.root,
       manifestPath: created.manifestPath,
