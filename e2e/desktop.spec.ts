@@ -119,7 +119,10 @@ test.describe('packaged cross-surface smoke', () => {
     expect(connection).toMatchObject({ version: 1, pid: applicationProcess.pid, activeProjectId: expect.stringMatching(/^project_/) });
     expect(connection.url).toMatch(/^http:\/\/127\.0\.0\.1:48\d{3}\/mcp$/);
 
-    const health = await fetch(connection.url.replace('/mcp', '/health'));
+    const healthUrl = connection.url.replace('/mcp', '/health');
+    const unauthenticatedHealth = await fetch(healthUrl);
+    expect(unauthenticatedHealth.status).toBe(401);
+    const health = await fetch(healthUrl, { headers: { authorization: `Bearer ${connection.token}`, accept: 'application/json' } });
     expect(health.status).toBe(200);
     await expect(health.json()).resolves.toMatchObject({ name: 'AIMuse Engine', version: '0.1.0-alpha.0', status: 'ok', uiRequired: false });
     const unauthorized = await fetch(connection.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
