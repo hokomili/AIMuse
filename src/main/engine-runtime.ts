@@ -57,5 +57,5 @@ export class EngineRuntime {
   }
   async stop(): Promise<void> { if (!this.started) return; this.started = false; if (this.compactTimer) clearInterval(this.compactTimer); this.compactTimer = undefined; for (const project of this.projects.getProjects()) if (project.projectPath && project.dirty) await this.projects.save(project.id, undefined, ENGINE_ACTOR).catch(() => undefined); const runtimeState = this.mcpRuntimeState; this.mcpRuntimeState = undefined; if (runtimeState) await clearMcpRuntimeState(this.options.userDataPath, runtimeState).catch(() => undefined); await this.mcp.stop(); this.projects.setMcpInfo({ running: false, connectionMode: 'stdio-bridge' }); await this.audio.stop(); }
   setUiAttached(attached: boolean): void { this.uiAttached = attached; }
-  status(): EngineStatus { return { running: this.started, uiAttached: this.uiAttached, startsAtLogin: false, startAtLoginSupported: process.platform === 'win32', mode: this.options.mode, audio: this.audio.status() }; }
+  status(): EngineStatus { return { running: this.started, uiAttached: this.uiAttached, startsAtLogin: false, startAtLoginSupported: process.platform === 'win32', mode: this.uiAttached ? 'interactive' : 'headless', audio: this.audio.status() }; }
 }

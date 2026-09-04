@@ -63,9 +63,10 @@ async function verifyMacPackage() {
   const bundleName = plistValue(infoPlist, 'CFBundleName');
   const iconFile = plistValue(infoPlist, 'CFBundleIconFile');
   const category = plistValue(infoPlist, 'LSApplicationCategoryType');
+  const uiElement = plistValue(infoPlist, 'LSUIElement');
   const microphoneUsage = plistValue(infoPlist, 'NSMicrophoneUsageDescription');
-  if (bundleId !== 'com.aimuse.app' || bundleName !== 'AIMuse' || !iconFile.endsWith('.icns') || category !== 'public.app-category.music' || !microphoneUsage.includes('explicitly authorize')) {
-    throw new Error('macOS bundle identity, category or microphone disclosure does not match the package contract.');
+  if (bundleId !== 'com.aimuse.app' || bundleName !== 'AIMuse' || !iconFile.endsWith('.icns') || category !== 'public.app-category.music' || uiElement !== 'true' || !microphoneUsage.includes('explicitly authorize')) {
+    throw new Error('macOS bundle identity, background presentation, category or microphone disclosure does not match the package contract.');
   }
   for (const key of ['NSAudioCaptureUsageDescription', 'NSBluetoothAlwaysUsageDescription', 'NSBluetoothPeripheralUsageDescription', 'NSCameraUsageDescription']) {
     if (plistHasKey(infoPlist, key)) throw new Error(`macOS bundle retains unused Electron usage description ${key}.`);
@@ -98,7 +99,7 @@ async function verifyMacPackage() {
   const notarizationStapled = stapler.status === 0;
   if (process.env.AIMUSE_REQUIRE_MACOS_NOTARIZED === '1' && !notarizationStapled) throw new Error('A stapled notarization ticket was required but not present.');
 
-  return { bundleId, bundleName, iconFile, iconSha256, category, architectures, nativeArchitectures, signatureKind, signatureValid, notarizationStapled };
+  return { bundleId, bundleName, iconFile, iconSha256, category, uiElement: true, architectures, nativeArchitectures, signatureKind, signatureValid, notarizationStapled };
 }
 
 try {

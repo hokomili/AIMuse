@@ -69,3 +69,8 @@ export function evaluateShowRequest(request: SingleInstanceRequest, currentInsta
 export function shouldInitializePrimary(request: SingleInstanceRequest): boolean {
   return request.command === 'headless' || (request.command === 'show' && request.instanceId === undefined && request.profileId === undefined && request.showRequestId === undefined);
 }
+
+/** A no-window engine or command helper must never register as a foreground macOS app. */
+export function shouldStartInBackground(request: SingleInstanceRequest): boolean {
+  return request.command === 'headless' || !shouldInitializePrimary(request);
+}

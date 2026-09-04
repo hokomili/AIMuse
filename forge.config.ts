@@ -66,6 +66,10 @@ const config: ForgeConfig = {
     appCategoryType: 'public.app-category.music',
     ...(process.platform === 'darwin' ? { icon: resolve('build', 'icon.icns') } : {}),
     extendInfo: {
+      // LaunchServices must never infer a foreground role before the main
+      // process has admitted an editor. Interactive startup promotes itself
+      // explicitly immediately before creating its BrowserWindow.
+      LSUIElement: true,
       NSMicrophoneUsageDescription: 'AIMuse accesses the microphone only after you explicitly authorize and start recording.',
     },
     extraResource: [resolve('native', 'dist', 'native')],

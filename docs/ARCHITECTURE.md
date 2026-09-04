@@ -2,7 +2,7 @@
 
 ## Canonical runtime
 
-`EngineRuntime` is the sole owner of committed project state. The renderer and every MCP session are clients of that runtime; neither keeps an independently authoritative project. The editor can detach without terminating the engine.
+`EngineRuntime` is the sole owner of committed project state. The renderer and every MCP session are clients of that runtime; neither keeps an independently authoritative project. The editor can detach without terminating the engine. On macOS the bundle starts as a UIElement, while an explicit runtime policy keeps headless and command-helper processes prohibited. One serialized presentation lifecycle alone may promote the primary to a regular app before attaching an admitted editor; closing the final editor hides the Dock and restores prohibited operation. Ordinary OS activation can reveal an already attached editor but cannot create one.
 
 ```mermaid
 flowchart LR

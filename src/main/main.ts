@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { HUMAN_ACTOR, type AuthorityPolicy, type ProjectTransaction } from '@aimuse/core';
 import { IPC, type ExportRequest, type HumanLockRequest, type NewProjectOptions, type TimelineSelection } from '../common/contracts';
 import { buildAgentClientSetup, isAgentClientId, type AgentClientSetupResult } from '../common/agent-clients';
+import { EditorPresentationLifecycle, installEarlyBackgroundPresentation } from './editor-presentation-lifecycle';
 import { EngineRuntime } from './engine-runtime';
 import { bootstrapMcpBridgeEntry, buildMcpBridgeLaunch } from './mcp-bridge-entry';
 import { runMcpStdioBridge } from './mcp-stdio-bridge';
@@ -13,7 +14,7 @@ import { profileIdForPath } from './profile-identity';
 import { nativeExecutableName } from './platform';
 import { AIMUSE_PROTOCOL_SCHEME } from './protocol-config';
 import { assertTrustedRenderer, denyPermissionCheck, denyPermissionRequest, denyWindowOpen, guardRendererNavigation, preventWebviewAttachment } from './renderer-security';
-import { evaluateShowRequest, parseSecondInstanceRequest, parseStartupRequest, shouldAcceptQuit, shouldInitializePrimary, type SingleInstanceRequest } from './single-instance';
+import { evaluateShowRequest, parseSecondInstanceRequest, parseStartupRequest, shouldAcceptQuit, shouldInitializePrimary, shouldStartInBackground, type SingleInstanceRequest } from './single-instance';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -21,11 +22,20 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 let mainWindow: BrowserWindow | undefined; let runtime: EngineRuntime; let shutdownComplete = false; let shutdownPending = false; let ready: Promise<void> | undefined; let rendererSurfaceReady: Promise<void> | undefined;
 const applicationArguments = process.argv.slice(app.isPackaged ? 1 : 2); const valueFlag = (name: string): string | undefined => applicationArguments.find((argument) => argument.startsWith(`${name}=`))?.slice(name.length + 1); const bridgeBootstrap = bootstrapMcpBridgeEntry(applicationArguments, app); const bridgeEntry = bridgeBootstrap.entry; const bridgeMode = bridgeBootstrap.requested; const startupRequest = parseStartupRequest(applicationArguments); const headless = startupRequest.command === 'headless'; const connectionFile = valueFlag('--write-mcp-connection'); const authorityPolicyPath = valueFlag('--authority-policy'); const trustedFolders = applicationArguments.filter((argument) => argument.startsWith('--trust-folder=')).map((argument) => argument.slice('--trust-folder='.length)); const explicitUserData = valueFlag('--user-data-dir');
 if (!bridgeMode) {
-  if (headless) app.disableHardwareAcceleration();
+  installEarlyBackgroundPresentation(shouldStartInBackground(startupRequest), app);
   if (explicitUserData) { const path = resolve(explicitUserData); app.setPath('userData', path); app.setName(`AIMuse-${profileIdForPath(path).slice(0, 12).toLowerCase()}`); }
 }
 const hasLock = bridgeMode || app.requestSingleInstanceLock({ command: startupRequest.command, ...(startupRequest.instanceId ? { instanceId: startupRequest.instanceId } : {}), ...(startupRequest.profileId ? { profileId: startupRequest.profileId } : {}), ...(startupRequest.showRequestId ? { showRequestId: startupRequest.showRequestId } : {}) });
 if (!bridgeMode) protocol.registerSchemesAsPrivileged([AIMUSE_PROTOCOL_SCHEME]);
+function canAttachEditor(): boolean { return !shutdownPending && !shutdownComplete && shouldInitializePrimary(startupRequest); }
+const editorPresentation = new EditorPresentationLifecycle({
+  setActivationPolicy: (policy) => { app.setActivationPolicy(policy); },
+  hideDock: () => { app.dock?.hide(); },
+  showDock: async () => { await app.dock?.show(); },
+  revealEditor: revealAttachedEditor,
+  hasEditor: () => Boolean(mainWindow && !mainWindow.isDestroyed()),
+  canAttach: canAttachEditor,
+});
 
 function assertTrusted(event: IpcMainInvokeEvent): void { const frame = event.senderFrame; assertTrustedRenderer({ windowPresent: Boolean(mainWindow), senderMatchesWindow: Boolean(mainWindow && event.sender === mainWindow.webContents), frameMatchesMainFrame: Boolean(mainWindow && frame === mainWindow.webContents.mainFrame), frameUrl: frame?.url ?? '' }, MAIN_WINDOW_VITE_DEV_SERVER_URL); }
 function handle<T extends unknown[], R>(channel: string, callback: (...args: T) => R | Promise<R>): void { ipcMain.handle(channel, (event, ...args: T) => { assertTrusted(event); return callback(...args); }); }
@@ -66,7 +76,47 @@ async function ensureRendererSurface(): Promise<void> {
   await rendererSurfaceReady;
 }
 
-async function createWindow(): Promise<void> { if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); return; } await ensureRendererSurface(); if (mainWindow && !mainWindow.isDestroyed()) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); return; } const window = new BrowserWindow({ width: 1580, height: 980, minWidth: 1080, minHeight: 680, backgroundColor: '#090a0f', title: 'AIMuse', show: false, webPreferences: { preload: join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false } }); mainWindow = window; runtime.setUiAttached(true); window.webContents.setWindowOpenHandler(denyWindowOpen); window.webContents.on('will-navigate', (event, url) => guardRendererNavigation(event, url, MAIN_WINDOW_VITE_DEV_SERVER_URL)); window.on('closed', () => { if (mainWindow === window) mainWindow = undefined; runtime.setUiAttached(false); }); window.once('ready-to-show', () => { window.show(); window.focus(); }); if (MAIN_WINDOW_VITE_DEV_SERVER_URL) await window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL); else await window.loadURL('aimuse://app/index.html'); }
+function revealAttachedEditor(): boolean {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  return true;
+}
+
+async function createWindow(): Promise<boolean> {
+  return editorPresentation.show(async () => {
+    await ensureRendererSurface();
+    if (!canAttachEditor()) return;
+    const window = new BrowserWindow({
+      width: 1580, height: 980, minWidth: 1080, minHeight: 680,
+      backgroundColor: '#090a0f', title: 'AIMuse', show: false,
+      webPreferences: {
+        preload: join(__dirname, 'preload.js'), sandbox: true, contextIsolation: true,
+        nodeIntegration: false, webSecurity: true, allowRunningInsecureContent: false,
+      },
+    });
+    mainWindow = window;
+    runtime.setUiAttached(true);
+    window.webContents.setWindowOpenHandler(denyWindowOpen);
+    window.webContents.on('will-navigate', (event, url) => guardRendererNavigation(event, url, MAIN_WINDOW_VITE_DEV_SERVER_URL));
+    window.on('closed', () => {
+      if (mainWindow === window) mainWindow = undefined;
+      runtime.setUiAttached(false);
+      void editorPresentation.detached();
+    });
+    window.once('ready-to-show', () => {
+      if (mainWindow === window && !window.isDestroyed()) { window.show(); window.focus(); }
+    });
+    try {
+      if (MAIN_WINDOW_VITE_DEV_SERVER_URL) await window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+      else await window.loadURL('aimuse://app/index.html');
+    } catch (error) {
+      if (!window.isDestroyed()) window.destroy();
+      throw error;
+    }
+  });
+}
 
 async function saveProject(projectId?: string, saveAs = false) { const id = projectId ?? runtime.projects.getActiveProjectId(); const project = id ? runtime.projects.getProject(id) : undefined; if (!id || !project) return { saved: false, cancelled: true, warnings: [] }; let path = saveAs ? undefined : project.projectPath; if (!path) { const choice = await dialog.showSaveDialog(mainWindow!, { title: 'Save AIMuse project folder', defaultPath: `${project.name.replace(/[<>:"/\\|?*]/g, '-')}.aimuse`, filters: [{ name: 'AIMuse working project', extensions: ['aimuse'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] }); if (choice.canceled || !choice.filePath) return { saved: false, cancelled: true, warnings: [] }; path = choice.filePath; } const result = await runtime.projects.save(id, path, HUMAN_ACTOR); return { saved: true, projectPath: result.projectPath, warnings: result.warnings }; }
 
@@ -131,11 +181,17 @@ async function requestQuit(confirmInEditor = true): Promise<void> {
 async function requestShow(request: SingleInstanceRequest): Promise<void> {
   const connection = runtime.mcp.connection();
   const decision = evaluateShowRequest(request, connection.instanceId, connection.profileId);
+  // A legacy open is still an explicit second-instance launch routed through
+  // this profile's lock; the untrusted macOS `activate` event never reaches here.
   if (decision.legacy) { await createWindow(); return; }
   if (!decision.requestId) return;
   if (!runtime.mcp.beginShowAcknowledgement(decision.requestId)) return;
   if (!decision.accepted) { runtime.mcp.completeShowAcknowledgement(decision.requestId, 'rejected', decision.rejection); return; }
-  try { await createWindow(); runtime.mcp.completeShowAcknowledgement(decision.requestId, 'accepted'); }
+  try {
+    const attached = await createWindow();
+    if (!attached) { runtime.mcp.completeShowAcknowledgement(decision.requestId, 'rejected', 'window-error'); return; }
+    runtime.mcp.completeShowAcknowledgement(decision.requestId, 'accepted');
+  }
   catch { runtime.mcp.completeShowAcknowledgement(decision.requestId, 'rejected', 'window-error'); }
 }
 async function initialize(): Promise<void> {
@@ -234,5 +290,20 @@ if (bridgeBootstrap.failed) {
     .then(() => app.exit(0), () => { process.stderr.write('AIMuse MCP bridge stopped before it could establish a private engine connection.\n'); app.exit(1); });
 } else {
   app.on('web-contents-created', (_event, contents) => { contents.on('will-attach-webview', preventWebviewAttachment); contents.setWindowOpenHandler(denyWindowOpen); });
-  if (!hasLock) app.quit(); else { app.on('second-instance', (_event, commandLine, _cwd, data) => { const request = parseSecondInstanceRequest(data, commandLine); void ready?.then(() => !shouldInitializePrimary(startupRequest) ? undefined : request.command === 'quit-engine' ? (shouldAcceptQuit(request.instanceId, runtime.mcp.connection().instanceId) ? requestQuit(false) : undefined) : request.command === 'show' ? requestShow(request) : undefined); }); ready = app.whenReady().then(initialize); app.on('activate', () => void ready?.then(() => shouldInitializePrimary(startupRequest) ? createWindow() : undefined)); app.on('window-all-closed', () => { /* The editor is an attachable client; the canonical engine stays alive. */ }); app.on('before-quit', (event) => { if (!shutdownComplete) { event.preventDefault(); void requestQuit(); } }); }
+  if (!hasLock) app.quit();
+  else {
+    app.on('second-instance', (_event, commandLine, _cwd, data) => {
+      const request = parseSecondInstanceRequest(data, commandLine);
+      void ready?.then(() => {
+        if (!shouldInitializePrimary(startupRequest)) return;
+        if (request.command === 'quit-engine') {
+          if (shouldAcceptQuit(request.instanceId, runtime.mcp.connection().instanceId)) void requestQuit(false);
+        } else if (request.command === 'show') void requestShow(request);
+      });
+    });
+    ready = app.whenReady().then(initialize);
+    app.on('activate', () => void ready?.then(() => shouldInitializePrimary(startupRequest) ? editorPresentation.activated() : undefined));
+    app.on('window-all-closed', () => { /* The editor is an attachable client; the canonical engine stays alive. */ });
+    app.on('before-quit', (event) => { if (!shutdownComplete) { event.preventDefault(); void requestQuit(); } });
+  }
 }

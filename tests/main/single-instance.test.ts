@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateShowRequest, parseSecondInstanceRequest, parseStartupRequest, shouldAcceptQuit, shouldAcceptShow, shouldInitializePrimary } from '../../src/main/single-instance';
+import { evaluateShowRequest, parseSecondInstanceRequest, parseStartupRequest, shouldAcceptQuit, shouldAcceptShow, shouldInitializePrimary, shouldStartInBackground } from '../../src/main/single-instance';
 
 const CURRENT = '11111111-1111-4111-8111-111111111111';
 const RECYCLED = '22222222-2222-4222-8222-222222222222';
@@ -26,6 +26,10 @@ describe('instance-bound single-instance commands', () => {
     expect(shouldInitializePrimary({ command: 'show', showRequestId: REQUEST })).toBe(false);
     expect(shouldInitializePrimary({ command: 'headless', instanceId: undefined })).toBe(true);
     expect(shouldInitializePrimary({ command: 'quit-engine', instanceId: undefined })).toBe(false);
+    expect(shouldStartInBackground({ command: 'headless' })).toBe(true);
+    expect(shouldStartInBackground({ command: 'quit-engine', instanceId: CURRENT })).toBe(true);
+    expect(shouldStartInBackground({ command: 'show', instanceId: CURRENT, profileId: PROFILE, showRequestId: REQUEST })).toBe(true);
+    expect(shouldStartInBackground({ command: 'show' })).toBe(false);
   });
 
   it('accepts one exact receiver-bound request and classifies rejection without treating it as legacy', () => {
