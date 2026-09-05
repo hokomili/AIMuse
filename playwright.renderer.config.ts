@@ -13,7 +13,9 @@ export default defineConfig({
   outputDir: rendererOutput.outputDir,
   reporter: [['list']],
   use: {
-    ...(rendererBrowserExecutable ? { executablePath: rendererBrowserExecutable } : { channel: 'chrome' as const }),
+    ...(rendererBrowserExecutable
+      ? { launchOptions: { executablePath: rendererBrowserExecutable } }
+      : { channel: 'chrome' as const }),
     headless: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

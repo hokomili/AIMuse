@@ -25,6 +25,7 @@ describe('macOS structural boundary', () => {
     const cmake = await readFile(resolve('native/CMakeLists.txt'), 'utf8');
     const nativeBuild = await readFile(resolve('scripts/native-build.mjs'), 'utf8');
     const npmNode24 = await readFile(resolve('scripts/npm-node24.mjs'), 'utf8');
+    const rendererPlaywright = await readFile(resolve('playwright.renderer.config.ts'), 'utf8');
     const forge = await readFile(resolve('forge.config.ts'), 'utf8');
     const verifyPackage = await readFile(resolve('scripts/verify-package.mjs'), 'utf8');
     const icon = await readFile(resolve('build/icon.svg'), 'utf8');
@@ -41,6 +42,7 @@ describe('macOS structural boundary', () => {
     expect(npmNode24).toContain("join(dirname(dirname(node24)), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')");
     expect(npmNode24).toContain('dirname(npmCli)');
     expect(npmNode24).toContain("resolve('scripts', 'npm-shims')");
+    expect(rendererPlaywright).toContain('launchOptions: { executablePath: rendererBrowserExecutable }');
     expect(forge).toContain("new MakerZIP({}, ['win32', 'darwin'])");
     expect(forge).toContain("resolve(buildPath, '..', '..', 'MacOS', 'AIMuse')");
     expect(forge).toContain("icon: resolve('build', 'icon.icns')");
