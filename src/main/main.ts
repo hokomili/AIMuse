@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, session, type IpcMainInvokeEvent } from 'electron';
 import { readFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HUMAN_ACTOR, type AuthorityPolicy, type ProjectTransaction } from '@aimuse/core';
 import { IPC, type ExportRequest, type HumanLockRequest, type NewProjectOptions, type TimelineSelection } from '../common/contracts';
@@ -9,6 +9,7 @@ import { EditorPresentationLifecycle, installEarlyBackgroundPresentation } from 
 import { EngineRuntime } from './engine-runtime';
 import { bootstrapMcpBridgeEntry, buildMcpBridgeLaunch } from './mcp-bridge-entry';
 import { runMcpStdioBridge } from './mcp-stdio-bridge';
+import { nativeDialogDestination, nativeDialogDirectory as resolveNativeDialogDirectory } from './native-dialog-paths';
 import { atomicWriteFile, unpackProjectPack } from './persistence';
 import { profileIdForPath } from './profile-identity';
 import { nativeExecutableName } from './platform';
@@ -118,13 +119,91 @@ async function createWindow(): Promise<boolean> {
   });
 }
 
-async function saveProject(projectId?: string, saveAs = false) { const id = projectId ?? runtime.projects.getActiveProjectId(); const project = id ? runtime.projects.getProject(id) : undefined; if (!id || !project) return { saved: false, cancelled: true, warnings: [] }; let path = saveAs ? undefined : project.projectPath; if (!path) { const choice = await dialog.showSaveDialog(mainWindow!, { title: 'Save AIMuse project folder', defaultPath: `${project.name.replace(/[<>:"/\\|?*]/g, '-')}.aimuse`, filters: [{ name: 'AIMuse working project', extensions: ['aimuse'] }], properties: ['showOverwriteConfirmation', 'createDirectory'] }); if (choice.canceled || !choice.filePath) return { saved: false, cancelled: true, warnings: [] }; path = choice.filePath; } const result = await runtime.projects.save(id, path, HUMAN_ACTOR); return { saved: true, projectPath: result.projectPath, warnings: result.warnings }; }
+function nativeDialogPathOptions(access: 'read' | 'write', currentDirectory?: string) {
+  const policy = runtime.authority.snapshot().policy;
+  return {
+    trustedFolders,
+    permittedRoots: access === 'read' ? policy?.readRoots ?? [] : policy?.writeRoots ?? [],
+    fallbackDirectory: app.getPath('documents'),
+    currentDirectory,
+  };
+}
 
-async function openProjects() { const mode = await dialog.showMessageBox(mainWindow!, { type: 'question', title: 'Open AIMuse', message: 'Open a daily working folder or unpack a portable archive?', buttons: ['Working folder', 'Portable .aimusepack', 'Cancel'], defaultId: 0, cancelId: 2 }); if (mode.response === 2) return { opened: [], warnings: [] }; if (mode.response === 0) { const choice = await dialog.showOpenDialog(mainWindow!, { title: 'Open AIMuse working folder', properties: ['openDirectory', 'multiSelections'] }); return choice.canceled ? { opened: [], warnings: [] } : runtime.projects.open(choice.filePaths); } const pack = await dialog.showOpenDialog(mainWindow!, { title: 'Open AIMuse portable pack', properties: ['openFile'], filters: [{ name: 'AIMuse portable pack', extensions: ['aimusepack'] }] }); if (pack.canceled || !pack.filePaths[0]) return { opened: [], warnings: [] }; const destination = await dialog.showSaveDialog(mainWindow!, { title: 'Create unpacked project folder', defaultPath: basename(pack.filePaths[0], '.aimusepack') + '.aimuse', properties: ['createDirectory'] }); if (destination.canceled || !destination.filePath) return { opened: [], warnings: [] }; try { return runtime.projects.open([await unpackProjectPack(pack.filePaths[0], destination.filePath)]); } catch (error) { return { opened: [], warnings: [error instanceof Error ? error.message : String(error)] }; } }
+function nativeDialogDirectory(access: 'read' | 'write', currentDirectory?: string): string {
+  return resolveNativeDialogDirectory(nativeDialogPathOptions(access, currentDirectory));
+}
 
-async function importMedia(projectId?: string) { const id = projectId ?? runtime.projects.getActiveProjectId(); if (!id) return { imported: 0, warnings: ['No project is open.'] }; const choice = await dialog.showOpenDialog(mainWindow!, { title: 'Import media', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Supported media', extensions: ['wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg', 'mid', 'midi'] }, { name: 'Audio', extensions: ['wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg'] }, { name: 'MIDI', extensions: ['mid', 'midi'] }] }); if (choice.canceled) return { imported: 0, warnings: [] }; const result = await runtime.media.importPaths(id, choice.filePaths, HUMAN_ACTOR); return { imported: result.imported.length, warnings: result.warnings }; }
+function nativeDestinationDefault(filename: string, currentDirectory?: string): string {
+  return nativeDialogDestination(nativeDialogPathOptions('write', currentDirectory), filename);
+}
 
-async function exportProject(request: Omit<ExportRequest, 'destination'>) { const project = runtime.projects.getProject(request.projectId); if (!project) return { exported: false, warnings: ['Project is not open.'] }; const folderLike = request.kind === 'stems' || request.kind === 'sfx-batch'; const extension = request.kind === 'midi' ? 'mid' : request.kind === 'dawproject' ? 'dawproject' : request.kind === 'pack' ? 'aimusepack' : request.format ?? 'wav'; const choice = await dialog.showSaveDialog(mainWindow!, { title: `Export ${request.kind}`, defaultPath: folderLike ? `${project.name} ${request.kind}` : `${project.name}.${extension}`, filters: folderLike ? undefined : [{ name: `${extension.toUpperCase()} export`, extensions: [extension] }], properties: ['showOverwriteConfirmation', 'createDirectory'] }); if (choice.canceled || !choice.filePath) return { exported: false, cancelled: true, warnings: [] }; const started = runtime.exports.start({ ...request, destination: choice.filePath, overwrite: true }, HUMAN_ACTOR); return { exported: true, jobId: started.jobId, destination: choice.filePath, warnings: [] }; }
+async function saveProject(projectId?: string, saveAs = false) {
+  const id = projectId ?? runtime.projects.getActiveProjectId(); const project = id ? runtime.projects.getProject(id) : undefined;
+  if (!id || !project) return { saved: false, cancelled: true, warnings: [] };
+  let path = saveAs ? undefined : project.projectPath;
+  if (!path) {
+    const choice = await dialog.showSaveDialog(mainWindow!, {
+      title: 'Save AIMuse project folder',
+      defaultPath: nativeDestinationDefault(`${project.name}.aimuse`, project.projectPath ? dirname(project.projectPath) : undefined),
+      filters: [{ name: 'AIMuse working project', extensions: ['aimuse'] }],
+      properties: ['showOverwriteConfirmation', 'createDirectory'],
+    });
+    if (choice.canceled || !choice.filePath) return { saved: false, cancelled: true, warnings: [] };
+    path = choice.filePath;
+  }
+  const result = await runtime.projects.save(id, path, HUMAN_ACTOR);
+  return { saved: true, projectPath: result.projectPath, warnings: result.warnings };
+}
+
+async function openProjects() {
+  const mode = await dialog.showMessageBox(mainWindow!, { type: 'question', title: 'Open AIMuse', message: 'Open a daily working folder or unpack a portable archive?', buttons: ['Working folder', 'Portable .aimusepack', 'Cancel'], defaultId: 0, cancelId: 2 });
+  if (mode.response === 2) return { opened: [], warnings: [] };
+  if (mode.response === 0) {
+    const choice = await dialog.showOpenDialog(mainWindow!, { title: 'Open AIMuse working folder', defaultPath: nativeDialogDirectory('read'), properties: ['openDirectory', 'multiSelections'] });
+    return choice.canceled ? { opened: [], warnings: [] } : runtime.projects.open(choice.filePaths);
+  }
+  const pack = await dialog.showOpenDialog(mainWindow!, { title: 'Open AIMuse portable pack', defaultPath: nativeDialogDirectory('read'), properties: ['openFile'], filters: [{ name: 'AIMuse portable pack', extensions: ['aimusepack'] }] });
+  if (pack.canceled || !pack.filePaths[0]) return { opened: [], warnings: [] };
+  const destination = await dialog.showSaveDialog(mainWindow!, {
+    title: 'Create unpacked project folder',
+    defaultPath: nativeDestinationDefault(`${basename(pack.filePaths[0], '.aimusepack')}.aimuse`, dirname(pack.filePaths[0])),
+    properties: ['createDirectory'],
+  });
+  if (destination.canceled || !destination.filePath) return { opened: [], warnings: [] };
+  try { return runtime.projects.open([await unpackProjectPack(pack.filePaths[0], destination.filePath)]); }
+  catch (error) { return { opened: [], warnings: [error instanceof Error ? error.message : String(error)] }; }
+}
+
+async function importMedia(projectId?: string) {
+  const id = projectId ?? runtime.projects.getActiveProjectId(); const project = id ? runtime.projects.getProject(id) : undefined;
+  if (!id) return { imported: 0, warnings: ['No project is open.'] };
+  const choice = await dialog.showOpenDialog(mainWindow!, {
+    title: 'Import media',
+    defaultPath: nativeDialogDirectory('read', project?.projectPath ? dirname(project.projectPath) : undefined),
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Supported media', extensions: ['wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg', 'mid', 'midi'] }, { name: 'Audio', extensions: ['wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg'] }, { name: 'MIDI', extensions: ['mid', 'midi'] }],
+  });
+  if (choice.canceled) return { imported: 0, warnings: [] };
+  const result = await runtime.media.importPaths(id, choice.filePaths, HUMAN_ACTOR);
+  return { imported: result.imported.length, warnings: result.warnings };
+}
+
+async function exportProject(request: Omit<ExportRequest, 'destination'>) {
+  const project = runtime.projects.getProject(request.projectId);
+  if (!project) return { exported: false, warnings: ['Project is not open.'] };
+  const folderLike = request.kind === 'stems' || request.kind === 'sfx-batch';
+  const extension = request.kind === 'midi' ? 'mid' : request.kind === 'dawproject' ? 'dawproject' : request.kind === 'pack' ? 'aimusepack' : request.format ?? 'wav';
+  const filename = folderLike ? `${project.name} ${request.kind}` : `${project.name}.${extension}`;
+  const choice = await dialog.showSaveDialog(mainWindow!, {
+    title: `Export ${request.kind}`,
+    defaultPath: nativeDestinationDefault(filename, project.projectPath ? dirname(project.projectPath) : undefined),
+    filters: folderLike ? undefined : [{ name: `${extension.toUpperCase()} export`, extensions: [extension] }],
+    properties: ['showOverwriteConfirmation', 'createDirectory'],
+  });
+  if (choice.canceled || !choice.filePath) return { exported: false, cancelled: true, warnings: [] };
+  const started = runtime.exports.start({ ...request, destination: choice.filePath, overwrite: true }, HUMAN_ACTOR);
+  return { exported: true, jobId: started.jobId, destination: choice.filePath, warnings: [] };
+}
 
 async function closeProject(projectId: string, force = false): Promise<{ closed: boolean; reason?: string }> {
   if (force) return runtime.projects.close(projectId, true);
