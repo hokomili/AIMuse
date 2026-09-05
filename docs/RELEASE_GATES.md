@@ -10,7 +10,7 @@ Run for every packaged candidate:
 node scripts/npm-node24.mjs run test:level1:auto
 ```
 
-Formal use requires a fresh owner-private `test-results/luna-high/<run>` root and disjoint `test-results/playwright/<run>` output. Source capture is limited to `scripts/initial-snapshot-manifest.json`. Level 1 packages once, emits content-only observations with no producer verdict, then requires the caller-pinned independent verifier before the subject can proceed to UI→MCP/MCP→UI work, graceful shutdown and redaction.
+Formal use requires a fresh owner-private `test-results/luna-high/<run>` root and disjoint `test-results/playwright/<run>` output. Source capture is limited to `scripts/initial-snapshot-manifest.json`. Before Level 1 automation, the caller publishes the exact schema-2 source/tool/environment/path inputs. Level 1 packages once; a separately pinned witness owns its raw execution receipts, while the producer emits content-only observations with no stage-success or acceptance verdict. The automated verifier may derive only `AUTOMATED_GATES_PASS`. Full Level 1 `PASS` additionally requires a distinct Luna/high tester's exact-subject UI↔MCP work, graceful shutdown/redaction and a successful final certification.
 
 ## Regression
 
@@ -28,6 +28,8 @@ The exact candidate must cover:
 - Packaged Song/SFX UI↔MCP workflows, recovery/discard, checkpoints/variants, locks, actor undo, approvals, missing media, and degraded plug-ins.
 - Renderer CSP/sandbox/IPC origin checks, exact hardened fuse values, dependencies, archive defenses, keyboard/focus/accessibility, and package identity.
 - Explicit negative product assertions: no generation tool/job/UI, provider adapter/capability/credential surface, candidate-media route, or source-separation adapter. Legacy provenance must stay passive and old projects readable; divergent checkpoint restore plus snapshot undo/redo may not change the opened provenance map or generation-source assets.
+
+The automated command is not a Level 2 result. The same protected run becomes Level 2 `PASS` only when a distinct Luna/high tester publishes the schema-2 certification/report for every contract case and the caller-pinned final certifier independently re-derives the automated result, validates every tester evidence digest, proves cleanup and re-verifies the unchanged package after stop.
 
 The 2026-08-10 arm64 Level 2 result remains a strict historical result for its exact ad-hoc subject only. It does not certify this changed candidate or waive Level 3, signing/notarization, physical hardware, codec, or plug-in-hosting gates.
 

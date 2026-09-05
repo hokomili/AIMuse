@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test';
 import { resolveRendererOutputSelection } from './scripts/playwright-output.mjs';
 
 const rendererOutput = resolveRendererOutputSelection({ workspace: __dirname });
+const rendererBrowserExecutable = process.env.AIMUSE_RENDERER_BROWSER_EXECUTABLE;
 
 export default defineConfig({
   testDir: './tests/renderer-browser',
@@ -11,5 +12,10 @@ export default defineConfig({
   workers: 1,
   outputDir: rendererOutput.outputDir,
   reporter: [['list']],
-  use: { channel: 'chrome', headless: true, trace: 'retain-on-failure', screenshot: 'only-on-failure' },
+  use: {
+    ...(rendererBrowserExecutable ? { executablePath: rendererBrowserExecutable } : { channel: 'chrome' as const }),
+    headless: true,
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+  },
 });

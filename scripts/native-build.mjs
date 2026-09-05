@@ -13,8 +13,12 @@ if (!supportedArchitectures.includes(requestedArchitecture)) {
   throw new Error(`Native ${process.platform} builds support ${supportedArchitectures.join(', ')}, received ${requestedArchitecture}.`);
 }
 const cmakeArchitecture = requestedArchitecture === 'universal' ? 'arm64;x86_64' : requestedArchitecture === 'x64' ? 'x86_64' : requestedArchitecture;
-const build = join(source, process.platform === 'win32' ? 'build' : `build-${process.platform}-${requestedArchitecture}`);
-const distribution = join(source, 'dist', 'native');
+const build = process.env.AIMUSE_NATIVE_BUILD_DIR
+  ? resolve(process.env.AIMUSE_NATIVE_BUILD_DIR)
+  : join(source, process.platform === 'win32' ? 'build' : `build-${process.platform}-${requestedArchitecture}`);
+const distribution = process.env.AIMUSE_NATIVE_DIST_DIR
+  ? resolve(process.env.AIMUSE_NATIVE_DIST_DIR)
+  : join(source, 'dist', 'native');
 const action = process.argv[2] ?? 'build';
 const enableWasapi = process.platform === 'win32' && process.env.AIMUSE_ENABLE_WASAPI !== '0';
 const enableCoreAudio = process.platform === 'darwin' && process.env.AIMUSE_ENABLE_COREAUDIO !== '0';
@@ -42,6 +46,7 @@ const ninja = executable([
   join(programFiles, 'Microsoft Visual Studio', '2022', 'Community', 'Common7', 'IDE', 'CommonExtensions', 'Microsoft', 'CMake', 'Ninja', 'ninja.exe'),
   process.platform === 'win32' ? 'ninja.exe' : 'ninja',
 ]);
+const make = process.platform === 'win32' ? undefined : executable([process.env.AIMUSE_MAKE, 'make']);
 const ctest = join(dirname(cmake), process.platform === 'win32' ? 'ctest.exe' : 'ctest');
 
 function run(program, arguments_) {
@@ -59,12 +64,15 @@ function configure() {
     `-DAIMUSE_BUILD_RUNTIME_BINARIES=${buildRuntimeBinaries ? 'ON' : 'OFF'}`,
     '-DAIMUSE_ENABLE_PLUGIN_SDKS=OFF',
     '-DAIMUSE_BUILD_QA_PRIVATE_ROOT_PROVIDER=OFF',
+    ...(process.env.AIMUSE_MINIAUDIO_SOURCE_DIR ? [`-DFETCHCONTENT_SOURCE_DIR_MINIAUDIO=${resolve(process.env.AIMUSE_MINIAUDIO_SOURCE_DIR)}`] : []),
   ];
   if (process.platform === 'win32') {
     const defaultGenerator = cmake.includes('\\18\\') ? 'Visual Studio 18 2026' : 'Visual Studio 17 2022';
     arguments_.push('-G', process.env.AIMUSE_CMAKE_GENERATOR ?? defaultGenerator, '-A', 'x64');
   } else if (ninja && existsSync(ninja)) {
     arguments_.push('-G', 'Ninja', `-DCMAKE_MAKE_PROGRAM=${ninja}`);
+  } else if (make) {
+    arguments_.push('-G', 'Unix Makefiles', `-DCMAKE_MAKE_PROGRAM=${make}`);
   }
   if (process.platform === 'darwin') arguments_.push(`-DCMAKE_OSX_ARCHITECTURES=${cmakeArchitecture}`);
   run(cmake, arguments_);
@@ -72,7 +80,7 @@ function configure() {
 
 function hasExpectedConfiguration() {
   const cachePath = join(build, 'CMakeCache.txt');
-  if (!existsSync(cachePath) || (!existsSync(join(build, 'build.ninja')) && !existsSync(join(build, 'ALL_BUILD.vcxproj')))) return false;
+  if (!existsSync(cachePath) || (!existsSync(join(build, 'build.ninja')) && !existsSync(join(build, 'Makefile')) && !existsSync(join(build, 'ALL_BUILD.vcxproj')))) return false;
   const cache = readFileSync(cachePath, 'utf8');
   return cache.includes(`AIMUSE_FETCH_AUDIO_DEPS:BOOL=${fetchAudioDependencies ? 'ON' : 'OFF'}`) &&
     cache.includes(`AIMUSE_ENABLE_WASAPI:BOOL=${enableWasapi ? 'ON' : 'OFF'}`) &&
@@ -80,6 +88,7 @@ function hasExpectedConfiguration() {
     cache.includes(`AIMUSE_BUILD_RUNTIME_BINARIES:BOOL=${buildRuntimeBinaries ? 'ON' : 'OFF'}`) &&
     cache.includes('AIMUSE_ENABLE_PLUGIN_SDKS:BOOL=OFF') &&
     cache.includes('AIMUSE_BUILD_QA_PRIVATE_ROOT_PROVIDER:BOOL=OFF') &&
+    (!process.env.AIMUSE_MINIAUDIO_SOURCE_DIR || cache.includes(`FETCHCONTENT_SOURCE_DIR_MINIAUDIO:UNINITIALIZED=${resolve(process.env.AIMUSE_MINIAUDIO_SOURCE_DIR)}`)) &&
     (process.platform !== 'darwin' || cache.includes(`CMAKE_OSX_ARCHITECTURES:STRING=${cmakeArchitecture}`));
 }
 

@@ -59,21 +59,28 @@ describe('native agent-driven DAW product boundary', () => {
   });
 
   it('keeps release evidence production separate from caller-controlled acceptance', async () => {
-    const [producer, workflow, subjectVerifier, releaseVerifier] = await Promise.all([
+    const [producer, workflow, witness, subjectVerifier, releaseVerifier, levelCertifier] = await Promise.all([
       readFile(resolve('scripts/package-subject.mjs'), 'utf8'),
       readFile(resolve('scripts/formal-package-workflow.mjs'), 'utf8'),
+      readFile(resolve('scripts/release-command-witness.mjs'), 'utf8'),
       readFile(resolve('scripts/package-subject-verifier.mjs'), 'utf8'),
       readFile(resolve('scripts/release-evidence-verifier.mjs'), 'utf8'),
+      readFile(resolve('scripts/release-level-certifier.mjs'), 'utf8'),
     ]);
     expect(producer).not.toContain('export async function verifyPackageSubject');
     expect(producer).not.toContain('verified: true');
     expect(producer).toContain("acceptanceVerdict: null");
     expect(workflow).not.toContain('formalAutomationPassed');
     expect(workflow).not.toContain("from './release-evidence-verifier.mjs'");
-    expect(workflow).toContain("kind: 'aimuse-formal-release-observations'");
+    expect(workflow).toContain("kind: 'aimuse-formal-release-automation-observations'");
+    expect(witness).toContain("kind: 'aimuse-witnessed-command-execution'");
+    expect(witness).toContain('termination: { exitCode: observed.exitCode, signal: observed.signal }');
     expect(subjectVerifier).toContain('Independent verification requires every manifest-authorized source input');
     expect(releaseVerifier).toContain('caller-controlled digest');
-    expect(releaseVerifier).toContain("verdict: 'PASS'");
+    expect(releaseVerifier).toContain("verdict: 'AUTOMATED_GATES_PASS'");
+    expect(releaseVerifier).toContain("levelCertification: 'PENDING_INDEPENDENT_MCP_AND_COMPUTER_USE'");
+    expect(levelCertifier).toContain("verdict: 'PASS'");
+    expect(levelCertifier).toContain("tester?.role !== 'independent-tester'");
   });
 
   it('does not retain removed direct validation or config-writer dependencies', async () => {

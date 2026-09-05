@@ -12,6 +12,7 @@ const macosEntitlements = resolve('build', 'entitlements.mac.plist');
 const macosInheritedEntitlements = resolve('build', 'entitlements.mac.inherit.plist');
 const macosDevelopmentEntitlements = resolve('build', 'entitlements.mac.development.plist');
 const macosDevelopmentInheritedEntitlements = resolve('build', 'entitlements.mac.development.inherit.plist');
+const nativeDistribution = resolve(process.env.AIMUSE_NATIVE_DIST_DIR || 'native/dist/native');
 const macosNotarization = macosDeveloperIdentity && process.env.AIMUSE_APPLE_ID && process.env.AIMUSE_APPLE_APP_PASSWORD && process.env.AIMUSE_APPLE_TEAM_ID
   ? { appleId: process.env.AIMUSE_APPLE_ID, appleIdPassword: process.env.AIMUSE_APPLE_APP_PASSWORD, teamId: process.env.AIMUSE_APPLE_TEAM_ID }
   : undefined;
@@ -72,7 +73,7 @@ const config: ForgeConfig = {
       LSUIElement: true,
       NSMicrophoneUsageDescription: 'AIMuse accesses the microphone only after you explicitly authorize and start recording.',
     },
-    extraResource: [resolve('native', 'dist', 'native')],
+    extraResource: [nativeDistribution],
     afterCopyExtraResources: [(buildPath, _electronVersion, platform, architecture, callback) => {
       try {
         if (platform === 'darwin') validatePackagedNativeArchitectures(resolve(buildPath, 'AIMuse.app', 'Contents', 'Resources', 'native'), activeMacPackageArchitecture ?? architecture);

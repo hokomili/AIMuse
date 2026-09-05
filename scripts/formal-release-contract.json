@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 2,
+  "kind": "aimuse-formal-release-contract",
+  "schemas": {
+    "declaredInputs": 2,
+    "executionReceipt": 2,
+    "automationObservations": 2,
+    "independentCertification": 2,
+    "finalVerification": 2
+  },
+  "schemaFields": {
+    "declaredInputs": [
+      "schemaVersion",
+      "kind",
+      "createdAt",
+      "acceptanceVerdict",
+      "level",
+      "implementationTaskId",
+      "expectedIndependentTester",
+      "protectedRunRoot",
+      "sourceInputs",
+      "paths",
+      "contract",
+      "controls",
+      "toolchain",
+      "executionEnvironment"
+    ],
+    "executionReceiptBase": [
+      "schemaVersion",
+      "kind",
+      "createdAt",
+      "acceptanceVerdict",
+      "stageId",
+      "declaredInputs",
+      "contract",
+      "attribution",
+      "command",
+      "environment",
+      "timing",
+      "termination",
+      "stdout",
+      "stderr"
+    ],
+    "executionReceiptPackageExtension": ["packageSubject"],
+    "automationObservations": [
+      "schemaVersion",
+      "kind",
+      "createdAt",
+      "acceptanceVerdict",
+      "releasePhase",
+      "level",
+      "protectedRunRoot",
+      "runLease",
+      "declaredInputs",
+      "packageSubject",
+      "executionReceipts"
+    ],
+    "automatedVerification": [
+      "schemaVersion",
+      "reportKind",
+      "verdict",
+      "levelCertification",
+      "eligibleForIndependentCertification",
+      "verifierSha256",
+      "witnessSha256",
+      "declaredInputsSha256",
+      "observationManifestSha256",
+      "source",
+      "package",
+      "execution",
+      "checks",
+      "limitations"
+    ],
+    "independentCertification": [
+      "schemaVersion",
+      "kind",
+      "level",
+      "overall",
+      "startedAt",
+      "finishedAt",
+      "tester",
+      "interfaces",
+      "subject",
+      "report",
+      "cases",
+      "findings",
+      "coverageExceptions",
+      "cleanup"
+    ],
+    "finalVerification": [
+      "schemaVersion",
+      "reportKind",
+      "verdict",
+      "level",
+      "certifierSha256",
+      "tester",
+      "source",
+      "package",
+      "evidence",
+      "limitations"
+    ]
+  },
+  "declaredTooling": {
+    "controlPaths": [
+      "scripts/formal-release-contract.json",
+      "scripts/formal-package-workflow.mjs",
+      "scripts/package-subject.mjs",
+      "scripts/package-subject-verifier.mjs",
+      "scripts/release-command-witness.mjs",
+      "scripts/release-evidence-verifier.mjs",
+      "scripts/release-inputs.mjs",
+      "scripts/release-level-certifier.mjs",
+      "scripts/release-protected-root-verifier.mjs",
+      "scripts/verify-package.mjs"
+    ],
+    "javascriptTools": {
+      "typescript": "node_modules/typescript/bin/tsc",
+      "eslint": "node_modules/eslint/bin/eslint.js",
+      "vitest": "node_modules/vitest/vitest.mjs",
+      "playwright": "node_modules/@playwright/test/cli.js",
+      "electronForge": "node_modules/@electron-forge/cli/dist/electron-forge.js",
+      "electronLauncher": "node_modules/electron/cli.js"
+    },
+    "requiredExternalToolRoles": [
+      "node",
+      "npm",
+      "git",
+      "cmake",
+      "ctest",
+      "cCompiler",
+      "cppCompiler",
+      "scriptShell",
+      "rendererBrowser"
+    ],
+    "optionalExternalToolRoles": ["ninja"],
+    "darwinExternalToolRoles": [
+      "codesign",
+      "lipo",
+      "plutil",
+      "xcrun",
+      "make",
+      "linker",
+      "archiver",
+      "ranlib"
+    ],
+    "nativeDependencies": {
+      "miniaudio": {
+        "revision": "9634bedb5b5a2ca38c1ee7108a9358a4e233f14d"
+      }
+    }
+  },
+  "stages": {
+    "base": [
+      {
+        "id": "verify-source",
+        "command": { "type": "npm-script", "name": "verify" },
+        "packageSubjectRequired": false
+      },
+      {
+        "id": "native-test",
+        "command": { "type": "npm-script", "name": "native:test" },
+        "packageSubjectRequired": false
+      },
+      {
+        "id": "package-preflight",
+        "command": { "type": "npm-script", "name": "prepackage" },
+        "packageSubjectRequired": false
+      },
+      {
+        "id": "package-artifact-once",
+        "command": { "type": "npm-script", "name": "package:artifact" },
+        "packageSubjectRequired": false
+      },
+      {
+        "id": "verify-package-after-freeze",
+        "command": { "type": "node-script", "path": "scripts/verify-package.mjs" },
+        "packageSubjectRequired": true
+      }
+    ],
+    "level2": [
+      {
+        "id": "packaged-e2e-from-subject",
+        "command": { "type": "npm-script", "name": "test:e2e:only" },
+        "packageSubjectRequired": true
+      },
+      {
+        "id": "verify-package-after-e2e",
+        "command": { "type": "node-script", "path": "scripts/verify-package.mjs" },
+        "packageSubjectRequired": true
+      }
+    ]
+  },
+  "certification": {
+    "1": {
+      "requiredCaseIds": [
+        "automation-independent-verification",
+        "engine-package-window-identity",
+        "isolated-mcp-authentication",
+        "mcp-edit-idempotency-undo-redo",
+        "native-ui-edit-undo-redo",
+        "mcp-to-ui-cross-surface",
+        "ui-to-mcp-cross-surface",
+        "credential-redaction-and-process-cleanup",
+        "post-stop-package-reverification"
+      ]
+    },
+    "2": {
+      "requiredCaseIds": [
+        "automation-independent-verification",
+        "engine-package-window-identity",
+        "isolated-mcp-all-resources-and-tools",
+        "two-session-attribution-history-and-collaboration",
+        "public-trace-replay-non-mutating",
+        "human-grace-lock-precedence-and-expiry",
+        "durable-force-discard-and-recovery-control",
+        "headless-attach-detach-reattach-and-quit",
+        "serialized-stems-midi-dawproject-approvals",
+        "disposable-root-authority-matrix",
+        "song-save-open-and-save-as",
+        "song-track-arrangement-inspector-and-mixer",
+        "song-piano-roll-automation-markers-sections-and-lyrics",
+        "song-checkpoints-variants-activity-and-agent-reconnect",
+        "sfx-layer-deliverable-variant-and-batch-workflow",
+        "interchange-folder-pack-wav-midi-master-stem-sfx-and-dawproject",
+        "provider-generation-credential-negative-surface",
+        "mcp-to-ui-cross-surface",
+        "ui-to-mcp-cross-surface",
+        "credential-redaction-and-process-cleanup",
+        "post-stop-package-reverification",
+        "zero-unexplained-mandatory-skips",
+        "zero-blocker-or-p0-findings"
+      ]
+    }
+  }
+}

@@ -1,52 +1,81 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { formalWorkflowStages, runFormalPackageWorkflow } from '../../scripts/formal-package-workflow.mjs';
 
 const inputs = { gitHead: 'a', gitBranch: 'branch', indexSha256: 'b', dirtyStatusSha256: 'c', workspaceInputsSha256: 'd', workspaceInputFiles: 1 };
+function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex').toUpperCase(); }
 
 describe('formal package workflow ordering', () => {
-  it('packages once, freezes before verification, and rehashes after Level 2 E2E', async () => {
-    const commands = [];
-    let verifyCalls = 0;
-    const manifest = { subject: { identitySha256: 'IDENTITY' } };
-    const formalRunRoot = `${process.cwd()}/test-results/luna-high/fake-run`;
-    const requestedManifest = `${formalRunRoot}/package-subject.json`;
+  it('uses only caller-declared inputs and separately witnessed Level 2 commands', async () => {
+    const workspace = process.cwd();
+    const suffix = `${process.pid}-${Date.now()}`;
+    const formalRunRoot = join(workspace, 'test-results', 'luna-high', `fake-run-${suffix}`);
+    const requestedManifest = join(formalRunRoot, 'package-subject.json');
+    const declaredPath = join(formalRunRoot, 'declared-release-inputs.json');
+    const contractBytes = await readFile(join(workspace, 'scripts', 'formal-release-contract.json'));
     const protectedRoot = { identity: { canonicalPath: formalRunRoot, device: '1', inode: '2' }, owner: 'launching-user', allowedPrincipals: ['launching-user'] };
+    const declared = {
+      path: declaredPath,
+      bytes: Buffer.from('{}'),
+      digest: 'D'.repeat(64),
+      manifest: {
+        schemaVersion: 2,
+        kind: 'aimuse-declared-release-inputs',
+        acceptanceVerdict: null,
+        level: 2,
+        sourceInputs: inputs,
+        paths: {
+          workspace,
+          formalRunRoot,
+          forgeOutDirectory: join(formalRunRoot, 'package-output'),
+          packageSubjectManifest: requestedManifest,
+          packagedPlaywrightOutput: join(workspace, 'test-results', 'playwright', `fake-run-${suffix}`),
+          architecture: 'arm64',
+        },
+        contract: { path: 'scripts/formal-release-contract.json', bytes: contractBytes.length, sha256: sha256(contractBytes) },
+        protectedRunRoot: protectedRoot,
+      },
+    };
+    const witnessed = [];
+    let subjectCreated = false;
     const result = await runFormalPackageWorkflow({
       level: 2,
-      workspace: process.cwd(),
+      workspace,
       environment: {
-        ...process.env,
+        AIMUSE_RELEASE_INPUTS_MANIFEST: declaredPath,
+        AIMUSE_RELEASE_INPUTS_SHA256: declared.digest,
         AIMUSE_FORMAL_RUN_ROOT: formalRunRoot,
-        AIMUSE_FORGE_OUT_DIR: `${formalRunRoot}/package-output`,
-        AIMUSE_NPM_CLI: '/tools/npm-cli.js',
+        AIMUSE_FORGE_OUT_DIR: declared.manifest.paths.forgeOutDirectory,
         AIMUSE_PACKAGE_SUBJECT_MANIFEST: requestedManifest,
-        AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256: 'F'.repeat(64),
+        AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR: declared.manifest.paths.packagedPlaywrightOutput,
       },
-      runCommand: async (command, arguments_, options) => { commands.push({ command, arguments_, environment: options.env }); },
+      loadDeclaredInputs: async () => declared,
       captureInputs: async () => inputs,
-      createSubject: async ({ manifestPath, sourceInputs }) => ({ manifestPath, manifestSha256: 'A'.repeat(64), manifest: { ...manifest, inputs: sourceInputs } }),
-      verifySubject: async () => { verifyCalls += 1; },
+      createSubject: async ({ manifestPath, sourceInputs }) => {
+        subjectCreated = true;
+        return { manifestPath, manifestSha256: 'A'.repeat(64), manifest: { inputs: sourceInputs, subject: { identitySha256: 'IDENTITY' } } };
+      },
+      executeWitness: async ({ stageId, packageSubject }) => {
+        witnessed.push({ stageId, packageSubject });
+        if (stageId === 'package-artifact-once') expect(subjectCreated).toBe(false);
+        if (stageId === 'verify-package-after-freeze') expect(subjectCreated).toBe(true);
+      },
+      loadWitnessReceipt: async ({ stage }) => ({ stageId: stage.id, path: `execution/${stage.id}.receipt.json`, bytes: 1, sha256: 'E'.repeat(64) }),
       inspectRunRoot: async () => protectedRoot,
-      publishArtifact: async (path, bytes) => ({ path, bytes: bytes.length, sha256: 'E'.repeat(64) }),
-      hashControl: async () => 'F'.repeat(64),
+      publishArtifact: async (path, bytes) => ({ path, bytes: bytes.length, sha256: 'F'.repeat(64) }),
     });
-    expect(commands.filter(({ arguments_ }) => arguments_.slice(-2).join(' ') === 'run package:artifact')).toHaveLength(1);
-    expect(commands.some(({ arguments_ }) => arguments_.slice(-2).join(' ') === 'run package')).toBe(false);
-    expect(commands.some(({ arguments_ }) => arguments_.slice(-2).join(' ') === 'run test:e2e')).toBe(false);
-    for (const command of commands.slice(0, 4)) {
-      expect(command.environment.AIMUSE_PACKAGE_SUBJECT_MANIFEST).toBeUndefined();
-      expect(command.environment.AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256).toBeUndefined();
-    }
-    const e2e = commands.find(({ arguments_ }) => arguments_.slice(-2).join(' ') === 'run test:e2e:only');
-    expect(e2e.environment.AIMUSE_PACKAGE_SUBJECT_MANIFEST).toBe(requestedManifest);
-    expect(e2e.environment.AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256).toBe('A'.repeat(64));
-    expect(e2e.environment.AIMUSE_FORMAL_RUN_ROOT.endsWith('/test-results/luna-high/fake-run')).toBe(true);
-    expect(verifyCalls).toBe(4);
-    expect(result.inputs).toBe(inputs);
-    expect(result.observationManifestPath).toBe(`${formalRunRoot}/automation-observations.json`);
+    expect(witnessed.map(({ stageId }) => stageId)).toEqual(formalWorkflowStages(2));
+    expect(witnessed.filter(({ stageId }) => stageId === 'package-artifact-once')).toHaveLength(1);
+    expect(witnessed.filter(({ packageSubject }) => packageSubject).map(({ stageId }) => stageId)).toEqual([
+      'verify-package-after-freeze', 'packaged-e2e-from-subject', 'verify-package-after-e2e',
+    ]);
+    expect(result.inputs).toBe(declared.manifest);
+    expect(result.observationManifestPath).toBe(join(formalRunRoot, 'automation-observations.json'));
   });
 
-  it('keeps Level 1 free of packaged E2E and exposes deterministic stages', () => {
+  it('keeps Level 1 free of packaged E2E and derives stages from the stable contract', () => {
     const stages = formalWorkflowStages(1);
     expect(stages.filter((stage) => stage === 'package-artifact-once')).toHaveLength(1);
     expect(stages).not.toContain('packaged-e2e-from-subject');

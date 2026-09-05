@@ -1,38 +1,24 @@
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { verifyReleaseEvidence } from '../../scripts/release-evidence-verifier.mjs';
 
 const roots = [];
-const controls = [
-  'scripts/initial-snapshot-manifest.json',
-  'scripts/formal-package-workflow.mjs',
-  'scripts/package-subject.mjs',
-  'scripts/package-subject-verifier.mjs',
-  'scripts/release-evidence-verifier.mjs',
-  'scripts/release-protected-root-verifier.mjs',
-  'scripts/verify-package.mjs',
-];
-const stages = [
-  ['capture-source-inputs', 'internal-observation'],
-  ['verify-source', 'command-observation', [process.execPath, '/tools/npm-cli.js', 'run', 'verify']],
-  ['native-test', 'command-observation', [process.execPath, '/tools/npm-cli.js', 'run', 'native:test']],
-  ['package-preflight', 'command-observation', [process.execPath, '/tools/npm-cli.js', 'run', 'prepackage']],
-  ['package-artifact-once', 'command-observation', [process.execPath, '/tools/npm-cli.js', 'run', 'package:artifact']],
-  ['confirm-source-inputs', 'internal-observation'],
-  ['create-subject-manifest', 'internal-observation'],
-  ['verify-subject-before-verifier', 'internal-observation'],
-  ['verify-package-from-subject', 'command-observation', [process.execPath, 'scripts/verify-package.mjs']],
-  ['verify-subject-after-verifier', 'internal-observation'],
-  ['verify-subject-at-e2e-handoff', 'internal-observation'],
-  ['packaged-e2e-from-subject', 'command-observation', [process.execPath, '/tools/npm-cli.js', 'run', 'test:e2e:only']],
-  ['verify-subject-after-e2e', 'internal-observation'],
-];
-
 function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex').toUpperCase(); }
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
+
+async function identity(role, path) {
+  const canonicalPath = await realpath(path);
+  const info = await stat(canonicalPath);
+  return { role, requestedPath: resolve(path), canonicalPath, bytes: info.size, sha256: sha256(await readFile(canonicalPath)) };
+}
+async function writePrivate(path, bytes) {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, bytes, { mode: 0o600 });
+  await chmod(path, 0o600);
+}
 
 async function fixture() {
   const workspace = await mkdtemp(join(tmpdir(), 'aimuse-release-verifier-'));
@@ -40,144 +26,301 @@ async function fixture() {
   const runRoot = join(workspace, 'test-results', 'luna-high', 'fresh-run');
   await mkdir(runRoot, { recursive: true, mode: 0o700 });
   await chmod(runRoot, 0o700);
-  const controlHashes = {};
-  for (const path of controls) {
-    const absolute = join(workspace, path);
-    await mkdir(dirname(absolute), { recursive: true });
-    const bytes = Buffer.from(`control:${path}\n`);
-    await writeFile(absolute, bytes);
-    controlHashes[path] = sha256(bytes);
+  const contractBytes = await readFile(resolve('scripts/formal-release-contract.json'));
+  const contract = JSON.parse(contractBytes.toString('utf8'));
+  const contractPath = join(workspace, 'scripts', 'formal-release-contract.json');
+  await writePrivate(contractPath, contractBytes);
+  const dummyPath = join(workspace, 'tool.bin');
+  await writePrivate(dummyPath, 'tool');
+  const actualVerifierPath = resolve('scripts/release-evidence-verifier.mjs');
+  const actualWitnessPath = resolve('scripts/release-command-witness.mjs');
+  const controls = {};
+  for (const path of contract.declaredTooling.controlPaths) {
+    const selected = path === 'scripts/release-evidence-verifier.mjs'
+      ? actualVerifierPath
+      : path === 'scripts/release-command-witness.mjs'
+        ? actualWitnessPath
+        : path === 'scripts/formal-release-contract.json' ? contractPath : dummyPath;
+    controls[path] = await identity(path, selected);
   }
+  const javascriptTools = {};
+  for (const role of Object.keys(contract.declaredTooling.javascriptTools)) javascriptTools[role] = await identity(role, dummyPath);
+  const externalRoles = [
+    ...contract.declaredTooling.requiredExternalToolRoles,
+    ...(process.platform === 'darwin' ? contract.declaredTooling.darwinExternalToolRoles : []),
+  ];
+  const externalTools = {};
+  for (const role of externalRoles) externalTools[role] = await identity(role, role === 'node' ? process.execPath : dummyPath);
   const sourceInputs = {
-    scope: 'manifest-authorized-clean-commit',
-    rootWasEnumerated: false,
-    protectedRootsAccessed: false,
-    gitHead: 'a'.repeat(40),
-    gitTree: 'b'.repeat(40),
-    sourceManifestSha256: 'C'.repeat(64),
-    workspaceInputFiles: 3,
-    workspaceInputsSha256: 'D'.repeat(64),
+    scope: 'manifest-authorized-clean-commit', rootWasEnumerated: false, protectedRootsAccessed: false,
+    gitHead: 'a'.repeat(40), gitTree: 'b'.repeat(40), sourceManifestSha256: 'C'.repeat(64),
+    workspaceInputFiles: 3, workspaceInputsSha256: 'D'.repeat(64), entries: [],
   };
-  const observedStages = [];
-  for (let index = 0; index < stages.length; index += 1) {
-    const [id, kind, command] = stages[index];
-    if (kind === 'internal-observation') {
-      observedStages.push({ id, kind, exitCode: 0 });
-      continue;
-    }
-    const logRoot = join(runRoot, 'observations');
-    await mkdir(logRoot, { recursive: true, mode: 0o700 });
-    const stdoutPath = join(logRoot, `${index}-stdout.log`);
-    const stderrPath = join(logRoot, `${index}-stderr.log`);
-    const stdoutBytes = Buffer.from(`${id}\n`);
-    const stderrBytes = Buffer.alloc(0);
-    await writeFile(stdoutPath, stdoutBytes, { mode: 0o600 });
-    await writeFile(stderrPath, stderrBytes, { mode: 0o600 });
-    observedStages.push({
-      id,
-      kind,
-      command,
-      exitCode: 0,
-      signal: null,
-      stdout: { path: `observations/${index}-stdout.log`, bytes: stdoutBytes.length, sha256: sha256(stdoutBytes) },
-      stderr: { path: `observations/${index}-stderr.log`, bytes: 0, sha256: sha256(stderrBytes) },
-    });
-  }
-  const packageManifestPath = join(runRoot, 'package-subject.json');
-  await writeFile(packageManifestPath, '{}\n', { mode: 0o600 });
-  const runLeasePath = join(runRoot, 'run-lease.json');
-  const rootInfo = await lstat(runRoot);
-  const protectedRunRootIdentity = { version: 1, canonicalPath: await realpath(runRoot), device: String(rootInfo.dev), inode: String(rootInfo.ino) };
-  const runLeaseBytes = Buffer.from(`${JSON.stringify({ schemaVersion: 1, kind: 'aimuse-formal-run-lease', protectedRunRootIdentity })}\n`);
-  await writeFile(runLeasePath, runLeaseBytes, { mode: 0o600 });
-  const observations = {
+  const dependencyPath = join(runRoot, 'dependency-inventory.json');
+  const dependencyBytes = Buffer.from('{}\n');
+  await writePrivate(dependencyPath, dependencyBytes);
+  const npmConfigPath = join(runRoot, 'npm-config');
+  await writePrivate(npmConfigPath, Buffer.alloc(0));
+  const miniaudioSourceDirectory = join(runRoot, 'declared-inputs', 'miniaudio');
+  const miniaudioFile = join(miniaudioSourceDirectory, 'miniaudio.h');
+  const miniaudioBytes = Buffer.from('declared miniaudio\n');
+  await writePrivate(miniaudioFile, miniaudioBytes);
+  const miniaudioEntries = [{ path: 'miniaudio.h', mode: '100644', bytes: miniaudioBytes.length, sha256: sha256(miniaudioBytes) }];
+  const miniaudioInventory = {
     schemaVersion: 1,
-    kind: 'aimuse-formal-release-observations',
+    kind: 'aimuse-declared-native-dependency',
+    dependency: 'miniaudio',
+    revision: contract.declaredTooling.nativeDependencies.miniaudio.revision,
+    files: miniaudioEntries.length,
+    entriesSha256: sha256(Buffer.from(JSON.stringify(miniaudioEntries))),
+    entries: miniaudioEntries,
+  };
+  const miniaudioInventoryPath = join(runRoot, 'native-dependency-miniaudio.json');
+  const miniaudioInventoryBytes = Buffer.from(`${JSON.stringify(miniaudioInventory, null, 2)}\n`);
+  await writePrivate(miniaudioInventoryPath, miniaudioInventoryBytes);
+  const executionHome = join(runRoot, 'execution-home');
+  const executionTemp = join(runRoot, 'execution-tmp');
+  const npmCache = join(runRoot, 'npm-cache');
+  await Promise.all([executionHome, executionTemp, npmCache].map((path) => mkdir(path, { mode: 0o700 })));
+  const rootInfo = await lstat(runRoot);
+  const protectedIdentity = { version: 1, canonicalPath: await realpath(runRoot), device: String(rootInfo.dev), inode: String(rootInfo.ino) };
+  const toolPath = [...new Set(Object.values(externalTools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
+  const executionEnvironment = {
+    HOME: executionHome,
+    TMPDIR: executionTemp,
+    TEMP: executionTemp,
+    TMP: executionTemp,
+    XDG_CACHE_HOME: join(executionHome, '.cache'),
+    XDG_CONFIG_HOME: join(executionHome, '.config'),
+    PATH: toolPath,
+    SHELL: externalTools.scriptShell.requestedPath,
+    npm_config_script_shell: externalTools.scriptShell.requestedPath,
+    npm_config_userconfig: npmConfigPath,
+    npm_config_globalconfig: npmConfigPath,
+    npm_config_cache: npmCache,
+    npm_config_update_notifier: 'false',
+    npm_config_audit: 'false',
+    npm_config_fund: 'false',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: npmConfigPath,
+    GIT_CONFIG_SYSTEM: npmConfigPath,
+    GIT_OPTIONAL_LOCKS: '0',
+    GIT_TERMINAL_PROMPT: '0',
+    AIMUSE_CMAKE: externalTools.cmake.requestedPath,
+    ...(externalTools.make ? { AIMUSE_MAKE: externalTools.make.requestedPath } : {}),
+    CC: externalTools.cCompiler.requestedPath,
+    CXX: externalTools.cppCompiler.requestedPath,
+    AIMUSE_RENDERER_BROWSER_EXECUTABLE: externalTools.rendererBrowser.requestedPath,
+    AIMUSE_NATIVE_BUILD_DIR: join(runRoot, 'native-build'),
+    AIMUSE_NATIVE_DIST_DIR: join(runRoot, 'native-dist'),
+    AIMUSE_MINIAUDIO_SOURCE_DIR: miniaudioSourceDirectory,
+    AIMUSE_TARGET_ARCH: 'arm64',
+    AIMUSE_VERIFY_PACKAGE_ARCH: 'arm64',
+    AIMUSE_ENABLE_COREAUDIO: '1',
+    AIMUSE_ENABLE_WASAPI: '1',
+    ...(process.platform === 'win32' ? {
+      USERPROFILE: executionHome,
+      LOCALAPPDATA: join(executionHome, 'AppData', 'Local'),
+      APPDATA: join(executionHome, 'AppData', 'Roaming'),
+      ComSpec: externalTools.scriptShell.requestedPath,
+    } : {}),
+  };
+  const inputPath = join(runRoot, 'declared-release-inputs.json');
+  const inputs = {
+    schemaVersion: 2,
+    kind: 'aimuse-declared-release-inputs',
     createdAt: new Date(0).toISOString(),
     acceptanceVerdict: null,
     level: 2,
-    protectedRunRoot: {
-      path: 'test-results/luna-high/fresh-run',
-      identity: protectedRunRootIdentity,
-      owner: 'launching-user',
-      allowedPrincipals: ['launching-user'],
-    },
-    runLease: { path: 'run-lease.json', bytes: runLeaseBytes.length, sha256: sha256(runLeaseBytes) },
+    implementationTaskId: 'implementation-task',
+    expectedIndependentTester: { model: 'gpt-5.6-luna', reasoningEffort: 'high', distinctTaskRequired: true },
+    protectedRunRoot: { identity: protectedIdentity, owner: 'launching-user', allowedPrincipals: ['launching-user'] },
     sourceInputs,
-    packageSubject: { manifestPath: 'package-subject.json', manifestSha256: 'E'.repeat(64), subjectIdentitySha256: 'F'.repeat(64) },
-    controls: controlHashes,
-    stages: observedStages,
+    paths: {
+      workspace,
+      formalRunRoot: runRoot,
+      forgeOutDirectory: join(runRoot, 'package-output'),
+      packageSubjectManifest: join(runRoot, 'package-subject.json'),
+      packagedPlaywrightOutput: join(workspace, 'test-results', 'playwright', 'fresh-run'),
+      packagedPlaywrightHtmlReport: join(workspace, 'test-results', 'playwright', 'fresh-run-html-report'),
+      rendererPlaywrightOutput: join(runRoot, 'renderer-playwright'),
+      executionHome,
+      executionTemp,
+      npmCache,
+      nativeBuildDirectory: join(runRoot, 'native-build'),
+      nativeDistributionDirectory: join(runRoot, 'native-dist'),
+      miniaudioSourceDirectory,
+      architecture: 'arm64',
+    },
+    contract: { path: 'scripts/formal-release-contract.json', bytes: contractBytes.length, sha256: sha256(contractBytes) },
+    controls,
+    toolchain: {
+      platform: process.platform,
+      architecture: process.arch,
+      externalTools,
+      javascriptTools,
+      dependencyInventory: { path: 'dependency-inventory.json', bytes: dependencyBytes.length, sha256: sha256(dependencyBytes) },
+      npmConfiguration: { path: 'npm-config', bytes: 0, sha256: sha256(Buffer.alloc(0)) },
+      nativeDependencies: {
+        miniaudio: {
+          revision: miniaudioInventory.revision,
+          sourceDirectory: 'declared-inputs/miniaudio',
+          files: miniaudioInventory.files,
+          entriesSha256: miniaudioInventory.entriesSha256,
+          inventory: { path: 'native-dependency-miniaudio.json', bytes: miniaudioInventoryBytes.length, sha256: sha256(miniaudioInventoryBytes) },
+        },
+      },
+    },
+    executionEnvironment,
+  };
+  const inputBytes = Buffer.from(`${JSON.stringify(inputs, null, 2)}\n`);
+  await writePrivate(inputPath, inputBytes);
+  const inputSha256 = sha256(inputBytes);
+  const packagePath = join(runRoot, 'package-subject.json');
+  await writePrivate(packagePath, '{}\n');
+  const packageSha256 = 'E'.repeat(64);
+  const subjectIdentity = 'F'.repeat(64);
+  const expectedEnvironment = (withSubject) => Object.fromEntries(Object.entries({
+    ...executionEnvironment,
+    AIMUSE_FORMAL_RUN_ROOT: runRoot,
+    AIMUSE_FORGE_OUT_DIR: inputs.paths.forgeOutDirectory,
+    AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR: inputs.paths.packagedPlaywrightOutput,
+    AIMUSE_RENDERER_PLAYWRIGHT_OUTPUT_DIR: inputs.paths.rendererPlaywrightOutput,
+    AIMUSE_NPM_CLI: externalTools.npm.canonicalPath,
+    ...(withSubject ? { AIMUSE_PACKAGE_SUBJECT_MANIFEST: packagePath, AIMUSE_PACKAGE_SUBJECT_MANIFEST_SHA256: packageSha256 } : {}),
+  }).sort(([left], [right]) => left.localeCompare(right)));
+  const stages = [...contract.stages.base, ...contract.stages.level2];
+  const receiptDeclarations = [];
+  const receiptObjects = [];
+  for (let index = 0; index < stages.length; index += 1) {
+    const stage = stages[index];
+    const prefix = `${String(index + 1).padStart(2, '0')}-${stage.id}`;
+    const stdoutPath = join(runRoot, 'execution', `${prefix}.stdout.log`);
+    const stderrPath = join(runRoot, 'execution', `${prefix}.stderr.log`);
+    const stdoutBytes = Buffer.from(`${stage.id}\n`);
+    const stderrBytes = Buffer.alloc(0);
+    await writePrivate(stdoutPath, stdoutBytes);
+    await writePrivate(stderrPath, stderrBytes);
+    const command = stage.command.type === 'npm-script'
+      ? { logical: stage.command, executable: externalTools.node, arguments: [externalTools.npm.requestedPath, 'run', stage.command.name] }
+      : { logical: stage.command, executable: externalTools.node, arguments: [stage.command.path] };
+    const receipt = {
+      schemaVersion: 2,
+      kind: 'aimuse-witnessed-command-execution',
+      createdAt: new Date(0).toISOString(),
+      acceptanceVerdict: null,
+      stageId: stage.id,
+      declaredInputs: { path: 'declared-release-inputs.json', sha256: inputSha256 },
+      contract: { path: inputs.contract.path, sha256: inputs.contract.sha256 },
+      attribution: { witnessPath: 'scripts/release-command-witness.mjs', witnessSha256: controls['scripts/release-command-witness.mjs'].sha256, witnessPid: 10 + index, childPid: 100 + index },
+      command,
+      environment: expectedEnvironment(stage.packageSubjectRequired),
+      timing: { startedAt: new Date(index * 1000).toISOString(), finishedAt: new Date(index * 1000 + 10).toISOString(), durationMs: 10 },
+      termination: { exitCode: 0, signal: null },
+      stdout: { path: relative(runRoot, stdoutPath).split(sep).join('/'), bytes: stdoutBytes.length, sha256: sha256(stdoutBytes) },
+      stderr: { path: relative(runRoot, stderrPath).split(sep).join('/'), bytes: 0, sha256: sha256(stderrBytes) },
+      ...(stage.packageSubjectRequired ? { packageSubject: { path: 'package-subject.json', sha256: packageSha256 } } : {}),
+    };
+    const receiptPath = join(runRoot, 'execution', `${prefix}.receipt.json`);
+    const receiptBytes = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
+    await writePrivate(receiptPath, receiptBytes);
+    receiptObjects.push(receipt);
+    receiptDeclarations.push({ stageId: stage.id, path: relative(runRoot, receiptPath).split(sep).join('/'), bytes: receiptBytes.length, sha256: sha256(receiptBytes) });
+  }
+  const leasePath = join(runRoot, 'run-lease.json');
+  const leaseBytes = Buffer.from(`${JSON.stringify({ schemaVersion: 2, kind: 'aimuse-formal-run-lease', createdAt: new Date(0).toISOString(), acceptanceVerdict: null, declaredInputsSha256: inputSha256, protectedRunRootIdentity: protectedIdentity })}\n`);
+  await writePrivate(leasePath, leaseBytes);
+  const observations = {
+    schemaVersion: 2,
+    kind: 'aimuse-formal-release-automation-observations',
+    createdAt: new Date(0).toISOString(),
+    acceptanceVerdict: null,
+    releasePhase: 'AUTOMATION_COMPLETE_AWAITING_INDEPENDENT_VERIFICATION',
+    level: 2,
+    protectedRunRoot: { path: 'test-results/luna-high/fresh-run', identity: protectedIdentity, owner: 'launching-user', allowedPrincipals: ['launching-user'] },
+    runLease: { path: 'run-lease.json', bytes: leaseBytes.length, sha256: sha256(leaseBytes) },
+    declaredInputs: { path: 'declared-release-inputs.json', bytes: inputBytes.length, sha256: inputSha256 },
+    packageSubject: { path: 'package-subject.json', sha256: packageSha256, identitySha256: subjectIdentity },
+    executionReceipts: receiptDeclarations,
   };
   const observationPath = join(runRoot, 'automation-observations.json');
   const writeObservations = async () => {
     const bytes = Buffer.from(`${JSON.stringify(observations, null, 2)}\n`);
-    await writeFile(observationPath, bytes, { mode: 0o600 });
-    await chmod(observationPath, 0o600);
+    await writePrivate(observationPath, bytes);
     return sha256(bytes);
   };
-  const verifierSha256 = sha256(await readFile(resolve('scripts/release-evidence-verifier.mjs')));
   const verifyPackageSubject = async () => ({
     assertions: {
-      requiredRuntimeEntries: true,
-      minimumComponentSizes: true,
-      exactMcpToolSurface: true,
-      providerFreeProductBoundary: true,
-      rendererAuthorityIsolation: true,
-      macosBundleContract: true,
-      repoOwnedIcon: true,
-      deepStrictSignature: true,
+      requiredRuntimeEntries: true, minimumComponentSizes: true, exactMcpToolSurface: true,
+      providerFreeProductBoundary: true, rendererAuthorityIsolation: true,
+      ...(process.platform === 'darwin' ? { macosBundleContract: true, repoOwnedIcon: true, deepStrictSignature: true } : {}),
     },
     manifest: {
       inputs: sourceInputs,
       subject: {
-        identitySha256: 'F'.repeat(64),
-        packageDirectory: 'test-results/luna-high/fresh-run/package-output/AIMuse-darwin-arm64',
-        architecture: 'arm64',
-        signature: { kind: 'ad-hoc' },
+        identitySha256: subjectIdentity, packageDirectory: 'test-results/luna-high/fresh-run/package-output/AIMuse-darwin-arm64', architecture: 'arm64', signature: { kind: 'ad-hoc' },
         files: { applicationExecutable: { sha256: '1'.repeat(64) }, applicationAsar: { sha256: '2'.repeat(64) } },
       },
     },
   });
-  return { workspace, runRoot, observationPath, observations, writeObservations, verifierSha256, verifyPackageSubject };
+  return {
+    workspace, runRoot, inputPath, inputSha256, observationPath, observations, receiptObjects,
+    writeObservations, verifyPackageSubject,
+    verifierSha256: sha256(await readFile(actualVerifierPath)),
+    witnessSha256: controls['scripts/release-command-witness.mjs'].sha256,
+  };
+}
+
+function verificationArguments(value, observationSha256) {
+  return {
+    workspace: value.workspace,
+    formalRunRoot: value.runRoot,
+    observationManifestPath: value.observationPath,
+    expectedObservationManifestSha256: observationSha256,
+    declaredInputsPath: value.inputPath,
+    expectedDeclaredInputsSha256: value.inputSha256,
+    expectedVerifierSha256: value.verifierSha256,
+    expectedWitnessSha256: value.witnessSha256,
+  };
 }
 
 describe('independent release evidence verifier', () => {
-  it('derives acceptance only from exact fresh observations and caller-pinned verifier bytes', async () => {
+  it('derives only an automated-gates disposition from exact witnessed commands and declared tooling', async () => {
     const value = await fixture();
     const observationSha256 = await value.writeObservations();
-    await expect(verifyReleaseEvidence({
-      workspace: value.workspace,
-      formalRunRoot: value.runRoot,
-      observationManifestPath: value.observationPath,
-      expectedObservationManifestSha256: observationSha256,
-      expectedVerifierSha256: value.verifierSha256,
-    }, { verifyPackageSubject: value.verifyPackageSubject })).resolves.toMatchObject({
-      verdict: 'PASS',
-      checks: expect.arrayContaining([{ id: 'producer-has-no-acceptance-verdict', satisfied: true }]),
+    const result = await verifyReleaseEvidence(verificationArguments(value, observationSha256), {
+      verifyPackageSubject: value.verifyPackageSubject,
+      reproduceDependencyInventory: () => ({}),
     });
+    expect(result).toMatchObject({
+      verdict: 'AUTOMATED_GATES_PASS',
+      levelCertification: 'PENDING_INDEPENDENT_MCP_AND_COMPUTER_USE',
+      execution: { independentlyAttributed: true },
+    });
+    expect(result.execution.receipts).toEqual(expect.arrayContaining([expect.objectContaining({ stageId: 'verify-source' })]));
   });
 
-  it('rejects producer-authored acceptance and weakened commands', async () => {
+  it('rejects producer judgement and a forged successful termination', async () => {
     const value = await fixture();
     value.observations.acceptanceVerdict = 'PASS';
     let digest = await value.writeObservations();
-    await expect(verifyReleaseEvidence({
-      workspace: value.workspace,
-      formalRunRoot: value.runRoot,
-      observationManifestPath: value.observationPath,
-      expectedObservationManifestSha256: digest,
-      expectedVerifierSha256: value.verifierSha256,
-    }, { verifyPackageSubject: value.verifyPackageSubject })).rejects.toThrow(/stored its own acceptance/u);
+    await expect(verifyReleaseEvidence(verificationArguments(value, digest), {
+      verifyPackageSubject: value.verifyPackageSubject,
+      reproduceDependencyInventory: () => ({}),
+    })).rejects.toThrow(/stored an acceptance verdict/u);
 
     value.observations.acceptanceVerdict = null;
-    value.observations.stages.find((stage) => stage.id === 'verify-source').command = ['npm', 'run', 'typecheck'];
+    const receipt = value.receiptObjects[0];
+    receipt.termination.exitCode = 1;
+    const path = join(value.runRoot, value.observations.executionReceipts[0].path);
+    const bytes = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
+    await writePrivate(path, bytes);
+    value.observations.executionReceipts[0].bytes = bytes.length;
+    value.observations.executionReceipts[0].sha256 = sha256(bytes);
     digest = await value.writeObservations();
-    await expect(verifyReleaseEvidence({
-      workspace: value.workspace,
-      formalRunRoot: value.runRoot,
-      observationManifestPath: value.observationPath,
-      expectedObservationManifestSha256: digest,
-      expectedVerifierSha256: value.verifierSha256,
-    }, { verifyPackageSubject: value.verifyPackageSubject })).rejects.toThrow(/weakened or changed/u);
+    await expect(verifyReleaseEvidence(verificationArguments(value, digest), {
+      verifyPackageSubject: value.verifyPackageSubject,
+      reproduceDependencyInventory: () => ({}),
+    })).rejects.toThrow(/did not terminate successfully/u);
   });
 });

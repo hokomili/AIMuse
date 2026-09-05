@@ -36,10 +36,13 @@ describe('macOS structural boundary', () => {
     expect(nativeBuild).toContain("process.platform === 'win32' || process.platform === 'darwin'");
     expect(nativeBuild).toContain("process.platform === 'darwin' && process.env.AIMUSE_ENABLE_COREAUDIO !== '0'");
     expect(nativeBuild).toContain('CMAKE_OSX_ARCHITECTURES');
+    expect(nativeBuild).toContain('AIMUSE_NATIVE_BUILD_DIR');
+    expect(nativeBuild).toContain('FETCHCONTENT_SOURCE_DIR_MINIAUDIO');
     expect(npmNode24).toContain("join(dirname(dirname(node24)), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')");
     expect(forge).toContain("new MakerZIP({}, ['win32', 'darwin'])");
     expect(forge).toContain("resolve(buildPath, '..', '..', 'MacOS', 'AIMuse')");
     expect(forge).toContain("icon: resolve('build', 'icon.icns')");
+    expect(forge).toContain('AIMUSE_NATIVE_DIST_DIR');
     expect(forge).toContain('removeUnusedMacUsageDescriptions(buildPath)');
     expect(forge).toContain('afterCopyExtraResources:');
     expect(forge).toContain("resolve(buildPath, 'AIMuse.app', 'Contents', 'Resources', 'native')");

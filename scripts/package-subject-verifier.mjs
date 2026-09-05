@@ -40,8 +40,8 @@ function within(root, candidate) {
   return value === '' || (!value.startsWith(`..${sep}`) && value !== '..' && !isAbsolute(value));
 }
 function strictChild(root, candidate) { return candidate !== root && within(root, candidate); }
-function run(command, arguments_, cwd) {
-  const result = spawnSync(command, arguments_, { cwd, encoding: 'utf8', shell: false, windowsHide: true });
+function run(command, arguments_, cwd, environment) {
+  const result = spawnSync(command, arguments_, { cwd, env: environment, encoding: 'utf8', shell: false, windowsHide: true });
   if (result.error || result.status !== 0) throw new Error(`${command} ${arguments_.join(' ')} failed: ${(result.stderr || result.stdout || result.error?.message || '').trim()}`);
   return result.stdout;
 }
@@ -89,12 +89,12 @@ async function sourceEntry(workspace, path) {
   return { path, mode: info.mode & 0o7777, bytes: content.length, sha256: sha256Bytes(content) };
 }
 
-async function observeSourceInputs(workspace) {
+async function observeSourceInputs(workspace, { gitPath = 'git', environment } = {}) {
   const boundary = await enumerateSourceBoundary(workspace);
   const scopedArguments = ['--', ...boundary.pathspecs];
-  const status = run('git', ['status', '--short', '--untracked-files=all', '-z', ...scopedArguments], workspace);
+  const status = run(gitPath, ['status', '--short', '--untracked-files=all', '-z', ...scopedArguments], workspace, environment);
   if (status.length !== 0) throw new Error('Independent verification requires every manifest-authorized source input to be clean and committed.');
-  const headPaths = run('git', ['ls-tree', '-r', '-z', '--name-only', 'HEAD', ...scopedArguments], workspace).split('\0').filter(Boolean).sort((left, right) => left.localeCompare(right, 'en'));
+  const headPaths = run(gitPath, ['ls-tree', '-r', '-z', '--name-only', 'HEAD', ...scopedArguments], workspace, environment).split('\0').filter(Boolean).sort((left, right) => left.localeCompare(right, 'en'));
   if (new Set(headPaths).size !== headPaths.length || headPaths.some((path) => !boundary.includesPath(path))) throw new Error('The clean commit source set escapes the declared source manifest.');
   for (const path of boundary.literalPaths) if (!headPaths.includes(path)) throw new Error(`Declared source file is not committed at HEAD: ${path}`);
   for (const tree of boundary.trees) if (!headPaths.some((path) => path.startsWith(`${tree}/`))) throw new Error(`Declared source tree has no committed files at HEAD: ${tree}`);
@@ -108,10 +108,10 @@ async function observeSourceInputs(workspace) {
     sourceManifestVersion: boundary.manifest.version,
     rootWasEnumerated: false,
     protectedRootsAccessed: false,
-    gitHead: run('git', ['rev-parse', 'HEAD'], workspace).trim(),
-    gitTree: run('git', ['rev-parse', 'HEAD^{tree}'], workspace).trim(),
-    gitBranch: run('git', ['branch', '--show-current'], workspace).trim(),
-    indexSha256: sha256Bytes(Buffer.from(run('git', ['ls-files', '--stage', '-z', ...scopedArguments], workspace))),
+    gitHead: run(gitPath, ['rev-parse', 'HEAD'], workspace, environment).trim(),
+    gitTree: run(gitPath, ['rev-parse', 'HEAD^{tree}'], workspace, environment).trim(),
+    gitBranch: run(gitPath, ['branch', '--show-current'], workspace, environment).trim(),
+    indexSha256: sha256Bytes(Buffer.from(run(gitPath, ['ls-files', '--stage', '-z', ...scopedArguments], workspace, environment))),
     dirtyStatusSha256: sha256Bytes(Buffer.from(status)),
     workspaceInputsSha256: sha256Bytes(Buffer.from(stableStringify(entries))),
     workspaceInputFiles: entries.length,
@@ -154,15 +154,16 @@ function packageLocations(workspace, platform, architecture, outDirectory) {
     },
   };
 }
-function macArchitectures(path) { return run('lipo', ['-archs', path]).trim().split(/\s+/u).filter(Boolean).sort(); }
-function plistValue(path, key) { return run('plutil', ['-extract', key, 'raw', '-o', '-', path]).trim(); }
-function plistHasKey(path, key) {
-  const result = spawnSync('plutil', ['-extract', key, 'raw', '-o', '-', path], { encoding: 'utf8', shell: false, windowsHide: true });
+function toolPath(tools, role, fallback) { return tools?.[role]?.canonicalPath || tools?.[role]?.requestedPath || fallback; }
+function macArchitectures(path, tools, environment) { return run(toolPath(tools, 'lipo', 'lipo'), ['-archs', path], undefined, environment).trim().split(/\s+/u).filter(Boolean).sort(); }
+function plistValue(path, key, tools, environment) { return run(toolPath(tools, 'plutil', 'plutil'), ['-extract', key, 'raw', '-o', '-', path], undefined, environment).trim(); }
+function plistHasKey(path, key, tools, environment) {
+  const result = spawnSync(toolPath(tools, 'plutil', 'plutil'), ['-extract', key, 'raw', '-o', '-', path], { env: environment, encoding: 'utf8', shell: false, windowsHide: true });
   return !result.error && result.status === 0;
 }
 function signatureField(text, key) { return text.split(/\r?\n/u).find((line) => line.startsWith(`${key}=`))?.slice(key.length + 1); }
 
-async function inspectPackage({ workspace, platform, architecture, locations }) {
+async function inspectPackage({ workspace, platform, architecture, locations, tools, environment }) {
   const wire = await getCurrentFuseWire(locations.files.applicationExecutable);
   const fuses = Object.fromEntries([...EXPECTED_FUSES].map(([option, expected]) => {
     if (wire[option] !== expected) throw new Error(`Electron fuse ${FuseV1Options[option]} does not match the hardened package contract.`);
@@ -201,23 +202,24 @@ async function inspectPackage({ workspace, platform, architecture, locations }) 
     },
     assertions: { requiredRuntimeEntries: true, minimumComponentSizes: true, exactMcpToolSurface: true, providerFreeProductBoundary: true, rendererAuthorityIsolation: true },
   };
-  const architectures = Object.fromEntries(FILE_ROLES.filter((role) => role !== 'applicationAsar').map((role) => [role, macArchitectures(locations.files[role])]));
-  const description = spawnSync('codesign', ['-dvvv', locations.app], { encoding: 'utf8', shell: false, windowsHide: true });
+  const architectures = Object.fromEntries(FILE_ROLES.filter((role) => role !== 'applicationAsar').map((role) => [role, macArchitectures(locations.files[role], tools, environment)]));
+  const codesign = toolPath(tools, 'codesign', 'codesign');
+  const description = spawnSync(codesign, ['-dvvv', locations.app], { env: environment, encoding: 'utf8', shell: false, windowsHide: true });
   const signatureText = `${description.stdout || ''}${description.stderr || ''}`;
-  const verification = spawnSync('codesign', ['--verify', '--deep', '--strict', locations.app], { encoding: 'utf8', shell: false, windowsHide: true });
+  const verification = spawnSync(codesign, ['--verify', '--deep', '--strict', locations.app], { env: environment, encoding: 'utf8', shell: false, windowsHide: true });
   if (description.error || description.status !== 0 || verification.error || verification.status !== 0) throw new Error('The post-package macOS subject does not have a valid code signature.');
-  const requirement = spawnSync('codesign', ['-dr', '-', locations.app], { encoding: 'utf8', shell: false, windowsHide: true });
+  const requirement = spawnSync(codesign, ['-dr', '-', locations.app], { env: environment, encoding: 'utf8', shell: false, windowsHide: true });
   const infoPlist = join(locations.app, 'Contents', 'Info.plist');
-  const bundle = { identifier: plistValue(infoPlist, 'CFBundleIdentifier'), name: plistValue(infoPlist, 'CFBundleName') };
-  const iconFile = plistValue(infoPlist, 'CFBundleIconFile');
-  const category = plistValue(infoPlist, 'LSApplicationCategoryType');
-  const uiElement = plistValue(infoPlist, 'LSUIElement');
-  const microphoneUsage = plistValue(infoPlist, 'NSMicrophoneUsageDescription');
+  const bundle = { identifier: plistValue(infoPlist, 'CFBundleIdentifier', tools, environment), name: plistValue(infoPlist, 'CFBundleName', tools, environment) };
+  const iconFile = plistValue(infoPlist, 'CFBundleIconFile', tools, environment);
+  const category = plistValue(infoPlist, 'LSApplicationCategoryType', tools, environment);
+  const uiElement = plistValue(infoPlist, 'LSUIElement', tools, environment);
+  const microphoneUsage = plistValue(infoPlist, 'NSMicrophoneUsageDescription', tools, environment);
   if (bundle.identifier !== 'com.aimuse.app' || bundle.name !== 'AIMuse' || !iconFile.endsWith('.icns') || category !== 'public.app-category.music' || uiElement !== 'true' || !microphoneUsage.includes('explicitly authorize')) {
     throw new Error('macOS bundle identity, background presentation, category or microphone disclosure does not match the package contract.');
   }
   for (const key of ['NSAudioCaptureUsageDescription', 'NSBluetoothAlwaysUsageDescription', 'NSBluetoothPeripheralUsageDescription', 'NSCameraUsageDescription']) {
-    if (plistHasKey(infoPlist, key)) throw new Error(`macOS bundle retains unused Electron usage description ${key}.`);
+    if (plistHasKey(infoPlist, key, tools, environment)) throw new Error(`macOS bundle retains unused Electron usage description ${key}.`);
   }
   const packagedIcon = await readFile(join(locations.resources, iconFile));
   const expectedIcon = await readFile(resolve(workspace, 'build', 'icon.icns'));
@@ -284,7 +286,7 @@ function validateManifestShape(manifest) {
 
 export async function verifyPackageSubject({
   workspace = process.cwd(), manifestPath, expectedManifestSha256, formalRunRoot,
-  platform = process.platform, inspect,
+  platform = process.platform, inspect, toolchain, executionEnvironment,
 } = {}, dependencies = {}) {
   if (!manifestPath) throw new Error('A package subject manifest path is required.');
   if (!expectedManifestSha256 || !/^[A-F\d]{64}$/iu.test(expectedManifestSha256)) throw new Error('An expected package subject manifest SHA-256 is required.');
@@ -296,7 +298,7 @@ export async function verifyPackageSubject({
   const manifest = JSON.parse(bytes.toString('utf8'));
   validateManifestShape(manifest);
   const observeSource = dependencies.observeSourceInputs ?? observeSourceInputs;
-  const observedInputs = await observeSource(root);
+  const observedInputs = await observeSource(root, { gitPath: toolPath(toolchain, 'git', 'git'), environment: executionEnvironment });
   if (stableStringify(sourceIdentity(observedInputs)) !== stableStringify(sourceIdentity(manifest.inputs))) throw new Error('Manifest-authorized clean source identity drifted from the package subject.');
   if (manifest.subject.platform !== platform) throw new Error(`Package subject platform ${manifest.subject.platform} does not match ${platform}.`);
   const locations = packageLocations(root, manifest.subject.platform, manifest.subject.architecture, dirname(resolveSubjectPath(root, manifest.subject.packageDirectory)));
@@ -310,7 +312,7 @@ export async function verifyPackageSubject({
     if (stableStringify(observed) !== stableStringify(declared)) throw new Error(`Package subject ${role} bytes drifted after manifest creation.`);
   }
   const inspectSubject = inspect ?? dependencies.inspectPackage ?? inspectPackage;
-  const inspectedResult = await inspectSubject({ workspace: root, platform: manifest.subject.platform, architecture: manifest.subject.architecture, locations });
+  const inspectedResult = await inspectSubject({ workspace: root, platform: manifest.subject.platform, architecture: manifest.subject.architecture, locations, tools: toolchain, environment: executionEnvironment });
   const inspected = inspectedResult.inspection ?? inspectedResult;
   assertInspectionContract(manifest.subject.platform, manifest.subject.architecture, inspected);
   for (const key of ['architectures', 'signature', 'bundle', 'hardenedFuses']) if (stableStringify(inspected[key]) !== stableStringify(manifest.subject[key])) throw new Error(`Package subject ${key} drifted after manifest creation.`);

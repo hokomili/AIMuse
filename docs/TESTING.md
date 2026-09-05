@@ -22,9 +22,9 @@ Playwright is valuable automated coverage, but it does not replace Computer Use.
 - On Codex desktop, the primary task is only the mechanical launch coordinator: it starts/shows/stops the tester's declared isolated package outside the filesystem sandbox and does not judge cases.
 - The tester is read-only for production source. It may write ignored reports and evidence below its formal run root, while Playwright may write only to its separately declared, disjoint output child below `test-results/playwright/`; it must not fix code, soften assertions or change tracker status.
 - Test projects use `QA L<level> · <UTC run ID> · <description>`. Never mutate, overwrite, close or discard a pre-existing user project.
-- Before automation, record source, branch, manifest-scoped index/dirty-worktree and toolchain identity as inputs only. Source capture may enumerate only `scripts/initial-snapshot-manifest.json`; repository-root discovery and protected-root inspection are forbidden. A pre-existing package is not the formal UI subject when the required command intentionally packages.
+- Before automation, use `release-inputs.mjs` to exclusively publish the schema-2 source, branch, manifest-scoped index/dirty-worktree, direct tool bytes, installed dependency inventory, execution environment, paths, release contract and control-program identity. Source capture may enumerate only `scripts/initial-snapshot-manifest.json`; repository-root discovery and protected-root inspection are forbidden. Tool and native-dependency capture follow only the explicit `formal-release-contract.json` declarations. The declared Git binary performs source capture and copies the exact clean pinned miniaudio tree into the protected root with a byte inventory. Automation receives a private empty home/temp/npm cache, fresh native build/dist directories, an empty bound npm config, the declared script shell and a `PATH` composed only from declared tool directories. A pre-existing package is not the formal UI subject when the required command intentionally packages.
 - Formal Levels 1 and 2 package exactly once before declaring their subject. The immutable post-package manifest binds the application executable, ASAR, all three native helpers, architecture, bundle/signature identity and hardened fuses; a convenient pre-existing AIMuse window or pre-package hash is not a formal subject. Level 3 additionally requires its separately checksummed release artifacts and may not weaken this identity rule.
-- Packaging and formal QA use Node 24.x. The package-subject producer cannot verify its own output and both subject and automation manifests store `acceptanceVerdict: null`. For Levels 1/2 the separately implemented package verifier must pass around packaged E2E when present, and the caller-pinned release-evidence verifier must independently derive the automation disposition before coordinator handoff; a Forge or producer exit code without those checks is failure.
+- Packaging and formal QA use the exact Node 24/npm/tool files declared before the run. Each command is launched by the caller-pinned `release-command-witness.mjs`, which exclusively writes the child PID, termination, exact command/environment and raw stdout/stderr bindings. The package producer cannot author those receipts, verify its own output or store command success; package and automation manifests retain `acceptanceVerdict: null`. The caller-pinned release-evidence verifier independently validates every witnessed receipt and may derive only `AUTOMATED_GATES_PASS`. That is eligibility for independent UI/MCP testing, not a Level result. Only `release-level-certifier.mjs`, separately pinned after a distinct Luna/high tester has completed all exact cases and cleanup, may derive Level 1/2 `PASS`.
 - Release dependency security has three distinct surfaces. Revalidate the supported Electron `43-x-y` dist-tag from the exact `https://registry.npmjs.org/` endpoint with a fresh isolated npm cache; run `npm run audit:runtime` for the shipped application graph and `npm run audit:complete` for the explicit prod/dev/optional/peer build and packaging graph. `npm run audit:release` must pass both and is the only audit accepted by `release:windows`; a production-only or ambient-omit audit is insufficient. Also run `npm audit signatures` with the current pinned Node-compatible npm and record signature/attestation results. Registry freshness, a clean audit and lock integrity do not replace verification of the packaged Electron binary or immutable artifact.
 - `AIMUSE_FORMAL_RUN_ROOT` must be the fresh protected `test-results/luna-high/<run>` root. `AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR` must be a run-scoped strict child below `test-results/playwright/` and disjoint from the formal root and its parent. `AIMUSE_PACKAGE_SUBJECT_MANIFEST` may explicitly select `<formal-run-root>/package-subject.json`; otherwise that path is derived from the formal root.
 - External network and paid-service calls are forbidden during formal QA unless a separately reviewed release test explicitly requires them. Any built-in provider/generation/credential surface is a failure, not a test target.
@@ -42,7 +42,7 @@ Playwright is valuable automated coverage, but it does not replace Computer Use.
 | 2 | Regression | Feature cluster or milestone | `node scripts/npm-node24.mjs run test:level2:auto` | Full fast/native/package/Playwright suite plus core Song, SFX, persistence, collaboration and lifecycle regressions pass. |
 | 3 | Release exhaustive | Every release candidate | `node scripts/npm-node24.mjs run test:level3:auto` | Release artifacts plus exhaustive MCP, Computer Use, audio, interchange, recovery, security, performance and accessibility evidence pass. |
 
-The `:auto` commands are only the automated portion. The independent MCP + Computer Use report remains mandatory.
+The `:auto` commands and `AUTOMATED_GATES_PASS` are only the automated portion. The distinct-task MCP + native Computer Use report, structured certification manifest, cleanup and final certifier remain mandatory.
 
 ## Current formal evidence
 
@@ -169,16 +169,36 @@ On macOS or another POSIX shell, use `pipefail` so `tee` cannot hide the automat
 ```sh
 LEVEL=2
 RUN_ID=<NEW_UTC_RUN_ID>
+IMPLEMENTATION_TASK_ID=<CURRENT_IMPLEMENTATION_TASK_ID>
+NODE24=<ABSOLUTE_NODE_24_EXECUTABLE>
+NPM_CLI=<ABSOLUTE_NPM_CLI_JS>
 FORMAL_RUN_ROOT="$PWD/test-results/luna-high/${RUN_ID}-level${LEVEL}"
 PLAYWRIGHT_OUTPUT="$PWD/test-results/playwright/${RUN_ID}-level${LEVEL}"
+DECLARED_INPUTS="$FORMAL_RUN_ROOT/declared-release-inputs.json"
+PACKAGE_SUBJECT="$FORMAL_RUN_ROOT/package-subject.json"
+MINIAUDIO_SOURCE=<ABSOLUTE_CLEAN_PINNED_MINIAUDIO_CHECKOUT>
 mkdir -p "$FORMAL_RUN_ROOT"
 chmod 700 "$FORMAL_RUN_ROOT"
+"$NODE24" scripts/release-inputs.mjs \
+  --level "$LEVEL" \
+  --formal-run-root "$FORMAL_RUN_ROOT" \
+  --forge-out-dir "$FORMAL_RUN_ROOT/package-output" \
+  --playwright-output-dir "$PLAYWRIGHT_OUTPUT" \
+  --package-subject-manifest "$PACKAGE_SUBJECT" \
+  --manifest "$DECLARED_INPUTS" \
+  --npm-cli "$NPM_CLI" \
+  --miniaudio-source "$MINIAUDIO_SOURCE" \
+  --implementation-task-id "$IMPLEMENTATION_TASK_ID"
+DECLARED_INPUTS_SHA256=<EXACT_SHA256_EMITTED_ABOVE>
 set -o pipefail
 AIMUSE_FORMAL_RUN_ROOT="$FORMAL_RUN_ROOT" \
 AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR="$PLAYWRIGHT_OUTPUT" \
 AIMUSE_FORGE_OUT_DIR="$FORMAL_RUN_ROOT/package-output" \
-AIMUSE_PACKAGE_SUBJECT_MANIFEST="$FORMAL_RUN_ROOT/package-subject.json" \
-node scripts/npm-node24.mjs run "test:level${LEVEL}:auto" 2>&1 | tee "$FORMAL_RUN_ROOT/automation.log"
+AIMUSE_PACKAGE_SUBJECT_MANIFEST="$PACKAGE_SUBJECT" \
+AIMUSE_RELEASE_INPUTS_MANIFEST="$DECLARED_INPUTS" \
+AIMUSE_RELEASE_INPUTS_SHA256="$DECLARED_INPUTS_SHA256" \
+AIMUSE_NODE24_EXE="$NODE24" AIMUSE_NPM_CLI="$NPM_CLI" \
+"$NODE24" scripts/npm-node24.mjs run "test:level${LEVEL}:auto" 2>&1 | tee "$FORMAL_RUN_ROOT/automation.log"
 ```
 
 On Windows, create and protect the new root with the owner-private ACL procedure before running the equivalent command. Preserve the native exit immediately after `Tee-Object`:
@@ -186,31 +206,56 @@ On Windows, create and protect the new root with the owner-private ACL procedure
 ```powershell
 $Level = 2
 $RunId = '<NEW_UTC_RUN_ID>'
+$ImplementationTaskId = '<CURRENT_IMPLEMENTATION_TASK_ID>'
+$Node24 = '<ABSOLUTE_NODE_24_EXECUTABLE>'
+$NpmCli = '<ABSOLUTE_NPM_CLI_JS>'
 $env:AIMUSE_FORMAL_RUN_ROOT = "E:\AIMuse\test-results\luna-high\$RunId-level$Level"
 $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR = "E:\AIMuse\test-results\playwright\$RunId-level$Level"
 $env:AIMUSE_FORGE_OUT_DIR = "$env:AIMUSE_FORMAL_RUN_ROOT\package-output"
 $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\package-subject.json"
-node scripts/npm-node24.mjs run "test:level${Level}:auto" 2>&1 | Tee-Object -LiteralPath "$env:AIMUSE_FORMAL_RUN_ROOT\automation.log"
+$env:AIMUSE_RELEASE_INPUTS_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\declared-release-inputs.json"
+$MiniaudioSource = '<ABSOLUTE_CLEAN_PINNED_MINIAUDIO_CHECKOUT>'
+& $Node24 scripts/release-inputs.mjs --level $Level --formal-run-root $env:AIMUSE_FORMAL_RUN_ROOT --forge-out-dir $env:AIMUSE_FORGE_OUT_DIR --playwright-output-dir $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR --package-subject-manifest $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST --manifest $env:AIMUSE_RELEASE_INPUTS_MANIFEST --npm-cli $NpmCli --miniaudio-source $MiniaudioSource --implementation-task-id $ImplementationTaskId
+$env:AIMUSE_RELEASE_INPUTS_SHA256 = '<EXACT_SHA256_EMITTED_ABOVE>'
+$env:AIMUSE_NODE24_EXE = $Node24
+$env:AIMUSE_NPM_CLI = $NpmCli
+& $Node24 scripts/npm-node24.mjs run "test:level${Level}:auto" 2>&1 | Tee-Object -LiteralPath "$env:AIMUSE_FORMAL_RUN_ROOT\automation.log"
 $AutomationExit = $LASTEXITCODE
 if ($AutomationExit -ne 0) { exit $AutomationExit }
 ```
 
-The formal Level 1 and Level 2 runners capture only manifest-authorized source inputs, preserve each command's stdout/stderr as mode-0600 hash-bound observations, invoke Forge packaging exactly once, require source inputs to remain unchanged, and exclusively publish content-only package and automation manifests. Level 2 additionally hands that same subject to packaged E2E and verifies it again. The producer reports only `observations-awaiting-independent-verification`; it cannot write an accepting result. Pin `scripts/release-evidence-verifier.mjs` independently, then run it with the emitted observation-manifest digest. Do not substitute `npm run test:e2e`, which intentionally packages for standalone developer use.
+The caller-created declared-input manifest is immutable and precedes every automated command. Its source identity is limited to `scripts/initial-snapshot-manifest.json`; its separate tooling section names the exact direct files permitted by `scripts/formal-release-contract.json`, including Node/npm/Git/script-shell, direct JavaScript tools, native/platform tools, browser, logical dependency inventory, copied miniaudio byte inventory, empty npm configuration, isolated directories, sanitized environment and verifier/witness controls. Each command then runs in a separate `release-command-witness.mjs` process, which owns its mode-0600 raw logs and termination receipt. The formal Level 1/2 producer invokes Forge exactly once, freezes the package, binds the receipt set and writes only schema-2 `AUTOMATION_COMPLETE_AWAITING_INDEPENDENT_VERIFICATION` observations with `acceptanceVerdict: null`.
+
+After automation, independently pin the witness and verifier bytes and invoke the verifier with the exact three caller-held digests. It exclusively publishes `independent-automated-verification.json`; success is exactly `AUTOMATED_GATES_PASS` plus `PENDING_INDEPENDENT_MCP_AND_COMPUTER_USE`, never a Level result:
+
+```sh
+node scripts/release-evidence-verifier.mjs \
+  --formal-run-root "$FORMAL_RUN_ROOT" \
+  --observations "$FORMAL_RUN_ROOT/automation-observations.json" \
+  --expected-observations-sha256 <OBSERVATIONS_SHA256> \
+  --declared-inputs "$DECLARED_INPUTS" \
+  --expected-declared-inputs-sha256 "$DECLARED_INPUTS_SHA256" \
+  --expected-verifier-sha256 <CALLER_PINNED_VERIFIER_SHA256> \
+  --expected-witness-sha256 <CALLER_PINNED_WITNESS_SHA256> \
+  --output "$FORMAL_RUN_ROOT/independent-automated-verification.json"
+```
+
+Do not substitute `npm run test:e2e`, which intentionally packages for standalone developer use. Do not call any output a Level 1/2 `PASS` until the independent tester and final certifier steps below are complete.
 
 ## Level 1/2 exact-build and engine identity preflight
 
 Formal QA never assumes a registered AIMuse MCP endpoint and visible window belong to the same engine. Multiple builds/profiles can coexist.
 
-1. Before automation, record source revision, branch, index/dirty input identity, toolchain and the planned disjoint evidence/output paths. A hash of an older package is input-artifact context only.
-2. Run the automated level once through `scripts/npm-node24.mjs` with the formal environment above and preserve its real exit. Do not rerun a package phase or use a narrower retry to manufacture a subject.
-3. Read the automation result after its final manifest verification. Record the subject-manifest path and SHA-256, subject-identity SHA-256, executable/ASAR/helper hashes, architecture, signature/bundle identity, planned isolated profile/connection/session paths and proof that the original formal root and log survived. Return `AUTOMATION_COMPLETE_AWAITING_COORDINATOR_LAUNCH`; do not spawn Electron.
-4. Immediately before launch, re-run `node scripts/package-subject-verifier.mjs --manifest <path> --expected-manifest-sha256 <sha256> --formal-run-root <formal-root>`. Separately run `npm run verify:release-evidence -- --formal-run-root <formal-root> --observations <formal-root>/automation-observations.json --expected-observations-sha256 <sha256> --expected-verifier-sha256 <caller-pinned-sha256>`. The primary coordinator checks every QA artifact path lies under the declared formal root, checks that Playwright output is disjoint, confirms the executable equals the subject-manifest path, and invokes `qa-session start` with explicit shell escalation and `--launch-context unsandboxed-gui`.
+1. Before automation, run `release-inputs.mjs` once and retain its exact digest. It binds source revision/branch/manifest-scoped index and dirty identity, direct tool bytes, dependency inventory, sanitized execution environment, stable release contract, control programs and planned disjoint evidence/output paths. A hash of an older package is input-artifact context only.
+2. Run the automated level once through `scripts/npm-node24.mjs` with that immutable input manifest and preserve its real exit. Every stage must have one separately witnessed receipt. Do not rerun a package phase or use a narrower retry to manufacture a subject.
+3. Read the automation result, require schema 2 and `acceptanceVerdict: null`, and record its exact digest plus subject-manifest/identity and executable/ASAR/helper/signature identities. Run the caller-pinned evidence verifier with the exact input, observation, witness and verifier digests. Continue only for `AUTOMATED_GATES_PASS` with full-level state still pending. Return `AUTOMATION_COMPLETE_AWAITING_COORDINATOR_LAUNCH`; do not spawn Electron.
+4. Immediately before launch, re-run `node scripts/package-subject-verifier.mjs --manifest <path> --expected-manifest-sha256 <sha256> --formal-run-root <formal-root>`. The primary coordinator checks every QA artifact path lies under the declared formal root, checks that Playwright output is disjoint, confirms the executable equals the subject-manifest path, and invokes `qa-session start` with explicit shell escalation and `--launch-context unsandboxed-gui`.
 5. Resume the same tester. It runs sandboxed `qa-session status` and requires `okay: true`; the coordinator must not supply an unsandboxed tester-status substitute. The normal path requires `processInspection: "performed"`, `processInspectionSupported: true`, `processInspectionDenied: false`, `processInspectionStatus: "alive"` and `processAlive: true`. `processInspectionStatus: "absent"` (including `ESRCH`), `"identity-mismatch"` or an explicit false liveness result is `BLOCKED` and health cannot override it. Only sandbox `EPERM` may enter the alternate path, which must report `processInspection: "denied"`, `processInspectionSupported: false`, `processInspectionDenied: true`, `processInspectionStatus: "permission-denied"` and `processAlive: null`. That path succeeds only with `packageSubjectVerified: true`, the exact manifest digest/subject identity and unchanged executable hash, exact connection/session PID-instance-profile-URL agreement, exact health identity, `mcpAuthentication: { "verified": true, "httpStatus": 400, "result": "initialization_required" }`, and final `inspectionFallbackVerified: true`. `processInspection: "unsupported"`, missing/failed health, failed authentication, `inspectionFallbackVerified: false`, connection/subject drift, `ESRCH` or any identity mismatch is `BLOCKED` before Computer Use or MCP.
 6. The tester initializes Computer Use, reads its guidance/confirmation rules and enumerates desktop apps without input.
 7. It selects the process-backed AIMuse window matching the subject-manifest and session executable. The Agents/Activity surface must report the private stdio bridge ready; the coordinator separately binds its isolated QA connection to the same authenticated engine identity without exposing the URL or bearer through renderer IPC.
 8. It initializes `scripts/qa-mcp.mjs` from the isolated connection. The globally registered/user-profile MCP is forbidden.
 9. Only after manifest/executable/hash/PID/URL/window assertions agree may it create a QA project. A mismatch is `BLOCKED` before mutation.
-10. After MCP/UI work and graceful coordinator stop, reverify the immutable subject manifest and record unchanged bytes/components in the final report.
+10. After MCP/UI work and graceful coordinator stop, reverify the immutable subject manifest and record unchanged bytes/components in the final report. The distinct tester publishes `independent-levelN-certification.json` with the exact ordered case IDs from `formal-release-contract.json`, per-case evidence path/size/digest bindings, empty unexplained coverage exceptions, complete cleanup, its own task/model/effort identity and the implementation-task ID. The caller independently pins and runs `release-level-certifier.mjs`; only its immutable `independently-derived-full-level-verification` output may say Level N `PASS`.
 
 Credential-bearing connection and MCP state files remain below ignored `test-results/`, are never printed or pasted into reports, and are redacted during cleanup.
 
@@ -227,10 +272,18 @@ Preserve all four pre-diagnostic infrastructure FAIL roots, the historical expli
 Example coordinator bootstrap:
 
 ```powershell
+$Node24 = '<absolute-node-24-executable>'
+$NpmCli = '<absolute-npm-cli-js>'
 $env:AIMUSE_FORMAL_RUN_ROOT = 'E:\AIMuse\test-results\luna-high\<run-id>-level1'
 $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR = 'E:\AIMuse\test-results\playwright\<run-id>-level1'
+$env:AIMUSE_FORGE_OUT_DIR = "$env:AIMUSE_FORMAL_RUN_ROOT\package-output"
 $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\package-subject.json"
-node scripts/npm-node24.mjs run test:level1:auto 2>&1 | Tee-Object -LiteralPath "$env:AIMUSE_FORMAL_RUN_ROOT\automation.log"
+$env:AIMUSE_RELEASE_INPUTS_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\declared-release-inputs.json"
+& $Node24 scripts/release-inputs.mjs --level 1 --formal-run-root $env:AIMUSE_FORMAL_RUN_ROOT --forge-out-dir $env:AIMUSE_FORGE_OUT_DIR --playwright-output-dir $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR --package-subject-manifest $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST --manifest $env:AIMUSE_RELEASE_INPUTS_MANIFEST --npm-cli $NpmCli --miniaudio-source '<absolute-clean-pinned-miniaudio-checkout>' --implementation-task-id '<implementation-task-id>'
+$env:AIMUSE_RELEASE_INPUTS_SHA256 = '<exact emitted declared-input SHA-256>'
+$env:AIMUSE_NODE24_EXE = $Node24
+$env:AIMUSE_NPM_CLI = $NpmCli
+& $Node24 scripts/npm-node24.mjs run test:level1:auto 2>&1 | Tee-Object -LiteralPath "$env:AIMUSE_FORMAL_RUN_ROOT\automation.log"
 $AutomationExit = $LASTEXITCODE
 if ($AutomationExit -ne 0) { exit $AutomationExit }
 node scripts/package-subject-verifier.mjs --manifest $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST --expected-manifest-sha256 <sha256-from-automation> --formal-run-root $env:AIMUSE_FORMAL_RUN_ROOT
@@ -243,22 +296,46 @@ The coordinator owns native `qa-session start`, `show` and `stop`. The tester ow
 
 ## Common run protocol
 
-1. **Identify inputs.** Record level, UTC run ID, source revision/branch/index/dirty state, Node/npm, planned protected formal root, separate Playwright output, isolated profile and initial active project. Do not promote an old package hash to subject identity.
-2. **Run automation once.** Preserve the complete environment, command, `pipefail`/`tee` log and exit status. The runner packages exactly once, publishes the immutable post-package manifest and verifies it around verifier/E2E. A narrower retry cannot turn a failed level command into Pass.
-3. **Declare and hand off the subject.** Record the manifest path/digest, subject identity, executable/ASAR/helper hashes, architecture/signature and surviving evidence-root identity. Reverify it immediately before the coordinator starts the declared process outside the sandbox.
+1. **Declare inputs.** Publish and hash the schema-2 input manifest before any automated command. It records level, task ID, source revision/branch/index/dirty state, exact tools/dependency inventory/environment, protected formal root and separate Playwright output. Do not promote an old package hash to subject identity.
+2. **Run automation once.** Preserve the command and `pipefail`/`tee` log. The runner packages exactly once and publishes the immutable package plus content-only observations; every child command has one separately witnessed termination/log receipt. A narrower retry cannot turn a failed run into evidence.
+3. **Independently verify and hand off the subject.** Pin witness/verifier bytes, derive only `AUTOMATED_GATES_PASS`, then record the manifest/digest, subject identity, executable/ASAR/helper hashes, architecture/signature and surviving evidence-root identity. Reverify it immediately before the coordinator starts the declared process outside the sandbox.
 4. **Select native window safely.** Initialize Computer Use and prove executable/window/MCP identity before mutation.
 5. **Join isolated MCP.** Use a distinct actor/color/model/effort/task ID; observe before mutation and record project IDs/revisions.
 6. **Exercise UI with Computer Use.** Observe, perform one state-derived action, refresh and verify. Re-observe after layout/modal/focus changes; use real pointer input for timeline, piano-roll or mixer gestures.
 7. **Cross-check both directions.** Verify an MCP-created change in that exact window and a Computer-Use-created change in MCP snapshot/diff.
 8. **Record failures immediately.** Include expected/actual, reproduction, project/revision, window/focus state, visual/log evidence, severity and tracker IDs.
 9. **Clean safely.** Restore the initial isolated tab, close/redact MCP state, and save QA projects only to new formal-root paths. An authorized force-discard may affect only a recorded run-owned disposable ID; prove that ID absent after the required same-profile restart and at final cleanup. Preserve the separate dirty recovery-control project through the decisive restart, verify its recovery, then save or force-close it safely. Return `TEST_COMPLETE_AWAITING_COORDINATOR_STOP`; the coordinator stops the engine and the tester resumes to prove PID exit/redaction.
-10. **Reverify and finalize.** Re-hash the manifest and all declared package components after stop, prove the formal root/log/report survived and use [testing/REPORT_TEMPLATE.md](testing/REPORT_TEMPLATE.md). Overall values are only `PASS`, `FAIL` or `BLOCKED`.
+10. **Reverify and finalize.** Re-hash the manifest and all declared package components after stop, prove the formal root/log/report survived and use [testing/REPORT_TEMPLATE.md](testing/REPORT_TEMPLATE.md). Publish the exact schema-2 case manifest and run the pinned final certifier. Only that result may make the full level `PASS`; tester reports and final values otherwise remain `FAIL` or `BLOCKED`.
 
 Reports belong at:
 
 ```text
 test-results/luna-high/<UTC-run-id>-level<1|2|3>/report.md
 ```
+
+For Levels 1/2, the distinct tester's `independent-levelN-certification.json` must follow the exact [schema-2 certification contract](testing/LEVEL_CERTIFICATION_SCHEMA.md), bind the exact declared-input/automation/automated-verification/package/report identities, identify both distinct task IDs plus the required Luna/high configuration, declare only `manifest-authorized-only`, `native-computer-use`, and `isolated-qa-mcp` interfaces, and contain the exact ordered case IDs from `formal-release-contract.json`. Every case needs at least one owner-private run-root evidence path with byte count and SHA-256. `coverageExceptions` must be empty for `PASS`; cleanup must affirm credential redaction, engine stop, zero run-owned survivor, stable formal-root identity and post-stop package re-verification. The final caller-pinned invocation is:
+
+```sh
+node scripts/release-level-certifier.mjs \
+  --level 2 \
+  --formal-run-root "$FORMAL_RUN_ROOT" \
+  --declared-inputs "$DECLARED_INPUTS" \
+  --expected-declared-inputs-sha256 <DECLARED_INPUTS_SHA256> \
+  --observations "$FORMAL_RUN_ROOT/automation-observations.json" \
+  --expected-observations-sha256 <OBSERVATIONS_SHA256> \
+  --automated-verification "$FORMAL_RUN_ROOT/independent-automated-verification.json" \
+  --expected-automated-verification-sha256 <AUTOMATED_VERIFICATION_SHA256> \
+  --certification "$FORMAL_RUN_ROOT/independent-level2-certification.json" \
+  --expected-certification-sha256 <CERTIFICATION_SHA256> \
+  --report "$FORMAL_RUN_ROOT/report.md" \
+  --expected-report-sha256 <REPORT_SHA256> \
+  --expected-evidence-verifier-sha256 <CALLER_PINNED_EVIDENCE_VERIFIER_SHA256> \
+  --expected-witness-sha256 <CALLER_PINNED_WITNESS_SHA256> \
+  --expected-certifier-sha256 <CALLER_PINNED_CERTIFIER_SHA256> \
+  --output "$FORMAL_RUN_ROOT/final-level2-verification.json"
+```
+
+The final certifier freshly re-derives the automated disposition, validates every tester evidence binding and re-verifies the package after cleanup. It refuses same-task tester attribution, missing/reordered cases, Playwright/DOM substitution, unexplained skips, Blocker/P0 findings, incomplete cleanup, or any byte drift.
 
 ## Level 1 — Smoke
 
@@ -300,7 +377,7 @@ Automated command:
 node scripts/npm-node24.mjs run test:level2:auto
 ```
 
-Run it only with the formal-root, Playwright-output and optional explicit subject-manifest environment described above. It packages once, freezes and verifies the manifest, runs packaged E2E against that exact subject, then verifies the manifest and every bound component again.
+Run it only after publishing the declared-input manifest and with the exact formal-root, Forge, Playwright, subject and input bindings described above. It packages once; separately witnessed commands verify the frozen manifest, run packaged E2E against that exact subject, and verify every bound component again. A successful automated verifier remains pending and is not Level 2 `PASS` until the distinct tester and final certifier complete.
 
 Level 2 includes Level 1 plus:
 

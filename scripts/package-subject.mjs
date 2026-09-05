@@ -23,8 +23,8 @@ const EXPECTED_FUSES = new Map([
 
 function sha256Bytes(bytes) { return createHash('sha256').update(bytes).digest('hex').toUpperCase(); }
 export async function sha256File(path) { return sha256Bytes(await readFile(path)); }
-function run(command, arguments_, cwd) {
-  const result = spawnSync(command, arguments_, { cwd, encoding: 'utf8', shell: false, windowsHide: true });
+function run(command, arguments_, cwd, environment) {
+  const result = spawnSync(command, arguments_, { cwd, env: environment, encoding: 'utf8', shell: false, windowsHide: true });
   if (result.error || result.status !== 0) throw new Error(`${command} ${arguments_.join(' ')} failed: ${(result.stderr || result.stdout || result.error?.message || '').trim()}`);
   return result.stdout;
 }
@@ -120,17 +120,17 @@ async function digestWorkspaceFile(workspace, path) {
   return { path, mode: info.mode & 0o7777, bytes: content.length, sha256: sha256Bytes(content) };
 }
 
-export async function captureSourceInputs(workspace = process.cwd()) {
+export async function captureSourceInputs(workspace = process.cwd(), { gitPath = 'git', gitEnvironment } = {}) {
   const root = resolve(workspace);
   const boundary = await sourceBoundary(root);
-  const head = run('git', ['rev-parse', 'HEAD'], root).trim();
-  const tree = run('git', ['rev-parse', 'HEAD^{tree}'], root).trim();
-  const branch = run('git', ['branch', '--show-current'], root).trim();
+  const head = run(gitPath, ['rev-parse', 'HEAD'], root, gitEnvironment).trim();
+  const tree = run(gitPath, ['rev-parse', 'HEAD^{tree}'], root, gitEnvironment).trim();
+  const branch = run(gitPath, ['branch', '--show-current'], root, gitEnvironment).trim();
   const scopedArguments = ['--', ...boundary.pathspecs];
-  const index = run('git', ['ls-files', '--stage', '-z', ...scopedArguments], root);
-  const status = run('git', ['status', '--short', '--untracked-files=all', '-z', ...scopedArguments], root);
+  const index = run(gitPath, ['ls-files', '--stage', '-z', ...scopedArguments], root, gitEnvironment);
+  const status = run(gitPath, ['status', '--short', '--untracked-files=all', '-z', ...scopedArguments], root, gitEnvironment);
   if (status.length !== 0) throw new Error('A formal package requires every manifest-authorized source input to be clean and committed.');
-  const headPaths = run('git', ['ls-tree', '-r', '-z', '--name-only', 'HEAD', ...scopedArguments], root).split('\0').filter(Boolean).sort((left, right) => left.localeCompare(right, 'en'));
+  const headPaths = run(gitPath, ['ls-tree', '-r', '-z', '--name-only', 'HEAD', ...scopedArguments], root, gitEnvironment).split('\0').filter(Boolean).sort((left, right) => left.localeCompare(right, 'en'));
   if (new Set(headPaths).size !== headPaths.length || headPaths.some((path) => !boundary.authorizes(path))) throw new Error('The clean commit source set escapes the declared source manifest.');
   for (const path of boundary.literalPaths) if (!headPaths.includes(path)) throw new Error(`Declared source file is not committed at HEAD: ${path}`);
   for (const tree of boundary.trees) if (!headPaths.some((path) => path.startsWith(`${tree}/`))) throw new Error(`Declared source tree has no committed files at HEAD: ${tree}`);

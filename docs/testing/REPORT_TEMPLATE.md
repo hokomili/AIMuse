@@ -9,6 +9,7 @@
 - Tester model:
 - Tester reasoning effort:
 - Report path:
+- Certification started/finished UTC (must match schema-2 JSON):
 
 ## Subject and environment
 
@@ -20,6 +21,12 @@
 - Platform/display/audio/MIDI details:
 - Formal evidence root and retained filesystem identity:
 - Playwright output and HTML-report paths, disjoint from formal evidence:
+- Declared release-input manifest path and SHA-256:
+- Declared Node/npm/direct-tool/dependency-inventory identity:
+- Copied miniaudio revision/tree inventory and fresh native build/dist paths:
+- Execution-witness SHA-256 and receipt count:
+- Automation-observation manifest path and SHA-256:
+- Independent automated-verification path and SHA-256 (`AUTOMATED_GATES_PASS`, not Level Pass):
 - Package-subject manifest path and SHA-256:
 - Subject identity SHA-256:
 - Executable, ASAR and native-helper paths/bytes/SHA-256:
@@ -63,8 +70,10 @@
 | Command | Result | Duration | Evidence/notes |
 | --- | --- | ---: | --- |
 | Formal environment plus `node scripts/npm-node24.mjs run test:levelN:auto` with preserved `pipefail`/`tee` exit | Pass/Fail/Blocked | | |
+| Caller-declared schema-2 source/tool/dependency/environment inputs | Pass/Fail/Blocked | | |
+| Exact caller-pinned execution-witness receipts and raw logs | Pass/Fail/Blocked | | |
 | Post-automation `package-subject-verifier.mjs` at handoff | Pass/Fail/Blocked | | |
-| Caller-pinned `release-evidence-verifier.mjs` over content-only observations | Pass/Fail/Blocked | | |
+| Caller-pinned `release-evidence-verifier.mjs` derived exactly `AUTOMATED_GATES_PASS` with full level pending | Pass/Fail/Blocked | | |
 
 ## MCP cases
 
@@ -140,4 +149,4 @@ List every skipped, unavailable, confirmation-blocked or environment-dependent r
 
 ## Final gate decision
 
-State why the level passed, failed or was blocked and name the exact next action.
+State why the tester disposition is PASS, FAIL or BLOCKED and name the exact next action. For PASS, also record the schema-2 independent-certification manifest path/size/SHA-256, exact ordered case count, per-case evidence-binding count and the distinct tester/implementation task IDs. The full Level is not finally PASS until the caller-pinned `release-level-certifier.mjs` output is retained; record its path/size/SHA-256 when available.

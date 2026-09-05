@@ -7,8 +7,10 @@ This checklist complements `FEATURE_TRACKER.md`; it cannot override an open trac
 - [ ] Choose a SemVer prerelease and add a dated changelog entry.
 - [ ] Create a fresh owner-private formal root plus disjoint Playwright output, then run the documented package-once Level 2 workflow on the target platform.
 - [ ] Retain the exclusively created post-package subject manifest and prove executable/ASAR/native-helper hashes, architecture, signature, bundle, and fuses remain unchanged after verification, packaged E2E, coordinator handoff, and cleanup.
-- [ ] Retain the schema-2 content-only automation observations, confirm source capture stayed within `scripts/initial-snapshot-manifest.json`, and have a caller-pinned `release-evidence-verifier.mjs` derive the result; neither producer manifest may contain an acceptance verdict.
-- [ ] Complete an independent Level 2 Luna/high MCP + Computer Use report against that exact manifest-bound package.
+- [ ] Before automation, exclusively publish schema-2 declared inputs that bind the manifest-only source, exact Node/npm/direct JavaScript/native/platform tool bytes, installed dependency inventory, a clean pinned miniaudio tree copied into the formal root, private home/temp/cache and fresh native build/dist paths, release contract, witness, and verifier controls.
+- [ ] Retain every separately witnessed execution receipt and raw log plus the schema-2 content-only automation observations. Confirm source capture stayed within `scripts/initial-snapshot-manifest.json`; neither producer artifact may contain command-success or acceptance judgement.
+- [ ] Have caller-pinned `release-evidence-verifier.mjs` reproduce the declared tool/dependency inputs and derive exactly `AUTOMATED_GATES_PASS`, never Level 2 `PASS`.
+- [ ] Complete a distinct-task Level 2 Luna/high MCP + native Computer Use report and schema-2 case manifest against that exact package, then have caller-pinned `release-level-certifier.mjs` re-derive automation, bind every case/report artifact, prove cleanup and post-stop package identity, and derive the full Level 2 result.
 - [ ] Run fresh registry/version checks and `npm run audit:release` for the exact dependency graph; retain signature/attestation results where supported.
 - [ ] Reconcile README, tracker, parity audit, limitations, and dependency/security evidence.
 - [ ] Prove the package/runtime contains no generation tool/UI/job, provider adapter/API/credential store, protected-storage addon/startup path, or automatic agent-client config writer.
