@@ -91,6 +91,7 @@ describe('caller-declared release inputs', () => {
     expect(result.manifest.executionEnvironment.npm_config_script_shell).toBe(tool.requestedPath);
     expect(result.manifest.executionEnvironment.HOME).toBe(join(runRoot, 'execution-home'));
     expect(result.manifest.executionEnvironment.TMPDIR).toBe(executionTemp);
+    expect(result.manifest.paths.nativeDistributionDirectory).toBe(join(runRoot, 'native'));
     expect(result.manifest.controls).toHaveProperty('scripts/release-command-witness.mjs');
     expect(result.manifest.controls).toHaveProperty('scripts/release-inputs.mjs');
     expect(result.manifest.toolchain.javascriptTools).toHaveProperty('playwright');

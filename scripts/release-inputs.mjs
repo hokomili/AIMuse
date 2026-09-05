@@ -291,7 +291,10 @@ export async function declareReleaseInputs({
   const npmUserConfigPath = join(runRoot, 'npm-user-config');
   const npmGlobalConfigPath = join(runRoot, 'npm-global-config');
   const nativeBuildDirectory = join(runRoot, 'native-build');
-  const nativeDistributionDirectory = join(runRoot, 'native-dist');
+  // Electron Packager preserves the basename of extraResource directories.
+  // Keep the declared fresh output named `native` so the packaged location is
+  // exactly Contents/Resources/native on every formal run.
+  const nativeDistributionDirectory = join(runRoot, 'native');
   const miniaudioSourceDirectoryInRoot = join(runRoot, 'declared-inputs', 'miniaudio');
   await Promise.all([
     assertMissing(forgeOut, 'Forge output'),
