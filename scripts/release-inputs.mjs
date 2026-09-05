@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { captureSourceInputs } from './package-subject.mjs';
 import { resolvePackagedE2eOutputSelection } from './playwright-output.mjs';
+import { inventoryContentTree, resolveReleaseContentTrees } from './release-content-inventory.mjs';
 import { inspectProtectedDirectory, inspectProtectedRunRoot } from './release-protected-root-verifier.mjs';
 
 export const DECLARED_RELEASE_INPUTS_SCHEMA_VERSION = 2;
@@ -198,11 +199,13 @@ async function materializeMiniaudio({ sourceDirectory, destination, revision, gi
 async function externalToolchain(environment) {
   const nodePath = await realpath(process.execPath);
   const npmCli = npmCliFrom(environment);
-  const gitPath = await findExecutable('git', environment);
+  const xcrunPath = process.platform === 'darwin' ? await findExecutable('xcrun', environment) : undefined;
+  const gitPath = process.platform === 'darwin'
+    ? run(xcrunPath, ['--find', 'git'], { label: 'xcrun git discovery' })
+    : await findExecutable('git', environment);
   const cmakePath = environment.AIMUSE_CMAKE ? resolve(environment.AIMUSE_CMAKE) : await findExecutable(process.platform === 'win32' ? 'cmake.exe' : 'cmake', environment);
   const ninjaPath = environment.AIMUSE_NINJA ? resolve(environment.AIMUSE_NINJA) : await findExecutable(process.platform === 'win32' ? 'ninja.exe' : 'ninja', environment, false);
   const ctestPath = join(dirname(cmakePath), process.platform === 'win32' ? 'ctest.exe' : 'ctest');
-  const xcrunPath = process.platform === 'darwin' ? await findExecutable('xcrun', environment) : undefined;
   const scriptShellPath = process.platform === 'win32'
     ? resolve(environment.ComSpec || join(environment.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'))
     : '/bin/sh';
@@ -230,7 +233,9 @@ async function externalToolchain(environment) {
     rendererBrowser: await describeFile('rendererBrowser', browserPath, run(browserPath, ['--version'], { label: 'renderer browser version' })),
   };
   for (const name of process.platform === 'darwin' ? ['codesign', 'lipo', 'plutil', 'xcrun', 'make'] : []) {
-    const path = await findExecutable(name, environment);
+    const path = ['lipo', 'make'].includes(name)
+      ? run(xcrunPath, ['--find', name], { label: `xcrun ${name} discovery` })
+      : await findExecutable(name, environment);
     values[name] = await describeFile(name, path);
   }
   for (const [role, name] of process.platform === 'darwin' ? [['linker', 'ld'], ['archiver', 'ar'], ['ranlib', 'ranlib']] : []) {
@@ -248,11 +253,45 @@ function dependencyInventory({ root, environment, tools }) {
   })}\n`);
 }
 
+export function assertCleanDependencyInventory(bytes) {
+  const inventory = JSON.parse(bytes.toString('utf8'));
+  const problems = Array.isArray(inventory?.problems) ? inventory.problems.filter((value) => typeof value === 'string' && value.trim()) : [];
+  const flagged = [];
+  const visit = (value, path = '$') => {
+    if (!value || typeof value !== 'object') return;
+    if (!Array.isArray(value) && (value.extraneous === true || value.invalid === true || value.missing === true)) flagged.push(path);
+    if (Array.isArray(value)) value.forEach((child, index) => visit(child, `${path}[${index}]`));
+    else for (const [key, child] of Object.entries(value)) visit(child, `${path}.${key}`);
+  };
+  visit(inventory);
+  if (problems.length || flagged.length) throw new Error(`Installed dependency tree is not clean: ${[...problems, ...flagged].join('; ')}`);
+  return inventory;
+}
+
+async function captureContentInventories({ workspace, runRoot, tools, contract, environment, publish }) {
+  const roots = await resolveReleaseContentTrees({ workspace, tools, contract, environment });
+  const declarations = {};
+  for (const [role, value] of Object.entries(roots)) {
+    const inventory = await inventoryContentTree({ role, root: value.root, allowedExternalRoots: value.allowedExternalRoots });
+    const artifact = await publish(join(runRoot, `content-tree-${role}.json`), Buffer.from(`${JSON.stringify(inventory, null, 2)}\n`));
+    declarations[role] = {
+      root: inventory.root,
+      rootMode: inventory.rootMode,
+      files: inventory.files,
+      directories: inventory.directories,
+      symlinks: inventory.symlinks,
+      entriesSha256: inventory.entriesSha256,
+      inventory: { path: posixRelative(runRoot, artifact.path), bytes: artifact.bytes, sha256: artifact.sha256 },
+    };
+  }
+  return declarations;
+}
+
 function parseContract(bytes, level) {
   const contract = JSON.parse(bytes.toString('utf8'));
   if (contract?.schemaVersion !== 2 || contract.kind !== 'aimuse-formal-release-contract') throw new Error('Formal release contract schema is unsupported.');
   if (!contract.certification?.[String(level)] || !Array.isArray(contract.stages?.base)) throw new Error(`Formal release contract does not declare Level ${level}.`);
-  if (!Array.isArray(contract.declaredTooling?.controlPaths) || !contract.declaredTooling?.javascriptTools || !/^[a-f\d]{40}$/u.test(contract.declaredTooling?.nativeDependencies?.miniaudio?.revision ?? '') || !Array.isArray(contract.schemaFields?.declaredInputs)) throw new Error('Formal release contract does not declare its complete tooling, native dependency, and schema boundary.');
+  if (!Array.isArray(contract.declaredTooling?.controlPaths) || !contract.declaredTooling?.javascriptTools || !contract.declaredTooling?.contentTrees || !contract.declaredTooling?.darwinContentTrees || !/^[a-f\d]{40}$/u.test(contract.declaredTooling?.nativeDependencies?.miniaudio?.revision ?? '') || !Array.isArray(contract.schemaFields?.declaredInputs)) throw new Error('Formal release contract does not declare its complete tooling, content-tree, native dependency, and schema boundary.');
   return contract;
 }
 
@@ -262,7 +301,7 @@ export async function declareReleaseInputs({
   implementationTaskId, miniaudioSourceDirectory, executionTempDirectory,
   publish = publishExclusive, captureSource = captureSourceInputs,
   captureToolchain = externalToolchain, captureDependencyInventory = dependencyInventory,
-  captureNativeDependency = materializeMiniaudio,
+  captureNativeDependency = materializeMiniaudio, captureToolContent = captureContentInventories,
   inspectRunRoot = inspectProtectedRunRoot, inspectExecutionTemp = inspectProtectedDirectory,
   resolvePlaywrightPaths = resolvePackagedE2eOutputSelection,
 } = {}) {
@@ -296,6 +335,7 @@ export async function declareReleaseInputs({
   // exactly Contents/Resources/native on every formal run.
   const nativeDistributionDirectory = join(runRoot, 'native');
   const miniaudioSourceDirectoryInRoot = join(runRoot, 'declared-inputs', 'miniaudio');
+  const workspaceViteOutputDirectory = join(root, '.vite');
   await Promise.all([
     assertMissing(forgeOut, 'Forge output'),
     assertMissing(subjectPath, 'Package subject manifest'),
@@ -307,6 +347,7 @@ export async function declareReleaseInputs({
     assertMissing(nativeBuildDirectory, 'Native build output'),
     assertMissing(nativeDistributionDirectory, 'Native distribution output'),
     assertMissing(miniaudioSourceDirectoryInRoot, 'Declared miniaudio input'),
+    assertMissing(workspaceViteOutputDirectory, 'Workspace Vite output'),
   ]);
   const playwright = resolvePlaywrightPaths({
     workspace: root,
@@ -328,6 +369,7 @@ export async function declareReleaseInputs({
     packagedPlaywrightOutput: playwright.outputDir,
     packagedPlaywrightHtmlReport: playwright.htmlReportDir,
     rendererPlaywrightOutput: join(runRoot, 'renderer-playwright'),
+    workspaceViteOutputDirectory,
     executionHome,
     executionTemp,
     npmCache,
@@ -361,7 +403,9 @@ export async function declareReleaseInputs({
   const javascriptTools = {};
   for (const [role, path] of Object.entries(contract.declaredTooling.javascriptTools)) javascriptTools[role] = await describeFile(role, resolve(root, path));
   const dependencyInventoryBytes = await captureDependencyInventory({ root, environment: executionEnvironment, tools });
+  assertCleanDependencyInventory(dependencyInventoryBytes);
   const dependencyInventory = await publish(join(runRoot, 'dependency-inventory.json'), dependencyInventoryBytes);
+  const contentInventories = await captureToolContent({ workspace: root, runRoot, tools, contract, environment: executionEnvironment, publish });
   const manifest = {
     schemaVersion: DECLARED_RELEASE_INPUTS_SCHEMA_VERSION,
     kind: 'aimuse-declared-release-inputs',
@@ -389,6 +433,7 @@ export async function declareReleaseInputs({
       architecture: process.arch,
       externalTools: tools,
       javascriptTools,
+      contentInventories,
       dependencyInventory: {
         path: posixRelative(runRoot, dependencyInventory.path),
         bytes: dependencyInventory.bytes,

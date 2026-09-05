@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config';
 import { resolve } from 'node:path';
 
 export default defineConfig({
+  envDir: false,
+  cacheDir: resolve(process.env.XDG_CACHE_HOME || resolve(__dirname, 'node_modules', '.vite'), 'aimuse-vitest-macos'),
   resolve: {
     alias: {
       '@aimuse/core': resolve(__dirname, 'packages/core/src/index.ts'),
@@ -10,6 +12,7 @@ export default defineConfig({
     },
   },
   test: {
+    cache: false,
     environment: 'node',
     include: [
       'tests/core/**/*.test.ts',

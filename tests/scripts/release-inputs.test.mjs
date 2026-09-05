@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from '
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { declareReleaseInputs } from '../../scripts/release-inputs.mjs';
+import { assertCleanDependencyInventory, declareReleaseInputs } from '../../scripts/release-inputs.mjs';
 
 const roots = [];
 function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex').toUpperCase(); }
@@ -61,6 +61,18 @@ describe('caller-declared release inputs', () => {
       captureSource: async () => sourceInputs,
       captureToolchain: async () => tools,
       captureDependencyInventory: async () => Buffer.from('{"dependencies":{}}\n'),
+      captureToolContent: async () => Object.fromEntries([
+        ...Object.keys(contract.declaredTooling.contentTrees),
+        ...(process.platform === 'darwin' ? Object.keys(contract.declaredTooling.darwinContentTrees) : []),
+      ].map((role, index) => [role, {
+        root: `${workspace}/content-${role}`,
+        rootMode: 0o755,
+        files: 1,
+        directories: 0,
+        symlinks: 0,
+        entriesSha256: String(index + 1).repeat(64).slice(0, 64),
+        inventory: { path: `content-tree-${role}.json`, bytes: 1, sha256: 'F'.repeat(64) },
+      }])),
       captureNativeDependency: async ({ destination }) => {
         await mkdir(destination, { recursive: true, mode: 0o700 });
         return {
@@ -84,7 +96,8 @@ describe('caller-declared release inputs', () => {
       contract: { sha256: sha256(contractBytes) },
       protectedRunRoot: { identity: protectedIdentity },
       protectedExecutionTemp: { identity: { canonicalPath: executionTemp } },
-      toolchain: { dependencyInventory: { path: 'dependency-inventory.json' } },
+      toolchain: { dependencyInventory: { path: 'dependency-inventory.json' }, contentInventories: expect.any(Object) },
+      paths: { workspaceViteOutputDirectory: join(workspace, '.vite') },
     });
     expect(result.manifest.executionEnvironment.PATH).not.toContain('/declared-path');
     expect(result.manifest.executionEnvironment.PATH.split(delimiter)[0]).toBe(join(workspace, 'scripts', 'npm-shims'));
@@ -95,6 +108,7 @@ describe('caller-declared release inputs', () => {
     expect(result.manifest.controls).toHaveProperty('scripts/release-command-witness.mjs');
     expect(result.manifest.controls).toHaveProperty('scripts/release-inputs.mjs');
     expect(result.manifest.toolchain.javascriptTools).toHaveProperty('playwright');
+    expect(result.manifest.toolchain.contentInventories).toHaveProperty('installedDependencies');
   });
 
   it('rejects ambient Node mutation and signing inputs before declaration', async () => {
@@ -103,5 +117,10 @@ describe('caller-declared release inputs', () => {
       environment: { NODE_OPTIONS: '--inspect' },
       implementationTaskId: 'implementation-task',
     })).rejects.toThrow(/must be absent/u);
+  });
+
+  it('rejects extraneous or invalid installed dependencies before publication', async () => {
+    expect(() => assertCleanDependencyInventory(Buffer.from('{"problems":["extraneous: surprise@1.0.0"]}\n'))).toThrow(/dependency tree is not clean/u);
+    expect(() => assertCleanDependencyInventory(Buffer.from('{"dependencies":{"surprise":{"invalid":true}}}\n'))).toThrow(/dependency tree is not clean/u);
   });
 });

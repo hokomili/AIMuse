@@ -149,4 +149,4 @@ List every skipped, unavailable, confirmation-blocked or environment-dependent r
 
 ## Final gate decision
 
-State why the tester disposition is PASS, FAIL or BLOCKED and name the exact next action. For PASS, also record the schema-2 independent-certification manifest path/size/SHA-256, exact ordered case count, per-case evidence-binding count and the distinct tester/implementation task IDs. The full Level is not finally PASS until the caller-pinned `release-level-certifier.mjs` output is retained; record its path/size/SHA-256 when available.
+State why the tester disposition is PASS, FAIL or BLOCKED and name the exact next action. For PASS, also record the schema-2 independent-certification manifest path/size/SHA-256, exact ordered case count, each case's exclusive review-evidence binding, the total evidence-binding count and the distinct tester/implementation task IDs. A Level 2 PASS has no Blocker, P0, or P1. The full Level is not finally PASS until the caller-pinned `release-level-certifier.mjs` output is retained; record its path/size/SHA-256 when available.

@@ -5,6 +5,7 @@ import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'no
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { verifyPackageSubject } from './package-subject-verifier.mjs';
+import { inventoryContentTree, resolveReleaseContentTrees } from './release-content-inventory.mjs';
 import { inspectProtectedDirectory, inspectProtectedRunRoot } from './release-protected-root-verifier.mjs';
 
 const DECLARED_INPUT_FIELDS = ['schemaVersion', 'kind', 'createdAt', 'acceptanceVerdict', 'level', 'implementationTaskId', 'expectedIndependentTester', 'protectedRunRoot', 'protectedExecutionTemp', 'sourceInputs', 'paths', 'contract', 'controls', 'toolchain', 'executionEnvironment'];
@@ -267,6 +268,19 @@ function runDependencyInventory(inputs, workspace) {
   return JSON.parse(result.stdout);
 }
 
+function assertCleanDependencyInventory(inventory) {
+  const problems = Array.isArray(inventory?.problems) ? inventory.problems.filter((value) => typeof value === 'string' && value.trim()) : [];
+  const flagged = [];
+  const visit = (value, path = '$') => {
+    if (!value || typeof value !== 'object') return;
+    if (!Array.isArray(value) && (value.extraneous === true || value.invalid === true || value.missing === true)) flagged.push(path);
+    if (Array.isArray(value)) value.forEach((child, index) => visit(child, `${path}[${index}]`));
+    else for (const [key, child] of Object.entries(value)) visit(child, `${path}.${key}`);
+  };
+  visit(inventory);
+  if (problems.length || flagged.length) throw new Error(`Installed dependency tree is not clean: ${[...problems, ...flagged].join('; ')}`);
+}
+
 export async function verifyReleaseEvidence({
   workspace = process.cwd(), formalRunRoot, observationManifestPath,
   expectedObservationManifestSha256, declaredInputsPath, expectedDeclaredInputsSha256,
@@ -294,9 +308,9 @@ export async function verifyReleaseEvidence({
   assertExactKeys(inputs.expectedIndependentTester, ['model', 'reasoningEffort', 'distinctTaskRequired'], 'Expected independent tester');
   assertExactKeys(inputs.protectedRunRoot, ['identity', 'owner', 'allowedPrincipals'], 'Declared protected run root');
   assertExactKeys(inputs.protectedExecutionTemp, ['identity', 'owner', 'allowedPrincipals'], 'Declared protected execution temporary directory');
-  assertExactKeys(inputs.paths, ['workspace', 'formalRunRoot', 'forgeOutDirectory', 'packageSubjectManifest', 'packagedPlaywrightOutput', 'packagedPlaywrightHtmlReport', 'rendererPlaywrightOutput', 'executionHome', 'executionTemp', 'npmCache', 'nativeBuildDirectory', 'nativeDistributionDirectory', 'miniaudioSourceDirectory', 'architecture'], 'Declared release paths');
+  assertExactKeys(inputs.paths, ['workspace', 'formalRunRoot', 'forgeOutDirectory', 'packageSubjectManifest', 'packagedPlaywrightOutput', 'packagedPlaywrightHtmlReport', 'rendererPlaywrightOutput', 'workspaceViteOutputDirectory', 'executionHome', 'executionTemp', 'npmCache', 'nativeBuildDirectory', 'nativeDistributionDirectory', 'miniaudioSourceDirectory', 'architecture'], 'Declared release paths');
   assertExactKeys(inputs.contract, ['path', 'bytes', 'sha256'], 'Declared release contract');
-  assertExactKeys(inputs.toolchain, ['platform', 'architecture', 'externalTools', 'javascriptTools', 'dependencyInventory', 'npmConfiguration', 'nativeDependencies'], 'Declared toolchain');
+  assertExactKeys(inputs.toolchain, ['platform', 'architecture', 'externalTools', 'javascriptTools', 'contentInventories', 'dependencyInventory', 'npmConfiguration', 'nativeDependencies'], 'Declared toolchain');
   assertExactKeys(inputs.toolchain.dependencyInventory, ['path', 'bytes', 'sha256'], 'Declared dependency inventory');
   assertExactKeys(inputs.toolchain.npmConfiguration, ['user', 'global'], 'Declared npm configuration');
   assertExactKeys(inputs.toolchain.npmConfiguration.user, ['path', 'bytes', 'sha256'], 'Declared npm user configuration');
@@ -317,6 +331,7 @@ export async function verifyReleaseEvidence({
   const inputDigest = sha256Bytes(inputBytes);
   if (observations.declaredInputs?.sha256 !== inputDigest || relativeEvidencePath(runRoot, observations.declaredInputs?.path) !== inputPath || observations.declaredInputs?.bytes !== inputBytes.length) throw new Error('Automation observations do not bind the caller-declared inputs exactly.');
   if (resolve(inputs.paths?.workspace ?? '') !== root || resolve(inputs.paths?.formalRunRoot ?? '') !== runRoot || inputs.level !== observations.level) throw new Error('Declared workspace, run root, or level disagrees with automation observations.');
+  if (resolve(inputs.paths?.workspaceViteOutputDirectory ?? '') !== join(root, '.vite')) throw new Error('Declared workspace Vite output path drifted.');
   for (const key of ['forgeOutDirectory', 'packageSubjectManifest', 'rendererPlaywrightOutput', 'executionHome', 'npmCache', 'nativeBuildDirectory', 'nativeDistributionDirectory', 'miniaudioSourceDirectory']) {
     if (!strictChild(runRoot, resolve(inputs.paths[key] ?? ''))) throw new Error(`Declared release path escaped the protected run root: ${key}`);
   }
@@ -373,6 +388,28 @@ export async function verifyReleaseEvidence({
     ...Object.entries(inputs.toolchain?.javascriptTools ?? {}).map(([name, value]) => [value, `JavaScript tool ${name}`]),
   ];
   for (const [declaration, label] of toolDeclarations) await assertToolIdentity(declaration, label);
+  const contentRoots = await (dependencies.resolveContentTrees ?? resolveReleaseContentTrees)({
+    workspace: root,
+    tools: inputs.toolchain.externalTools,
+    contract,
+    environment: inputs.executionEnvironment,
+  });
+  const contentRoles = Object.keys(contentRoots);
+  if (stableStringify(Object.keys(inputs.toolchain.contentInventories ?? {}).sort()) !== stableStringify([...contentRoles].sort())) throw new Error('Declared inputs do not bind the exact build-affecting content-tree set.');
+  const reproduceContentInventory = dependencies.reproduceContentInventory ?? inventoryContentTree;
+  for (const role of contentRoles) {
+    const declaration = inputs.toolchain.contentInventories[role];
+    assertExactKeys(declaration, ['root', 'rootMode', 'files', 'directories', 'symlinks', 'entriesSha256', 'inventory'], `Declared content tree ${role}`);
+    assertExactKeys(declaration.inventory, ['path', 'bytes', 'sha256'], `Declared content-tree inventory ${role}`);
+    if (declaration.root !== contentRoots[role].root) throw new Error(`Declared content tree root drifted for ${role}.`);
+    const inventoryPath = relativeEvidencePath(runRoot, declaration.inventory.path);
+    const inventoryBytes = await readBoundFile(inventoryPath, declaration.inventory, `Declared content-tree inventory ${role}`);
+    const inventory = JSON.parse(inventoryBytes.toString('utf8'));
+    const reproduced = await reproduceContentInventory({ role, root: contentRoots[role].root, allowedExternalRoots: contentRoots[role].allowedExternalRoots });
+    assertExactKeys(inventory, ['schemaVersion', 'kind', 'role', 'root', 'rootMode', 'files', 'directories', 'symlinks', 'entriesSha256', 'entries'], `Content-tree inventory ${role}`);
+    if (inventory.schemaVersion !== 1 || inventory.kind !== 'aimuse-declared-content-tree' || stableStringify(inventory) !== stableStringify(reproduced)) throw new Error(`Build-affecting content tree drifted for ${role}.`);
+    for (const key of ['root', 'rootMode', 'files', 'directories', 'symlinks', 'entriesSha256']) if (declaration[key] !== inventory[key]) throw new Error(`Content-tree declaration drifted for ${role}: ${key}`);
+  }
   const dependencyPath = relativeEvidencePath(runRoot, inputs.toolchain?.dependencyInventory?.path);
   const [npmUserConfigBytes, npmGlobalConfigBytes] = await Promise.all([
     readBoundFile(npmConfigPaths.user, inputs.toolchain.npmConfiguration.user, 'Declared npm user configuration'),
@@ -387,7 +424,11 @@ export async function verifyReleaseEvidence({
   if (stableStringify(nativeInventory) !== stableStringify(reproducedNativeInventory) || nativeInventory.files !== miniaudioDeclaration.files || nativeInventory.entriesSha256 !== miniaudioDeclaration.entriesSha256) throw new Error('Declared miniaudio dependency bytes drifted.');
   const dependencyBytes = await readBoundFile(dependencyPath, inputs.toolchain.dependencyInventory, 'Declared dependency inventory');
   const reproduceInventory = dependencies.reproduceDependencyInventory ?? runDependencyInventory;
-  if (stableStringify(JSON.parse(dependencyBytes.toString('utf8'))) !== stableStringify(reproduceInventory(inputs, root))) throw new Error('Installed dependency inventory drifted from declared tooling inputs.');
+  const declaredDependencyInventory = JSON.parse(dependencyBytes.toString('utf8'));
+  const reproducedDependencyInventory = reproduceInventory(inputs, root);
+  assertCleanDependencyInventory(declaredDependencyInventory);
+  assertCleanDependencyInventory(reproducedDependencyInventory);
+  if (stableStringify(declaredDependencyInventory) !== stableStringify(reproducedDependencyInventory)) throw new Error('Installed dependency inventory drifted from declared tooling inputs.');
   if (!Array.isArray(observations.executionReceipts) || observations.executionReceipts.length !== stages.length) throw new Error('Automation observations do not contain the exact contract stage receipt set.');
   const subjectPath = relativeEvidencePath(runRoot, observations.packageSubject?.path);
   const subjectBinding = { path: subjectPath, sha256: assertSha256(observations.packageSubject?.sha256, 'Package subject digest') };
@@ -479,6 +520,7 @@ export async function verifyReleaseEvidence({
       'protected-run-root-identity',
       'exact-contract-stage-execution-receipts',
       'declared-environment-and-tool-byte-bindings',
+      'reproduced-build-affecting-content-tree-inventories',
       'reproduced-installed-dependency-inventory',
       'reproduced-native-dependency-byte-inventory',
       'independent-package-byte-and-semantic-verification',

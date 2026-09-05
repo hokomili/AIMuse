@@ -23,6 +23,8 @@ export function platformTestExcludes(platform: NodeJS.Platform = process.platfor
 }
 
 export default defineConfig({
+  envDir: false,
+  cacheDir: resolve(process.env.XDG_CACHE_HOME || resolve(__dirname, 'node_modules', '.vite'), 'aimuse-vitest'),
   resolve: {
     alias: {
       '@aimuse/core': resolve(__dirname, 'packages/core/src/index.ts'),
@@ -31,6 +33,7 @@ export default defineConfig({
     },
   },
   test: {
+    cache: false,
     environment: 'node',
     include: ['tests/**/*.test.ts', 'tests/**/*.test.mjs'],
     exclude: platformTestExcludes(),

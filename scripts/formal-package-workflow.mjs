@@ -112,6 +112,7 @@ export async function runFormalPackageWorkflow({
   executeWitness = spawnWitness,
   loadDeclaredInputs = declaredInputsFrom,
   loadWitnessReceipt = readWitnessReceipt,
+  assertFreshWorkspaceBuild = assertMissing,
 } = {}) {
   const root = resolve(workspace);
   const declared = await loadDeclaredInputs({ workspace: root, environment });
@@ -124,7 +125,9 @@ export async function runFormalPackageWorkflow({
   const runRoot = resolve(declared.manifest.paths.formalRunRoot);
   const forgeOut = resolve(declared.manifest.paths.forgeOutDirectory);
   const packageManifestPath = resolve(declared.manifest.paths.packageSubjectManifest);
+  const workspaceViteOutputDirectory = resolve(declared.manifest.paths.workspaceViteOutputDirectory ?? '');
   if (!strictChild(resolve(root, 'test-results', 'luna-high'), runRoot) || !strictChild(runRoot, forgeOut) || !strictChild(runRoot, packageManifestPath) || !strictChild(runRoot, declared.path)) throw new Error('Declared formal release paths escape their manifest-bounded run root.');
+  if (workspaceViteOutputDirectory !== join(root, '.vite')) throw new Error('Declared workspace Vite output must be the exact Forge Vite staging directory.');
   for (const [key, expected] of [
     ['AIMUSE_FORMAL_RUN_ROOT', runRoot],
     ['AIMUSE_FORGE_OUT_DIR', forgeOut],
@@ -139,6 +142,7 @@ export async function runFormalPackageWorkflow({
     assertMissing(join(runRoot, 'run-lease.json'), 'Formal run lease'),
     assertMissing(join(runRoot, 'automation-observations.json'), 'Automation observations'),
     assertMissing(join(runRoot, 'execution'), 'Witnessed execution directory'),
+    assertFreshWorkspaceBuild(workspaceViteOutputDirectory, 'Workspace Vite output'),
   ]);
   const initialRoot = await inspectRunRoot({ workspace: root, formalRunRoot: runRoot });
   if (JSON.stringify(initialRoot.identity) !== JSON.stringify(declared.manifest.protectedRunRoot?.identity)) throw new Error('Protected formal run-root identity drifted after input declaration.');

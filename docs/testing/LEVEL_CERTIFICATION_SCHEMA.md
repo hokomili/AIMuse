@@ -37,9 +37,9 @@ The top-level object contains exactly:
 
 `report` contains exactly `path`, `bytes`, and `sha256`. `path` is relative to the formal run root. The report and every case artifact must be a real owner-private file below that unchanged root.
 
-`cases` has one object for every ID in `formal-release-contract.json` at `certification.<level>.requiredCaseIds`, in that exact order. Each case contains exactly `id`, `outcome`, and `evidence`; `outcome` is `"PASS"`, and `evidence` is a nonempty array of objects containing exactly `path`, `bytes`, and `sha256`. A shared artifact may support multiple cases only when its contents actually contain independently attributable observations for each named case.
+`cases` has one object for every ID in `formal-release-contract.json` at `certification.<level>.requiredCaseIds`, in that exact order. Each case contains exactly `id`, `outcome`, and `evidence`; `outcome` is `"PASS"`, and `evidence` is a nonempty array of objects containing exactly `path`, `bytes`, and `sha256`. At least one binding per case must have a path and content digest used by no other case, and that artifact must contain the case-specific observations needed for independent review. A shared artifact may support multiple cases only as additional evidence; one generic file cannot satisfy the case set.
 
-`findings` contains exactly the array fields `BLOCKER`, `P0`, `P1`, `P2`, and `P3`. A full pass requires empty `BLOCKER` and `P0` arrays. `coverageExceptions` must be empty; a missing mandatory observation is `BLOCKED`, not a certifiable pass.
+`findings` contains exactly the array fields `BLOCKER`, `P0`, `P1`, `P2`, and `P3`. A Level 1 pass requires empty `BLOCKER` and `P0` arrays. A Level 2 pass requires empty `BLOCKER`, `P0`, and `P1` arrays, matching the severity policy in `TESTING.md` and the exact `disallowedFindingSeverities` contract. `coverageExceptions` must be empty; a missing mandatory observation is `BLOCKED`, not a certifiable pass.
 
 `cleanup` contains exactly these keys, all `true`:
 

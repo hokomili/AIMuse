@@ -77,6 +77,12 @@ function exactCaseIds(contract, level) {
   if (!Array.isArray(values) || !values.length || new Set(values).size !== values.length) throw new Error(`Formal release contract has no stable Level ${level} case set.`);
   return values;
 }
+function disallowedFindingSeverities(contract, level) {
+  const values = contract?.certification?.[String(level)]?.disallowedFindingSeverities;
+  const expected = level === 2 ? ['BLOCKER', 'P0', 'P1'] : ['BLOCKER', 'P0'];
+  if (!Array.isArray(values) || stableStringify(values) !== stableStringify(expected)) throw new Error(`Formal release contract does not enforce the documented Level ${level} finding threshold.`);
+  return values;
+}
 function assertExactKeys(value, expected, label) {
   const keys = Object.keys(value ?? {}).sort();
   if (stableStringify(keys) !== stableStringify([...expected].sort())) throw new Error(`${label} must contain exactly: ${expected.join(', ')}.`);
@@ -170,9 +176,22 @@ export async function certifyReleaseLevel({
       evidenceDigests.push({ caseId: entry.id, path: declaration.path, sha256: declaration.sha256 });
     }
   }
+  const evidencePathUses = new Map();
+  const evidenceDigestUses = new Map();
+  for (const evidence of evidenceDigests) {
+    evidencePathUses.set(evidence.path, (evidencePathUses.get(evidence.path) ?? 0) + 1);
+    const digest = assertSha256(evidence.sha256, `Certification evidence ${evidence.caseId} digest`);
+    evidenceDigestUses.set(digest, (evidenceDigestUses.get(digest) ?? 0) + 1);
+  }
+  for (const caseId of requiredCases) {
+    const hasCaseExclusiveEvidence = evidenceDigests.some((evidence) => evidence.caseId === caseId && evidencePathUses.get(evidence.path) === 1 && evidenceDigestUses.get(assertSha256(evidence.sha256, `Certification evidence ${caseId} digest`)) === 1);
+    if (!hasCaseExclusiveEvidence) throw new Error(`Required certification case lacks case-exclusive independently reviewable evidence: ${caseId}`);
+  }
   assertExactKeys(certification.findings, ['BLOCKER', 'P0', 'P1', 'P2', 'P3'], 'Certification findings');
   if (Object.values(certification.findings).some((value) => !Array.isArray(value))) throw new Error('Certification finding severities must be arrays.');
-  if (certification.findings.BLOCKER.length || certification.findings.P0.length) throw new Error('Level certification contains a Blocker or P0 finding.');
+  const disallowedFindings = disallowedFindingSeverities(contract, level);
+  const presentDisallowedFindings = disallowedFindings.filter((severity) => certification.findings[severity].length > 0);
+  if (presentDisallowedFindings.length) throw new Error(`Level ${level} certification contains disallowed findings: ${presentDisallowedFindings.join(', ')}.`);
   if (!Array.isArray(certification.coverageExceptions) || certification.coverageExceptions.length !== 0) throw new Error('Level certification contains an unexplained mandatory coverage exception.');
   assertExactKeys(certification.cleanup, ['credentialsRedacted', 'engineStopped', 'noRunOwnedProcessSurvived', 'packageReverifiedAfterStop', 'formalRootIdentityStable'], 'Certification cleanup');
   if (Object.values(certification.cleanup).some((value) => value !== true)) throw new Error('Independent tester cleanup or final package re-verification is incomplete.');

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { certifyReleaseLevel } from '../../scripts/release-level-certifier.mjs';
 
@@ -76,9 +76,17 @@ async function fixture() {
   const reportBytes = Buffer.from('# Independent Level 2 report\n\nOverall: PASS\n');
   await writePrivate(paths.report, reportBytes);
   const reportSha256 = sha256(reportBytes);
-  const evidenceBytes = Buffer.from('{"observed":true}\n');
-  await writePrivate(paths.evidence, evidenceBytes);
-  const evidence = { path: 'case-evidence.json', bytes: evidenceBytes.length, sha256: sha256(evidenceBytes) };
+  const cases = [];
+  for (const [index, id] of contract.certification['2'].requiredCaseIds.entries()) {
+    const evidenceBytes = Buffer.from(`${JSON.stringify({ caseId: id, observed: true })}\n`);
+    const evidencePath = join(runRoot, 'case-evidence', `${String(index + 1).padStart(2, '0')}-${id}.json`);
+    await writePrivate(evidencePath, evidenceBytes);
+    cases.push({
+      id,
+      outcome: 'PASS',
+      evidence: [{ path: relative(runRoot, evidencePath).split(sep).join('/'), bytes: evidenceBytes.length, sha256: sha256(evidenceBytes) }],
+    });
+  }
   const certification = {
     schemaVersion: 2,
     kind: 'aimuse-independent-level-certification',
@@ -98,7 +106,7 @@ async function fixture() {
       applicationAsarSha256: automated.package.applicationAsarSha256,
     },
     report: { path: 'report.md', bytes: reportBytes.length, sha256: reportSha256 },
-    cases: contract.certification['2'].requiredCaseIds.map((id) => ({ id, outcome: 'PASS', evidence: [evidence] })),
+    cases,
     findings: { BLOCKER: [], P0: [], P1: [], P2: [], P3: [] },
     coverageExceptions: [],
     cleanup: { credentialsRedacted: true, engineStopped: true, noRunOwnedProcessSurvived: true, packageReverifiedAfterStop: true, formalRootIdentityStable: true },
@@ -122,7 +130,7 @@ async function fixture() {
     verifyReleaseEvidence: async () => automated,
     verifyPackageSubject: async () => ({ manifest: { subject: { identitySha256: automated.package.subjectIdentitySha256 } } }),
   };
-  return { certification, writeCertification, args, dependencies };
+  return { certification, writeCertification, args, dependencies, paths };
 }
 
 describe('final independent level certification', () => {
@@ -144,5 +152,20 @@ describe('final independent level certification', () => {
     value.certification.cases.pop();
     digest = await value.writeCertification();
     await expect(certifyReleaseLevel(value.args(digest), value.dependencies)).rejects.toThrow(/exact ordered required case set/u);
+  });
+
+  it('rejects P1 findings at Level 2 and requires case-exclusive evidence', async () => {
+    const value = await fixture();
+    value.certification.findings.P1.push({ id: 'P1-1', summary: 'Major advertised workflow is broken.' });
+    let digest = await value.writeCertification();
+    await expect(certifyReleaseLevel(value.args(digest), value.dependencies)).rejects.toThrow(/disallowed findings: P1/u);
+
+    value.certification.findings.P1 = [];
+    const sharedBytes = Buffer.from('{"observed":true}\n');
+    await writePrivate(value.paths.evidence, sharedBytes);
+    const shared = { path: 'case-evidence.json', bytes: sharedBytes.length, sha256: sha256(sharedBytes) };
+    for (const entry of value.certification.cases) entry.evidence = [shared];
+    digest = await value.writeCertification();
+    await expect(certifyReleaseLevel(value.args(digest), value.dependencies)).rejects.toThrow(/case-exclusive independently reviewable evidence/u);
   });
 });

@@ -105,6 +105,7 @@
     "controlPaths": [
       "scripts/formal-release-contract.json",
       "scripts/formal-package-workflow.mjs",
+      "scripts/release-content-inventory.mjs",
       "scripts/npm-shims/npm",
       "scripts/npm-shims/npm.cmd",
       "scripts/package-subject.mjs",
@@ -123,6 +124,49 @@
       "playwright": "node_modules/@playwright/test/cli.js",
       "electronForge": "node_modules/@electron-forge/cli/dist/electron-forge.js",
       "electronLauncher": "node_modules/electron/cli.js"
+    },
+    "contentTrees": {
+      "installedDependencies": {
+        "resolver": "workspace-relative",
+        "path": "node_modules",
+        "allowedExternalTreeRoles": ["workspaceCorePackage"]
+      },
+      "workspaceCorePackage": {
+        "resolver": "workspace-relative",
+        "path": "packages/core",
+        "allowedExternalTreeRoles": []
+      },
+      "npmRuntime": {
+        "resolver": "package-containing-tool",
+        "toolRole": "npm",
+        "packageName": "npm",
+        "allowedExternalTreeRoles": []
+      },
+      "cmakeRuntime": {
+        "resolver": "ancestor-of-tool",
+        "toolRole": "cmake",
+        "levels": 2,
+        "allowedExternalTreeRoles": []
+      },
+      "rendererBrowserRuntime": {
+        "resolver": "browser-runtime",
+        "toolRole": "rendererBrowser",
+        "allowedExternalTreeRoles": []
+      }
+    },
+    "darwinContentTrees": {
+      "compilerResources": {
+        "resolver": "tool-output",
+        "toolRole": "cCompiler",
+        "arguments": ["--print-resource-dir"],
+        "allowedExternalTreeRoles": []
+      },
+      "macosSdk": {
+        "resolver": "tool-output",
+        "toolRole": "xcrun",
+        "arguments": ["--sdk", "macosx", "--show-sdk-path"],
+        "allowedExternalTreeRoles": []
+      }
     },
     "requiredExternalToolRoles": [
       "node",
@@ -195,6 +239,7 @@
   },
   "certification": {
     "1": {
+      "disallowedFindingSeverities": ["BLOCKER", "P0"],
       "requiredCaseIds": [
         "automation-independent-verification",
         "engine-package-window-identity",
@@ -208,6 +253,7 @@
       ]
     },
     "2": {
+      "disallowedFindingSeverities": ["BLOCKER", "P0", "P1"],
       "requiredCaseIds": [
         "automation-independent-verification",
         "engine-package-window-identity",
@@ -231,7 +277,7 @@
         "credential-redaction-and-process-cleanup",
         "post-stop-package-reverification",
         "zero-unexplained-mandatory-skips",
-        "zero-blocker-or-p0-findings"
+        "zero-blocker-p0-or-p1-findings"
       ]
     }
   }

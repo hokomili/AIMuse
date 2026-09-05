@@ -33,6 +33,7 @@ describe('formal package workflow ordering', () => {
           forgeOutDirectory: join(formalRunRoot, 'package-output'),
           packageSubjectManifest: requestedManifest,
           packagedPlaywrightOutput: join(workspace, 'test-results', 'playwright', `fake-run-${suffix}`),
+          workspaceViteOutputDirectory: join(workspace, '.vite'),
           executionTemp: protectedExecutionTemp.identity.canonicalPath,
           architecture: 'arm64',
         },
@@ -68,6 +69,7 @@ describe('formal package workflow ordering', () => {
       loadWitnessReceipt: async ({ stage }) => ({ stageId: stage.id, path: `execution/${stage.id}.receipt.json`, bytes: 1, sha256: 'E'.repeat(64) }),
       inspectRunRoot: async () => protectedRoot,
       inspectExecutionTemp: async () => protectedExecutionTemp,
+      assertFreshWorkspaceBuild: async () => undefined,
       publishArtifact: async (path, bytes) => ({ path, bytes: bytes.length, sha256: 'F'.repeat(64) }),
     });
     expect(witnessed.map(({ stageId }) => stageId)).toEqual(formalWorkflowStages(2));

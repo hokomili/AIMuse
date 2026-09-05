@@ -52,6 +52,46 @@ async function fixture() {
   ];
   const externalTools = {};
   for (const role of externalRoles) externalTools[role] = await identity(role, role === 'node' ? process.execPath : dummyPath);
+  const contentRoles = [
+    ...Object.keys(contract.declaredTooling.contentTrees),
+    ...(process.platform === 'darwin' ? Object.keys(contract.declaredTooling.darwinContentTrees) : []),
+  ];
+  const contentRoots = {};
+  const contentInventoryObjects = {};
+  const contentInventories = {};
+  for (const role of contentRoles) {
+    const contentRoot = join(workspace, `content-${role}`);
+    await mkdir(contentRoot, { mode: 0o700 });
+    const entryBytes = Buffer.from(`${role}\n`);
+    await writePrivate(join(contentRoot, 'implementation.bin'), entryBytes);
+    const entries = [{ path: 'implementation.bin', type: 'file', mode: 0o600, bytes: entryBytes.length, sha256: sha256(entryBytes) }];
+    const inventory = {
+      schemaVersion: 1,
+      kind: 'aimuse-declared-content-tree',
+      role,
+      root: contentRoot,
+      rootMode: 0o700,
+      files: 1,
+      directories: 0,
+      symlinks: 0,
+      entriesSha256: sha256(Buffer.from(JSON.stringify(entries))),
+      entries,
+    };
+    const inventoryPath = join(runRoot, `content-tree-${role}.json`);
+    const inventoryBytes = Buffer.from(`${JSON.stringify(inventory, null, 2)}\n`);
+    await writePrivate(inventoryPath, inventoryBytes);
+    contentRoots[role] = { role, root: contentRoot, allowedExternalRoots: [] };
+    contentInventoryObjects[role] = inventory;
+    contentInventories[role] = {
+      root: contentRoot,
+      rootMode: inventory.rootMode,
+      files: inventory.files,
+      directories: inventory.directories,
+      symlinks: inventory.symlinks,
+      entriesSha256: inventory.entriesSha256,
+      inventory: { path: relative(runRoot, inventoryPath).split(sep).join('/'), bytes: inventoryBytes.length, sha256: sha256(inventoryBytes) },
+    };
+  }
   const sourceInputs = {
     scope: 'manifest-authorized-clean-commit', rootWasEnumerated: false, protectedRootsAccessed: false,
     gitHead: 'a'.repeat(40), gitTree: 'b'.repeat(40), sourceManifestSha256: 'C'.repeat(64),
@@ -150,6 +190,7 @@ async function fixture() {
       packagedPlaywrightOutput: join(workspace, 'test-results', 'playwright', 'fresh-run'),
       packagedPlaywrightHtmlReport: join(workspace, 'test-results', 'playwright', 'fresh-run-html-report'),
       rendererPlaywrightOutput: join(runRoot, 'renderer-playwright'),
+      workspaceViteOutputDirectory: join(workspace, '.vite'),
       executionHome,
       executionTemp,
       npmCache,
@@ -165,6 +206,7 @@ async function fixture() {
       architecture: process.arch,
       externalTools,
       javascriptTools,
+      contentInventories,
       dependencyInventory: { path: 'dependency-inventory.json', bytes: dependencyBytes.length, sha256: sha256(dependencyBytes) },
       npmConfiguration: {
         user: { path: 'npm-user-config', bytes: 0, sha256: sha256(Buffer.alloc(0)) },
@@ -273,10 +315,12 @@ async function fixture() {
     },
   });
   return {
-    workspace, runRoot, executionTemp, inputPath, inputSha256, observationPath, observations, receiptObjects,
+    workspace, runRoot, executionTemp, inputPath, inputSha256, observationPath, observations, receiptObjects, contentInventoryObjects,
     writeObservations, verifyPackageSubject,
     verifierSha256: sha256(await readFile(actualVerifierPath)),
     witnessSha256: controls['scripts/release-command-witness.mjs'].sha256,
+    resolveContentTrees: async () => contentRoots,
+    reproduceContentInventory: async ({ role }) => contentInventoryObjects[role],
   };
 }
 
@@ -300,6 +344,8 @@ describe('independent release evidence verifier', () => {
     const result = await verifyReleaseEvidence(verificationArguments(value, observationSha256), {
       verifyPackageSubject: value.verifyPackageSubject,
       reproduceDependencyInventory: () => ({}),
+      resolveContentTrees: value.resolveContentTrees,
+      reproduceContentInventory: value.reproduceContentInventory,
     });
     expect(result).toMatchObject({
       verdict: 'AUTOMATED_GATES_PASS',
@@ -316,6 +362,8 @@ describe('independent release evidence verifier', () => {
     await expect(verifyReleaseEvidence(verificationArguments(value, digest), {
       verifyPackageSubject: value.verifyPackageSubject,
       reproduceDependencyInventory: () => ({}),
+      resolveContentTrees: value.resolveContentTrees,
+      reproduceContentInventory: value.reproduceContentInventory,
     })).rejects.toThrow(/stored an acceptance verdict/u);
 
     value.observations.acceptanceVerdict = null;
@@ -330,6 +378,8 @@ describe('independent release evidence verifier', () => {
     await expect(verifyReleaseEvidence(verificationArguments(value, digest), {
       verifyPackageSubject: value.verifyPackageSubject,
       reproduceDependencyInventory: () => ({}),
+      resolveContentTrees: value.resolveContentTrees,
+      reproduceContentInventory: value.reproduceContentInventory,
     })).rejects.toThrow(/did not terminate successfully/u);
   });
 
@@ -341,6 +391,29 @@ describe('independent release evidence verifier', () => {
     await expect(verifyReleaseEvidence(verificationArguments(value, observationSha256), {
       verifyPackageSubject: value.verifyPackageSubject,
       reproduceDependencyInventory: () => ({}),
+      resolveContentTrees: value.resolveContentTrees,
+      reproduceContentInventory: value.reproduceContentInventory,
     })).rejects.toThrow(/temporary-directory identity drifted/u);
+  });
+
+  it('rejects content-tree byte drift and an unhealthy reproduced dependency graph', async () => {
+    const value = await fixture();
+    const observationSha256 = await value.writeObservations();
+    const changedRole = Object.keys(value.contentInventoryObjects)[0];
+    await expect(verifyReleaseEvidence(verificationArguments(value, observationSha256), {
+      verifyPackageSubject: value.verifyPackageSubject,
+      reproduceDependencyInventory: () => ({}),
+      resolveContentTrees: value.resolveContentTrees,
+      reproduceContentInventory: async ({ role }) => role === changedRole
+        ? { ...value.contentInventoryObjects[role], entriesSha256: '0'.repeat(64) }
+        : value.contentInventoryObjects[role],
+    })).rejects.toThrow(/content tree drifted/u);
+
+    await expect(verifyReleaseEvidence(verificationArguments(value, observationSha256), {
+      verifyPackageSubject: value.verifyPackageSubject,
+      reproduceDependencyInventory: () => ({ problems: ['extraneous: surprise@1.0.0'] }),
+      resolveContentTrees: value.resolveContentTrees,
+      reproduceContentInventory: value.reproduceContentInventory,
+    })).rejects.toThrow(/dependency tree is not clean/u);
   });
 });

@@ -29,7 +29,7 @@ The exact candidate must cover:
 - Renderer CSP/sandbox/IPC origin checks, exact hardened fuse values, dependencies, archive defenses, keyboard/focus/accessibility, and package identity.
 - Explicit negative product assertions: no generation tool/job/UI, provider adapter/capability/credential surface, candidate-media route, or source-separation adapter. Legacy provenance must stay passive and old projects readable; divergent checkpoint restore plus snapshot undo/redo may not change the opened provenance map or generation-source assets.
 
-The automated command is not a Level 2 result. The same protected run becomes Level 2 `PASS` only when a distinct Luna/high tester publishes the schema-2 certification/report for every contract case and the caller-pinned final certifier independently re-derives the automated result, validates every tester evidence digest, proves cleanup and re-verifies the unchanged package after stop.
+The automated command is not a Level 2 result. The same protected run becomes Level 2 `PASS` only when a distinct Luna/high tester publishes the schema-2 certification/report with case-exclusive review evidence for every contract case and no Blocker/P0/P1, and the caller-pinned final certifier independently re-derives the automated result, validates every tester evidence digest, proves cleanup and re-verifies the unchanged package after stop.
 
 The 2026-08-10 arm64 Level 2 result remains a strict historical result for its exact ad-hoc subject only. It does not certify this changed candidate or waive Level 3, signing/notarization, physical hardware, codec, or plug-in-hosting gates.
 

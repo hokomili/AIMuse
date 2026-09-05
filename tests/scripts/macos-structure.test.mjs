@@ -26,6 +26,16 @@ describe('macOS structural boundary', () => {
     const nativeBuild = await readFile(resolve('scripts/native-build.mjs'), 'utf8');
     const npmNode24 = await readFile(resolve('scripts/npm-node24.mjs'), 'utf8');
     const rendererPlaywright = await readFile(resolve('playwright.renderer.config.ts'), 'utf8');
+    const viteConfigurations = await Promise.all([
+      'vite.main.config.ts',
+      'vite.preload.config.ts',
+      'vite.renderer.config.ts',
+    ].map((path) => readFile(resolve(path), 'utf8')));
+    const vitestConfigurations = await Promise.all([
+      'vitest.config.ts',
+      'vitest.macos.config.ts',
+      'vitest.performance.config.ts',
+    ].map((path) => readFile(resolve(path), 'utf8')));
     const forge = await readFile(resolve('forge.config.ts'), 'utf8');
     const verifyPackage = await readFile(resolve('scripts/verify-package.mjs'), 'utf8');
     const icon = await readFile(resolve('build/icon.svg'), 'utf8');
@@ -43,6 +53,17 @@ describe('macOS structural boundary', () => {
     expect(npmNode24).toContain('dirname(npmCli)');
     expect(npmNode24).toContain("resolve('scripts', 'npm-shims')");
     expect(rendererPlaywright).toContain('launchOptions: { executablePath: rendererBrowserExecutable }');
+    for (const viteConfiguration of viteConfigurations) {
+      expect(viteConfiguration).toContain('envDir: false');
+      expect(viteConfiguration).toContain('publicDir: false');
+      expect(viteConfiguration).toContain('postcss: {}');
+      expect(viteConfiguration).toContain('process.env.XDG_CACHE_HOME');
+    }
+    for (const vitestConfiguration of vitestConfigurations) {
+      expect(vitestConfiguration).toContain('envDir: false');
+      expect(vitestConfiguration).toContain('cache: false');
+      expect(vitestConfiguration).toContain('process.env.XDG_CACHE_HOME');
+    }
     expect(forge).toContain("new MakerZIP({}, ['win32', 'darwin'])");
     expect(forge).toContain("resolve(buildPath, '..', '..', 'MacOS', 'AIMuse')");
     expect(forge).toContain("icon: resolve('build', 'icon.icns')");
