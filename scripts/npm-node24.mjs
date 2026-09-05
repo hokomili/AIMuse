@@ -34,7 +34,7 @@ const args = process.argv.slice(2);
 if (!args.length) args.push('--version');
 const result = spawnSync(node24, [npmCli, ...args], {
   cwd: process.cwd(),
-  env: { ...process.env, PATH: `${dirname(node24)}${delimiter}${process.env.PATH ?? ''}` },
+  env: { ...process.env, PATH: `${dirname(node24)}${delimiter}${dirname(npmCli)}${delimiter}${process.env.PATH ?? ''}` },
   stdio: 'inherit',
   windowsHide: false,
 });
