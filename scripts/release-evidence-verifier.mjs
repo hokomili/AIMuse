@@ -168,7 +168,8 @@ function validateExecutionEnvironment(inputs, runRoot) {
   ]);
   if (!environment || Object.keys(environment).some((key) => !allowed.has(key))) throw new Error('Declared execution environment contains an ambient or unsupported key.');
   const expectedToolPath = [...new Set(Object.values(tools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
-  const npmConfigPath = relativeEvidencePath(runRoot, inputs.toolchain.npmConfiguration?.path);
+  const npmUserConfigPath = relativeEvidencePath(runRoot, inputs.toolchain.npmConfiguration?.user?.path);
+  const npmGlobalConfigPath = relativeEvidencePath(runRoot, inputs.toolchain.npmConfiguration?.global?.path);
   const expected = {
     HOME: inputs.paths.executionHome,
     TMPDIR: inputs.paths.executionTemp,
@@ -179,15 +180,15 @@ function validateExecutionEnvironment(inputs, runRoot) {
     PATH: expectedToolPath,
     SHELL: tools.scriptShell.requestedPath,
     npm_config_script_shell: tools.scriptShell.requestedPath,
-    npm_config_userconfig: npmConfigPath,
-    npm_config_globalconfig: npmConfigPath,
+    npm_config_userconfig: npmUserConfigPath,
+    npm_config_globalconfig: npmGlobalConfigPath,
     npm_config_cache: inputs.paths.npmCache,
     npm_config_update_notifier: 'false',
     npm_config_audit: 'false',
     npm_config_fund: 'false',
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: npmConfigPath,
-    GIT_CONFIG_SYSTEM: npmConfigPath,
+    GIT_CONFIG_GLOBAL: npmUserConfigPath,
+    GIT_CONFIG_SYSTEM: npmGlobalConfigPath,
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
     AIMUSE_CMAKE: tools.cmake.requestedPath,
@@ -210,7 +211,7 @@ function validateExecutionEnvironment(inputs, runRoot) {
     environment.APPDATA !== join(inputs.paths.executionHome, 'AppData', 'Roaming') ||
     environment.ComSpec !== tools.scriptShell.requestedPath
   )) throw new Error('Declared Windows execution environment is not isolated.');
-  return npmConfigPath;
+  return { user: npmUserConfigPath, global: npmGlobalConfigPath };
 }
 async function reproduceNativeDependencyInventory(sourceDirectory, declaration) {
   const entries = [];
@@ -292,7 +293,9 @@ export async function verifyReleaseEvidence({
   assertExactKeys(inputs.contract, ['path', 'bytes', 'sha256'], 'Declared release contract');
   assertExactKeys(inputs.toolchain, ['platform', 'architecture', 'externalTools', 'javascriptTools', 'dependencyInventory', 'npmConfiguration', 'nativeDependencies'], 'Declared toolchain');
   assertExactKeys(inputs.toolchain.dependencyInventory, ['path', 'bytes', 'sha256'], 'Declared dependency inventory');
-  assertExactKeys(inputs.toolchain.npmConfiguration, ['path', 'bytes', 'sha256'], 'Declared npm configuration');
+  assertExactKeys(inputs.toolchain.npmConfiguration, ['user', 'global'], 'Declared npm configuration');
+  assertExactKeys(inputs.toolchain.npmConfiguration.user, ['path', 'bytes', 'sha256'], 'Declared npm user configuration');
+  assertExactKeys(inputs.toolchain.npmConfiguration.global, ['path', 'bytes', 'sha256'], 'Declared npm global configuration');
   assertExactKeys(inputs.toolchain.nativeDependencies, ['miniaudio'], 'Declared native dependencies');
   assertExactKeys(inputs.toolchain.nativeDependencies.miniaudio, ['revision', 'sourceDirectory', 'files', 'entriesSha256', 'inventory'], 'Declared miniaudio dependency');
   assertExactKeys(inputs.toolchain.nativeDependencies.miniaudio.inventory, ['path', 'bytes', 'sha256'], 'Declared miniaudio inventory');
@@ -317,7 +320,7 @@ export async function verifyReleaseEvidence({
     if (!strictChild(runRoot, selected)) throw new Error(`${label} escaped the protected run root.`);
     await assertOwnerPrivateDirectory(selected, runRoot, label);
   }
-  const npmConfigPath = validateExecutionEnvironment(inputs, runRoot);
+  const npmConfigPaths = validateExecutionEnvironment(inputs, runRoot);
   const protectedRoot = await inspectProtectedRunRoot({ workspace: root, formalRunRoot: runRoot, paths: [observationPath, inputPath] });
   if (stableStringify(protectedRoot.identity) !== stableStringify(observations.protectedRunRoot?.identity) || stableStringify(protectedRoot.identity) !== stableStringify(inputs.protectedRunRoot?.identity)) throw new Error('Protected run-root identity drifted across input declaration, execution, and verification.');
   const leasePath = relativeEvidencePath(runRoot, observations.runLease?.path);
@@ -362,8 +365,11 @@ export async function verifyReleaseEvidence({
   ];
   for (const [declaration, label] of toolDeclarations) await assertToolIdentity(declaration, label);
   const dependencyPath = relativeEvidencePath(runRoot, inputs.toolchain?.dependencyInventory?.path);
-  const npmConfigBytes = await readBoundFile(npmConfigPath, inputs.toolchain.npmConfiguration, 'Declared npm configuration');
-  if (npmConfigBytes.length !== 0) throw new Error('Declared npm configuration must be empty.');
+  const [npmUserConfigBytes, npmGlobalConfigBytes] = await Promise.all([
+    readBoundFile(npmConfigPaths.user, inputs.toolchain.npmConfiguration.user, 'Declared npm user configuration'),
+    readBoundFile(npmConfigPaths.global, inputs.toolchain.npmConfiguration.global, 'Declared npm global configuration'),
+  ]);
+  if (npmUserConfigBytes.length !== 0 || npmGlobalConfigBytes.length !== 0) throw new Error('Declared npm configurations must be empty.');
   const nativeInventoryPath = relativeEvidencePath(runRoot, miniaudioDeclaration.inventory.path);
   const nativeInventoryBytes = await readBoundFile(nativeInventoryPath, miniaudioDeclaration.inventory, 'Declared miniaudio inventory');
   const nativeInventory = JSON.parse(nativeInventoryBytes.toString('utf8'));

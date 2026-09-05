@@ -59,8 +59,9 @@ async function fixture() {
   const dependencyPath = join(runRoot, 'dependency-inventory.json');
   const dependencyBytes = Buffer.from('{}\n');
   await writePrivate(dependencyPath, dependencyBytes);
-  const npmConfigPath = join(runRoot, 'npm-config');
-  await writePrivate(npmConfigPath, Buffer.alloc(0));
+  const npmUserConfigPath = join(runRoot, 'npm-user-config');
+  const npmGlobalConfigPath = join(runRoot, 'npm-global-config');
+  await Promise.all([writePrivate(npmUserConfigPath, Buffer.alloc(0)), writePrivate(npmGlobalConfigPath, Buffer.alloc(0))]);
   const miniaudioSourceDirectory = join(runRoot, 'declared-inputs', 'miniaudio');
   const miniaudioFile = join(miniaudioSourceDirectory, 'miniaudio.h');
   const miniaudioBytes = Buffer.from('declared miniaudio\n');
@@ -95,15 +96,15 @@ async function fixture() {
     PATH: toolPath,
     SHELL: externalTools.scriptShell.requestedPath,
     npm_config_script_shell: externalTools.scriptShell.requestedPath,
-    npm_config_userconfig: npmConfigPath,
-    npm_config_globalconfig: npmConfigPath,
+    npm_config_userconfig: npmUserConfigPath,
+    npm_config_globalconfig: npmGlobalConfigPath,
     npm_config_cache: npmCache,
     npm_config_update_notifier: 'false',
     npm_config_audit: 'false',
     npm_config_fund: 'false',
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: npmConfigPath,
-    GIT_CONFIG_SYSTEM: npmConfigPath,
+    GIT_CONFIG_GLOBAL: npmUserConfigPath,
+    GIT_CONFIG_SYSTEM: npmGlobalConfigPath,
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
     AIMUSE_CMAKE: externalTools.cmake.requestedPath,
@@ -160,7 +161,10 @@ async function fixture() {
       externalTools,
       javascriptTools,
       dependencyInventory: { path: 'dependency-inventory.json', bytes: dependencyBytes.length, sha256: sha256(dependencyBytes) },
-      npmConfiguration: { path: 'npm-config', bytes: 0, sha256: sha256(Buffer.alloc(0)) },
+      npmConfiguration: {
+        user: { path: 'npm-user-config', bytes: 0, sha256: sha256(Buffer.alloc(0)) },
+        global: { path: 'npm-global-config', bytes: 0, sha256: sha256(Buffer.alloc(0)) },
+      },
       nativeDependencies: {
         miniaudio: {
           revision: miniaudioInventory.revision,

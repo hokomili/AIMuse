@@ -96,7 +96,7 @@ function npmCliFrom(environment) {
   if (!value || !isAbsolute(value)) throw new Error('Release input declaration requires an absolute AIMUSE_NPM_CLI or npm_execpath.');
   return resolve(value);
 }
-function releaseEnvironment(environment, tools, paths, npmConfigPath) {
+function releaseEnvironment(environment, tools, paths, npmConfiguration) {
   const result = Object.fromEntries(PASSTHROUGH_ENVIRONMENT_KEYS.filter((key) => environment[key] !== undefined).map((key) => [key, environment[key]]));
   const toolPath = [...new Set(Object.values(tools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
   return {
@@ -116,15 +116,15 @@ function releaseEnvironment(environment, tools, paths, npmConfigPath) {
     PATH: toolPath,
     SHELL: tools.scriptShell.requestedPath,
     npm_config_script_shell: tools.scriptShell.requestedPath,
-    npm_config_userconfig: npmConfigPath,
-    npm_config_globalconfig: npmConfigPath,
+    npm_config_userconfig: npmConfiguration.user.path,
+    npm_config_globalconfig: npmConfiguration.global.path,
     npm_config_cache: paths.npmCache,
     npm_config_update_notifier: 'false',
     npm_config_audit: 'false',
     npm_config_fund: 'false',
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: npmConfigPath,
-    GIT_CONFIG_SYSTEM: npmConfigPath,
+    GIT_CONFIG_GLOBAL: npmConfiguration.user.path,
+    GIT_CONFIG_SYSTEM: npmConfiguration.global.path,
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
     AIMUSE_CMAKE: tools.cmake.requestedPath,
@@ -278,7 +278,8 @@ export async function declareReleaseInputs({
   const executionHome = join(runRoot, 'execution-home');
   const executionTemp = join(runRoot, 'execution-tmp');
   const npmCache = join(runRoot, 'npm-cache');
-  const npmConfigPath = join(runRoot, 'npm-config');
+  const npmUserConfigPath = join(runRoot, 'npm-user-config');
+  const npmGlobalConfigPath = join(runRoot, 'npm-global-config');
   const nativeBuildDirectory = join(runRoot, 'native-build');
   const nativeDistributionDirectory = join(runRoot, 'native-dist');
   const miniaudioSourceDirectoryInRoot = join(runRoot, 'declared-inputs', 'miniaudio');
@@ -289,7 +290,8 @@ export async function declareReleaseInputs({
     assertMissing(executionHome, 'Isolated execution home'),
     assertMissing(executionTemp, 'Isolated execution temporary directory'),
     assertMissing(npmCache, 'Isolated npm cache'),
-    assertMissing(npmConfigPath, 'Isolated npm configuration'),
+    assertMissing(npmUserConfigPath, 'Isolated npm user configuration'),
+    assertMissing(npmGlobalConfigPath, 'Isolated npm global configuration'),
     assertMissing(nativeBuildDirectory, 'Native build output'),
     assertMissing(nativeDistributionDirectory, 'Native distribution output'),
     assertMissing(miniaudioSourceDirectoryInRoot, 'Declared miniaudio input'),
@@ -327,8 +329,12 @@ export async function declareReleaseInputs({
     mkdir(executionTemp, { mode: 0o700 }),
     mkdir(npmCache, { mode: 0o700 }),
   ]);
-  const npmConfig = await publish(npmConfigPath, Buffer.alloc(0));
-  const executionEnvironment = releaseEnvironment(environment, tools, paths, npmConfig.path);
+  const [npmUserConfig, npmGlobalConfig] = await Promise.all([
+    publish(npmUserConfigPath, Buffer.alloc(0)),
+    publish(npmGlobalConfigPath, Buffer.alloc(0)),
+  ]);
+  const npmConfiguration = { user: npmUserConfig, global: npmGlobalConfig };
+  const executionEnvironment = releaseEnvironment(environment, tools, paths, npmConfiguration);
   const sourceInputs = await captureSource(root, { gitPath: tools.git.canonicalPath, gitEnvironment: executionEnvironment });
   const miniaudio = await captureNativeDependency({
     sourceDirectory: miniaudioSourceDirectory,
@@ -373,9 +379,8 @@ export async function declareReleaseInputs({
         sha256: dependencyInventory.sha256,
       },
       npmConfiguration: {
-        path: posixRelative(runRoot, npmConfig.path),
-        bytes: npmConfig.bytes,
-        sha256: npmConfig.sha256,
+        user: { path: posixRelative(runRoot, npmUserConfig.path), bytes: npmUserConfig.bytes, sha256: npmUserConfig.sha256 },
+        global: { path: posixRelative(runRoot, npmGlobalConfig.path), bytes: npmGlobalConfig.bytes, sha256: npmGlobalConfig.sha256 },
       },
       nativeDependencies: { miniaudio },
     },
