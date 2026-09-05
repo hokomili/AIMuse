@@ -98,7 +98,8 @@ function npmCliFrom(environment) {
 }
 function releaseEnvironment(environment, tools, paths, npmConfiguration) {
   const result = Object.fromEntries(PASSTHROUGH_ENVIRONMENT_KEYS.filter((key) => environment[key] !== undefined).map((key) => [key, environment[key]]));
-  const toolPath = [...new Set(Object.values(tools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
+  const npmShimDirectory = resolve(paths.workspace, 'scripts', 'npm-shims');
+  const toolPath = [npmShimDirectory, ...new Set(Object.values(tools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
   return {
     ...result,
     HOME: paths.executionHome,
@@ -127,6 +128,8 @@ function releaseEnvironment(environment, tools, paths, npmConfiguration) {
     GIT_CONFIG_SYSTEM: npmConfiguration.global.path,
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
+    AIMUSE_NODE24_EXE: tools.node.canonicalPath,
+    AIMUSE_NPM_CLI: tools.npm.canonicalPath,
     AIMUSE_CMAKE: tools.cmake.requestedPath,
     ...(tools.ninja ? { AIMUSE_NINJA: tools.ninja.requestedPath } : {}),
     ...(tools.make ? { AIMUSE_MAKE: tools.make.requestedPath } : {}),

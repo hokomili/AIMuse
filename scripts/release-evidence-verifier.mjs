@@ -160,14 +160,16 @@ function validateExecutionEnvironment(inputs, runRoot) {
     'XDG_CONFIG_HOME', 'PATH', 'SHELL', 'npm_config_script_shell', 'npm_config_userconfig',
     'npm_config_globalconfig', 'npm_config_cache', 'npm_config_update_notifier',
     'npm_config_audit', 'npm_config_fund', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL',
-    'GIT_CONFIG_SYSTEM', 'GIT_OPTIONAL_LOCKS', 'GIT_TERMINAL_PROMPT',
+    'GIT_CONFIG_SYSTEM', 'GIT_OPTIONAL_LOCKS', 'GIT_TERMINAL_PROMPT', 'AIMUSE_NODE24_EXE',
+    'AIMUSE_NPM_CLI',
     'AIMUSE_CMAKE', 'AIMUSE_NINJA', 'AIMUSE_MAKE', 'CC', 'CXX',
     'AIMUSE_RENDERER_BROWSER_EXECUTABLE', 'AIMUSE_TARGET_ARCH', 'AIMUSE_VERIFY_PACKAGE_ARCH',
     'AIMUSE_ENABLE_COREAUDIO', 'AIMUSE_ENABLE_WASAPI', 'AIMUSE_NATIVE_BUILD_DIR',
     'AIMUSE_NATIVE_DIST_DIR', 'AIMUSE_MINIAUDIO_SOURCE_DIR',
   ]);
   if (!environment || Object.keys(environment).some((key) => !allowed.has(key))) throw new Error('Declared execution environment contains an ambient or unsupported key.');
-  const expectedToolPath = [...new Set(Object.values(tools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
+  const npmShimDirectory = resolve(inputs.paths.workspace, 'scripts', 'npm-shims');
+  const expectedToolPath = [npmShimDirectory, ...new Set(Object.values(tools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
   const npmUserConfigPath = relativeEvidencePath(runRoot, inputs.toolchain.npmConfiguration?.user?.path);
   const npmGlobalConfigPath = relativeEvidencePath(runRoot, inputs.toolchain.npmConfiguration?.global?.path);
   const expected = {
@@ -191,6 +193,8 @@ function validateExecutionEnvironment(inputs, runRoot) {
     GIT_CONFIG_SYSTEM: npmGlobalConfigPath,
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
+    AIMUSE_NODE24_EXE: tools.node.canonicalPath,
+    AIMUSE_NPM_CLI: tools.npm.canonicalPath,
     AIMUSE_CMAKE: tools.cmake.requestedPath,
     ...(tools.ninja ? { AIMUSE_NINJA: tools.ninja.requestedPath } : {}),
     ...(tools.make ? { AIMUSE_MAKE: tools.make.requestedPath } : {}),

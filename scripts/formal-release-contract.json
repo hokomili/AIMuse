@@ -104,6 +104,8 @@
     "controlPaths": [
       "scripts/formal-release-contract.json",
       "scripts/formal-package-workflow.mjs",
+      "scripts/npm-shims/npm",
+      "scripts/npm-shims/npm.cmd",
       "scripts/package-subject.mjs",
       "scripts/package-subject-verifier.mjs",
       "scripts/release-command-witness.mjs",

@@ -85,7 +85,7 @@ async function fixture() {
   await Promise.all([executionHome, executionTemp, npmCache].map((path) => mkdir(path, { mode: 0o700 })));
   const rootInfo = await lstat(runRoot);
   const protectedIdentity = { version: 1, canonicalPath: await realpath(runRoot), device: String(rootInfo.dev), inode: String(rootInfo.ino) };
-  const toolPath = [...new Set(Object.values(externalTools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
+  const toolPath = [join(workspace, 'scripts', 'npm-shims'), ...new Set(Object.values(externalTools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
   const executionEnvironment = {
     HOME: executionHome,
     TMPDIR: executionTemp,
@@ -107,6 +107,8 @@ async function fixture() {
     GIT_CONFIG_SYSTEM: npmGlobalConfigPath,
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
+    AIMUSE_NODE24_EXE: externalTools.node.canonicalPath,
+    AIMUSE_NPM_CLI: externalTools.npm.canonicalPath,
     AIMUSE_CMAKE: externalTools.cmake.requestedPath,
     ...(externalTools.make ? { AIMUSE_MAKE: externalTools.make.requestedPath } : {}),
     CC: externalTools.cCompiler.requestedPath,

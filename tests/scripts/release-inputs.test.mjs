@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { declareReleaseInputs } from '../../scripts/release-inputs.mjs';
 
@@ -84,6 +84,7 @@ describe('caller-declared release inputs', () => {
       toolchain: { dependencyInventory: { path: 'dependency-inventory.json' } },
     });
     expect(result.manifest.executionEnvironment.PATH).not.toContain('/declared-path');
+    expect(result.manifest.executionEnvironment.PATH.split(delimiter)[0]).toBe(join(workspace, 'scripts', 'npm-shims'));
     expect(result.manifest.executionEnvironment.npm_config_script_shell).toBe(tool.requestedPath);
     expect(result.manifest.executionEnvironment.HOME).toBe(join(runRoot, 'execution-home'));
     expect(result.manifest.controls).toHaveProperty('scripts/release-command-witness.mjs');

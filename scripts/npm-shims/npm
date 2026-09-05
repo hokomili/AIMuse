@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+: "${AIMUSE_NODE24_EXE:?AIMUSE_NODE24_EXE must name the declared Node 24 executable}"
+: "${AIMUSE_NPM_CLI:?AIMUSE_NPM_CLI must name the declared npm CLI}"
+exec "$AIMUSE_NODE24_EXE" "$AIMUSE_NPM_CLI" "$@"

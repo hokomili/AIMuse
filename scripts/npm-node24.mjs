@@ -32,9 +32,15 @@ if (!npmCli) throw new Error('npm-cli.js was not found. Set AIMUSE_NPM_CLI to it
 
 const args = process.argv.slice(2);
 if (!args.length) args.push('--version');
+const npmShimDirectory = resolve('scripts', 'npm-shims');
 const result = spawnSync(node24, [npmCli, ...args], {
   cwd: process.cwd(),
-  env: { ...process.env, PATH: `${dirname(node24)}${delimiter}${dirname(npmCli)}${delimiter}${process.env.PATH ?? ''}` },
+  env: {
+    ...process.env,
+    AIMUSE_NODE24_EXE: node24,
+    AIMUSE_NPM_CLI: npmCli,
+    PATH: `${npmShimDirectory}${delimiter}${dirname(node24)}${delimiter}${dirname(npmCli)}${delimiter}${process.env.PATH ?? ''}`,
+  },
   stdio: 'inherit',
   windowsHide: false,
 });

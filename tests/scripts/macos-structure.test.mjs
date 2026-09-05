@@ -40,6 +40,7 @@ describe('macOS structural boundary', () => {
     expect(nativeBuild).toContain('FETCHCONTENT_SOURCE_DIR_MINIAUDIO');
     expect(npmNode24).toContain("join(dirname(dirname(node24)), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')");
     expect(npmNode24).toContain('dirname(npmCli)');
+    expect(npmNode24).toContain("resolve('scripts', 'npm-shims')");
     expect(forge).toContain("new MakerZIP({}, ['win32', 'darwin'])");
     expect(forge).toContain("resolve(buildPath, '..', '..', 'MacOS', 'AIMuse')");
     expect(forge).toContain("icon: resolve('build', 'icon.icns')");
