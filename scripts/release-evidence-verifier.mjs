@@ -5,9 +5,9 @@ import { delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'no
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { verifyPackageSubject } from './package-subject-verifier.mjs';
-import { inspectProtectedRunRoot } from './release-protected-root-verifier.mjs';
+import { inspectProtectedDirectory, inspectProtectedRunRoot } from './release-protected-root-verifier.mjs';
 
-const DECLARED_INPUT_FIELDS = ['schemaVersion', 'kind', 'createdAt', 'acceptanceVerdict', 'level', 'implementationTaskId', 'expectedIndependentTester', 'protectedRunRoot', 'sourceInputs', 'paths', 'contract', 'controls', 'toolchain', 'executionEnvironment'];
+const DECLARED_INPUT_FIELDS = ['schemaVersion', 'kind', 'createdAt', 'acceptanceVerdict', 'level', 'implementationTaskId', 'expectedIndependentTester', 'protectedRunRoot', 'protectedExecutionTemp', 'sourceInputs', 'paths', 'contract', 'controls', 'toolchain', 'executionEnvironment'];
 const AUTOMATION_OBSERVATION_FIELDS = ['schemaVersion', 'kind', 'createdAt', 'acceptanceVerdict', 'releasePhase', 'level', 'protectedRunRoot', 'runLease', 'declaredInputs', 'packageSubject', 'executionReceipts'];
 const EXECUTION_RECEIPT_BASE_FIELDS = ['schemaVersion', 'kind', 'createdAt', 'acceptanceVerdict', 'stageId', 'declaredInputs', 'contract', 'attribution', 'command', 'environment', 'timing', 'termination', 'stdout', 'stderr'];
 
@@ -293,6 +293,7 @@ export async function verifyReleaseEvidence({
   assertExactKeys(inputs, DECLARED_INPUT_FIELDS, 'Declared release inputs');
   assertExactKeys(inputs.expectedIndependentTester, ['model', 'reasoningEffort', 'distinctTaskRequired'], 'Expected independent tester');
   assertExactKeys(inputs.protectedRunRoot, ['identity', 'owner', 'allowedPrincipals'], 'Declared protected run root');
+  assertExactKeys(inputs.protectedExecutionTemp, ['identity', 'owner', 'allowedPrincipals'], 'Declared protected execution temporary directory');
   assertExactKeys(inputs.paths, ['workspace', 'formalRunRoot', 'forgeOutDirectory', 'packageSubjectManifest', 'packagedPlaywrightOutput', 'packagedPlaywrightHtmlReport', 'rendererPlaywrightOutput', 'executionHome', 'executionTemp', 'npmCache', 'nativeBuildDirectory', 'nativeDistributionDirectory', 'miniaudioSourceDirectory', 'architecture'], 'Declared release paths');
   assertExactKeys(inputs.contract, ['path', 'bytes', 'sha256'], 'Declared release contract');
   assertExactKeys(inputs.toolchain, ['platform', 'architecture', 'externalTools', 'javascriptTools', 'dependencyInventory', 'npmConfiguration', 'nativeDependencies'], 'Declared toolchain');
@@ -316,17 +317,21 @@ export async function verifyReleaseEvidence({
   const inputDigest = sha256Bytes(inputBytes);
   if (observations.declaredInputs?.sha256 !== inputDigest || relativeEvidencePath(runRoot, observations.declaredInputs?.path) !== inputPath || observations.declaredInputs?.bytes !== inputBytes.length) throw new Error('Automation observations do not bind the caller-declared inputs exactly.');
   if (resolve(inputs.paths?.workspace ?? '') !== root || resolve(inputs.paths?.formalRunRoot ?? '') !== runRoot || inputs.level !== observations.level) throw new Error('Declared workspace, run root, or level disagrees with automation observations.');
-  for (const key of ['forgeOutDirectory', 'packageSubjectManifest', 'rendererPlaywrightOutput', 'executionHome', 'executionTemp', 'npmCache', 'nativeBuildDirectory', 'nativeDistributionDirectory', 'miniaudioSourceDirectory']) {
+  for (const key of ['forgeOutDirectory', 'packageSubjectManifest', 'rendererPlaywrightOutput', 'executionHome', 'npmCache', 'nativeBuildDirectory', 'nativeDistributionDirectory', 'miniaudioSourceDirectory']) {
     if (!strictChild(runRoot, resolve(inputs.paths[key] ?? ''))) throw new Error(`Declared release path escaped the protected run root: ${key}`);
   }
-  for (const [key, label] of [['executionHome', 'Execution home'], ['executionTemp', 'Execution temporary directory'], ['npmCache', 'npm cache']]) {
+  for (const [key, label] of [['executionHome', 'Execution home'], ['npmCache', 'npm cache']]) {
     const selected = resolve(inputs.paths[key] ?? '');
     if (!strictChild(runRoot, selected)) throw new Error(`${label} escaped the protected run root.`);
     await assertOwnerPrivateDirectory(selected, runRoot, label);
   }
+  const executionTemp = resolve(inputs.paths.executionTemp ?? '');
+  if (within(root, executionTemp) || within(executionTemp, root)) throw new Error('Declared execution temporary directory overlaps the workspace.');
   const npmConfigPaths = validateExecutionEnvironment(inputs, runRoot);
   const protectedRoot = await inspectProtectedRunRoot({ workspace: root, formalRunRoot: runRoot, paths: [observationPath, inputPath] });
   if (stableStringify(protectedRoot.identity) !== stableStringify(observations.protectedRunRoot?.identity) || stableStringify(protectedRoot.identity) !== stableStringify(inputs.protectedRunRoot?.identity)) throw new Error('Protected run-root identity drifted across input declaration, execution, and verification.');
+  const protectedExecutionTemp = await inspectProtectedDirectory({ directory: executionTemp });
+  if (stableStringify(protectedExecutionTemp.identity) !== stableStringify(inputs.protectedExecutionTemp?.identity)) throw new Error('Protected execution temporary-directory identity drifted across input declaration, execution, and verification.');
   const leasePath = relativeEvidencePath(runRoot, observations.runLease?.path);
   const lease = JSON.parse((await readBoundFile(leasePath, observations.runLease, 'Formal run lease')).toString('utf8'));
   assertExactKeys(lease, ['schemaVersion', 'kind', 'createdAt', 'acceptanceVerdict', 'declaredInputsSha256', 'protectedRunRootIdentity'], 'Formal run lease');

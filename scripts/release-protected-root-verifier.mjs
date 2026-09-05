@@ -60,25 +60,34 @@ async function inspectPath(path, canonicalRoot, options) {
   return { info, canonicalPath };
 }
 
-export async function inspectProtectedRunRoot({ workspace = process.cwd(), formalRunRoot, paths = [] } = {}) {
-  if (!formalRunRoot) throw new Error('A formal run root is required.');
-  const root = resolve(formalRunRoot);
-  const evidenceRoot = resolve(workspace, 'test-results');
-  if (!strictChild(evidenceRoot, root)) throw new Error('The formal run root is outside the existing test-results protection boundary.');
+export async function inspectProtectedDirectory({ directory } = {}) {
+  if (!directory) throw new Error('A protected directory is required.');
+  const root = resolve(directory);
   const preliminary = await lstat(root);
-  if (!preliminary.isDirectory() || preliminary.isSymbolicLink()) throw new Error('The formal run root must be a real directory.');
+  if (!preliminary.isDirectory() || preliminary.isSymbolicLink()) throw new Error('The protected directory must be a real directory.');
   const canonicalRoot = await realpath(root);
   const currentSid = process.platform === 'win32' ? currentWindowsSid() : undefined;
   const inspectedRoot = await inspectPath(root, canonicalRoot, { root, directory: true, currentSid, requireProtected: true });
-  for (const value of paths) {
-    const path = resolve(value);
-    if (!strictChild(root, path)) throw new Error(`Protected evidence file is outside the formal run root: ${path}`);
-    await inspectPath(path, canonicalRoot, { root, directory: false, currentSid, requireProtected: false });
-  }
   return {
     root,
     identity: { version: 1, canonicalPath: canonicalRoot, device: String(inspectedRoot.info.dev), inode: String(inspectedRoot.info.ino) },
     owner: 'launching-user',
     allowedPrincipals: process.platform === 'win32' ? ['launching-user', 'SYSTEM', 'Administrators'] : ['launching-user'],
   };
+}
+
+export async function inspectProtectedRunRoot({ workspace = process.cwd(), formalRunRoot, paths = [] } = {}) {
+  if (!formalRunRoot) throw new Error('A formal run root is required.');
+  const root = resolve(formalRunRoot);
+  const evidenceRoot = resolve(workspace, 'test-results');
+  if (!strictChild(evidenceRoot, root)) throw new Error('The formal run root is outside the existing test-results protection boundary.');
+  const protectedRoot = await inspectProtectedDirectory({ directory: root });
+  const canonicalRoot = protectedRoot.identity.canonicalPath;
+  const currentSid = process.platform === 'win32' ? currentWindowsSid() : undefined;
+  for (const value of paths) {
+    const path = resolve(value);
+    if (!strictChild(root, path)) throw new Error(`Protected evidence file is outside the formal run root: ${path}`);
+    await inspectPath(path, canonicalRoot, { root, directory: false, currentSid, requireProtected: false });
+  }
+  return protectedRoot;
 }

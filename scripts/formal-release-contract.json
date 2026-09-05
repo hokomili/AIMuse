@@ -18,6 +18,7 @@
       "implementationTaskId",
       "expectedIndependentTester",
       "protectedRunRoot",
+      "protectedExecutionTemp",
       "sourceInputs",
       "paths",
       "contract",

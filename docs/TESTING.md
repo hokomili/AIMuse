@@ -22,7 +22,7 @@ Playwright is valuable automated coverage, but it does not replace Computer Use.
 - On Codex desktop, the primary task is only the mechanical launch coordinator: it starts/shows/stops the tester's declared isolated package outside the filesystem sandbox and does not judge cases.
 - The tester is read-only for production source. It may write ignored reports and evidence below its formal run root, while Playwright may write only to its separately declared, disjoint output child below `test-results/playwright/`; it must not fix code, soften assertions or change tracker status.
 - Test projects use `QA L<level> · <UTC run ID> · <description>`. Never mutate, overwrite, close or discard a pre-existing user project.
-- Before automation, use `release-inputs.mjs` to exclusively publish the schema-2 source, branch, manifest-scoped index/dirty-worktree, direct tool bytes, installed dependency inventory, execution environment, paths, release contract and control-program identity. Source capture may enumerate only `scripts/initial-snapshot-manifest.json`; repository-root discovery and protected-root inspection are forbidden. Tool and native-dependency capture follow only the explicit `formal-release-contract.json` declarations. The declared Git binary performs source capture and copies the exact clean pinned miniaudio tree into the protected root with a byte inventory. Automation receives a private empty home/temp/npm cache, fresh native build/dist directories, separate empty bound npm user/global configs, the declared script shell and a `PATH` composed only from declared tool directories. A pre-existing package is not the formal UI subject when the required command intentionally packages.
+- Before automation, use `release-inputs.mjs` to exclusively publish the schema-2 source, branch, manifest-scoped index/dirty-worktree, direct tool bytes, installed dependency inventory, execution environment, paths, release contract and control-program identity. Source capture may enumerate only `scripts/initial-snapshot-manifest.json`; repository-root discovery and protected-root inspection are forbidden. Tool and native-dependency capture follow only the explicit `formal-release-contract.json` declarations. The declared Git binary performs source capture and copies the exact clean pinned miniaudio tree into the protected root with a byte inventory. Automation receives a private empty home/npm cache, a separately protected and identity-bound empty temporary directory outside the workspace, fresh native build/dist directories, separate empty bound npm user/global configs, the declared script shell and a `PATH` composed only from declared tool directories. A pre-existing package is not the formal UI subject when the required command intentionally packages.
 - Formal Levels 1 and 2 package exactly once before declaring their subject. The immutable post-package manifest binds the application executable, ASAR, all three native helpers, architecture, bundle/signature identity and hardened fuses; a convenient pre-existing AIMuse window or pre-package hash is not a formal subject. Level 3 additionally requires its separately checksummed release artifacts and may not weaken this identity rule.
 - Packaging and formal QA use the exact Node 24/npm/tool files declared before the run. Each command is launched by the caller-pinned `release-command-witness.mjs`, which exclusively writes the child PID, termination, exact command/environment and raw stdout/stderr bindings. The package producer cannot author those receipts, verify its own output or store command success; package and automation manifests retain `acceptanceVerdict: null`. The caller-pinned release-evidence verifier independently validates every witnessed receipt and may derive only `AUTOMATED_GATES_PASS`. That is eligibility for independent UI/MCP testing, not a Level result. Only `release-level-certifier.mjs`, separately pinned after a distinct Luna/high tester has completed all exact cases and cleanup, may derive Level 1/2 `PASS`.
 - Release dependency security has three distinct surfaces. Revalidate the supported Electron `43-x-y` dist-tag from the exact `https://registry.npmjs.org/` endpoint with a fresh isolated npm cache; run `npm run audit:runtime` for the shipped application graph and `npm run audit:complete` for the explicit prod/dev/optional/peer build and packaging graph. `npm run audit:release` must pass both and is the only audit accepted by `release:windows`; a production-only or ambient-omit audit is insufficient. Also run `npm audit signatures` with the current pinned Node-compatible npm and record signature/attestation results. Registry freshness, a clean audit and lock integrity do not replace verification of the packaged Electron binary or immutable artifact.
@@ -177,8 +177,9 @@ PLAYWRIGHT_OUTPUT="$PWD/test-results/playwright/${RUN_ID}-level${LEVEL}"
 DECLARED_INPUTS="$FORMAL_RUN_ROOT/declared-release-inputs.json"
 PACKAGE_SUBJECT="$FORMAL_RUN_ROOT/package-subject.json"
 MINIAUDIO_SOURCE=<ABSOLUTE_CLEAN_PINNED_MINIAUDIO_CHECKOUT>
-mkdir -p "$FORMAL_RUN_ROOT"
-chmod 700 "$FORMAL_RUN_ROOT"
+EXECUTION_TEMP=<NEW_ABSOLUTE_PROTECTED_DIRECTORY_OUTSIDE_THE_WORKSPACE>
+mkdir -p "$FORMAL_RUN_ROOT" "$EXECUTION_TEMP"
+chmod 700 "$FORMAL_RUN_ROOT" "$EXECUTION_TEMP"
 "$NODE24" scripts/release-inputs.mjs \
   --level "$LEVEL" \
   --formal-run-root "$FORMAL_RUN_ROOT" \
@@ -188,6 +189,7 @@ chmod 700 "$FORMAL_RUN_ROOT"
   --manifest "$DECLARED_INPUTS" \
   --npm-cli "$NPM_CLI" \
   --miniaudio-source "$MINIAUDIO_SOURCE" \
+  --execution-temp-dir "$EXECUTION_TEMP" \
   --implementation-task-id "$IMPLEMENTATION_TASK_ID"
 DECLARED_INPUTS_SHA256=<EXACT_SHA256_EMITTED_ABOVE>
 set -o pipefail
@@ -215,7 +217,8 @@ $env:AIMUSE_FORGE_OUT_DIR = "$env:AIMUSE_FORMAL_RUN_ROOT\package-output"
 $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\package-subject.json"
 $env:AIMUSE_RELEASE_INPUTS_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\declared-release-inputs.json"
 $MiniaudioSource = '<ABSOLUTE_CLEAN_PINNED_MINIAUDIO_CHECKOUT>'
-& $Node24 scripts/release-inputs.mjs --level $Level --formal-run-root $env:AIMUSE_FORMAL_RUN_ROOT --forge-out-dir $env:AIMUSE_FORGE_OUT_DIR --playwright-output-dir $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR --package-subject-manifest $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST --manifest $env:AIMUSE_RELEASE_INPUTS_MANIFEST --npm-cli $NpmCli --miniaudio-source $MiniaudioSource --implementation-task-id $ImplementationTaskId
+$ExecutionTemp = '<NEW_ABSOLUTE_PROTECTED_DIRECTORY_OUTSIDE_THE_WORKSPACE>'
+& $Node24 scripts/release-inputs.mjs --level $Level --formal-run-root $env:AIMUSE_FORMAL_RUN_ROOT --forge-out-dir $env:AIMUSE_FORGE_OUT_DIR --playwright-output-dir $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR --package-subject-manifest $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST --manifest $env:AIMUSE_RELEASE_INPUTS_MANIFEST --npm-cli $NpmCli --miniaudio-source $MiniaudioSource --execution-temp-dir $ExecutionTemp --implementation-task-id $ImplementationTaskId
 $env:AIMUSE_RELEASE_INPUTS_SHA256 = '<EXACT_SHA256_EMITTED_ABOVE>'
 $env:AIMUSE_NODE24_EXE = $Node24
 $env:AIMUSE_NPM_CLI = $NpmCli
@@ -224,7 +227,7 @@ $AutomationExit = $LASTEXITCODE
 if ($AutomationExit -ne 0) { exit $AutomationExit }
 ```
 
-The caller-created declared-input manifest is immutable and precedes every automated command. Its source identity is limited to `scripts/initial-snapshot-manifest.json`; its separate tooling section names the exact direct files permitted by `scripts/formal-release-contract.json`, including Node/npm/Git/script-shell, direct JavaScript tools, native/platform tools, browser, logical dependency inventory, copied miniaudio byte inventory, empty npm user/global configurations, isolated directories, sanitized environment and verifier/witness controls. Each command then runs in a separate `release-command-witness.mjs` process, which owns its mode-0600 raw logs and termination receipt. The formal Level 1/2 producer invokes Forge exactly once, freezes the package, binds the receipt set and writes only schema-2 `AUTOMATION_COMPLETE_AWAITING_INDEPENDENT_VERIFICATION` observations with `acceptanceVerdict: null`.
+The caller-created declared-input manifest is immutable and precedes every automated command. Its source identity is limited to `scripts/initial-snapshot-manifest.json`; its separate tooling section names the exact direct files permitted by `scripts/formal-release-contract.json`, including Node/npm/Git/script-shell, direct JavaScript tools, native/platform tools, browser, logical dependency inventory, copied miniaudio byte inventory, empty npm user/global configurations, isolated directories, sanitized environment and verifier/witness controls. The manifest also records the device/inode (or Windows ACL identity) of the empty caller-protected execution temporary directory outside the workspace; this keeps Electron Packager scratch data declared without asking it to copy the workspace into itself. Each command then runs in a separate `release-command-witness.mjs` process, which owns its mode-0600 raw logs and termination receipt. The formal Level 1/2 producer invokes Forge exactly once, freezes the package, binds the receipt set and writes only schema-2 `AUTOMATION_COMPLETE_AWAITING_INDEPENDENT_VERIFICATION` observations with `acceptanceVerdict: null`.
 
 After automation, independently pin the witness and verifier bytes and invoke the verifier with the exact three caller-held digests. It exclusively publishes `independent-automated-verification.json`; success is exactly `AUTOMATED_GATES_PASS` plus `PENDING_INDEPENDENT_MCP_AND_COMPUTER_USE`, never a Level result:
 
@@ -279,7 +282,8 @@ $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR = 'E:\AIMuse\test-results\playwright\<run-
 $env:AIMUSE_FORGE_OUT_DIR = "$env:AIMUSE_FORMAL_RUN_ROOT\package-output"
 $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\package-subject.json"
 $env:AIMUSE_RELEASE_INPUTS_MANIFEST = "$env:AIMUSE_FORMAL_RUN_ROOT\declared-release-inputs.json"
-& $Node24 scripts/release-inputs.mjs --level 1 --formal-run-root $env:AIMUSE_FORMAL_RUN_ROOT --forge-out-dir $env:AIMUSE_FORGE_OUT_DIR --playwright-output-dir $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR --package-subject-manifest $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST --manifest $env:AIMUSE_RELEASE_INPUTS_MANIFEST --npm-cli $NpmCli --miniaudio-source '<absolute-clean-pinned-miniaudio-checkout>' --implementation-task-id '<implementation-task-id>'
+$ExecutionTemp = '<new-absolute-protected-directory-outside-E:\AIMuse>'
+& $Node24 scripts/release-inputs.mjs --level 1 --formal-run-root $env:AIMUSE_FORMAL_RUN_ROOT --forge-out-dir $env:AIMUSE_FORGE_OUT_DIR --playwright-output-dir $env:AIMUSE_PLAYWRIGHT_E2E_OUTPUT_DIR --package-subject-manifest $env:AIMUSE_PACKAGE_SUBJECT_MANIFEST --manifest $env:AIMUSE_RELEASE_INPUTS_MANIFEST --npm-cli $NpmCli --miniaudio-source '<absolute-clean-pinned-miniaudio-checkout>' --execution-temp-dir $ExecutionTemp --implementation-task-id '<implementation-task-id>'
 $env:AIMUSE_RELEASE_INPUTS_SHA256 = '<exact emitted declared-input SHA-256>'
 $env:AIMUSE_NODE24_EXE = $Node24
 $env:AIMUSE_NPM_CLI = $NpmCli

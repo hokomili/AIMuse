@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 import { captureSourceInputs } from './package-subject.mjs';
 import { resolvePackagedE2eOutputSelection } from './playwright-output.mjs';
-import { inspectProtectedRunRoot } from './release-protected-root-verifier.mjs';
+import { inspectProtectedDirectory, inspectProtectedRunRoot } from './release-protected-root-verifier.mjs';
 
 export const DECLARED_RELEASE_INPUTS_SCHEMA_VERSION = 2;
 export const FORMAL_RELEASE_CONTRACT_PATH = 'scripts/formal-release-contract.json';
@@ -259,10 +259,12 @@ function parseContract(bytes, level) {
 export async function declareReleaseInputs({
   workspace = process.cwd(), environment = process.env, level, formalRunRoot,
   forgeOutDirectory, playwrightOutputDirectory, subjectManifestPath, manifestPath,
-  implementationTaskId, miniaudioSourceDirectory, publish = publishExclusive, captureSource = captureSourceInputs,
+  implementationTaskId, miniaudioSourceDirectory, executionTempDirectory,
+  publish = publishExclusive, captureSource = captureSourceInputs,
   captureToolchain = externalToolchain, captureDependencyInventory = dependencyInventory,
   captureNativeDependency = materializeMiniaudio,
-  inspectRunRoot = inspectProtectedRunRoot, resolvePlaywrightPaths = resolvePackagedE2eOutputSelection,
+  inspectRunRoot = inspectProtectedRunRoot, inspectExecutionTemp = inspectProtectedDirectory,
+  resolvePlaywrightPaths = resolvePackagedE2eOutputSelection,
 } = {}) {
   if (level !== 1 && level !== 2) throw new Error('Declared release inputs support Level 1 or Level 2.');
   if (FORBIDDEN_AMBIENT_KEYS.some((key) => environment[key])) throw new Error('Signing, notarization, NODE_OPTIONS, and NODE_PATH must be absent from this declared ad-hoc Level 1/2 input profile.');
@@ -273,13 +275,18 @@ export async function declareReleaseInputs({
   const forgeOut = resolve(forgeOutDirectory ?? '');
   const subjectPath = resolve(subjectManifestPath ?? join(runRoot, 'package-subject.json'));
   const selectedManifest = resolve(manifestPath ?? join(runRoot, 'declared-release-inputs.json'));
+  if (!executionTempDirectory || !isAbsolute(executionTempDirectory)) throw new Error('Execution temporary directory must be a caller-declared absolute protected directory.');
+  const executionTemp = resolve(executionTempDirectory);
   if (!formalRunRoot || !strictChild(resolve(root, 'test-results', 'luna-high'), runRoot)) throw new Error('Formal run root must be a strict run-scoped child below test-results/luna-high.');
   if (!forgeOutDirectory || !strictChild(runRoot, forgeOut)) throw new Error('Forge output must be a strict child of the formal run root.');
   if (!strictChild(runRoot, subjectPath) || !strictChild(runRoot, selectedManifest)) throw new Error('Declared input and package subject manifests must be strict children of the formal run root.');
+  if (within(root, executionTemp) || within(executionTemp, root)) throw new Error('Execution temporary directory must be disjoint from the workspace so Electron Packager never copies into its source tree.');
   const protectedRunRoot = await inspectRunRoot({ workspace: root, formalRunRoot: runRoot });
+  const protectedExecutionTemp = await inspectExecutionTemp({ directory: executionTemp });
+  if (protectedExecutionTemp.identity?.canonicalPath !== executionTemp) throw new Error('Execution temporary directory must use its canonical path.');
   if ((await readdir(runRoot)).length !== 0) throw new Error('Formal run root must be empty before release input declaration.');
+  if ((await readdir(executionTemp)).length !== 0) throw new Error('Execution temporary directory must be empty before release input declaration.');
   const executionHome = join(runRoot, 'execution-home');
-  const executionTemp = join(runRoot, 'execution-tmp');
   const npmCache = join(runRoot, 'npm-cache');
   const npmUserConfigPath = join(runRoot, 'npm-user-config');
   const npmGlobalConfigPath = join(runRoot, 'npm-global-config');
@@ -291,7 +298,6 @@ export async function declareReleaseInputs({
     assertMissing(subjectPath, 'Package subject manifest'),
     assertMissing(selectedManifest, 'Declared release inputs'),
     assertMissing(executionHome, 'Isolated execution home'),
-    assertMissing(executionTemp, 'Isolated execution temporary directory'),
     assertMissing(npmCache, 'Isolated npm cache'),
     assertMissing(npmUserConfigPath, 'Isolated npm user configuration'),
     assertMissing(npmGlobalConfigPath, 'Isolated npm global configuration'),
@@ -329,7 +335,6 @@ export async function declareReleaseInputs({
   };
   await Promise.all([
     mkdir(executionHome, { mode: 0o700 }),
-    mkdir(executionTemp, { mode: 0o700 }),
     mkdir(npmCache, { mode: 0o700 }),
   ]);
   const [npmUserConfig, npmGlobalConfig] = await Promise.all([
@@ -366,6 +371,11 @@ export async function declareReleaseInputs({
       identity: protectedRunRoot.identity,
       owner: protectedRunRoot.owner,
       allowedPrincipals: protectedRunRoot.allowedPrincipals,
+    },
+    protectedExecutionTemp: {
+      identity: protectedExecutionTemp.identity,
+      owner: protectedExecutionTemp.owner,
+      allowedPrincipals: protectedExecutionTemp.allowedPrincipals,
     },
     sourceInputs,
     paths,
@@ -424,6 +434,7 @@ async function main() {
     manifestPath: values.get('manifest'),
     implementationTaskId: required(values, 'implementation-task-id'),
     miniaudioSourceDirectory: required(values, 'miniaudio-source'),
+    executionTempDirectory: required(values, 'execution-temp-dir'),
   });
   process.stdout.write(`${JSON.stringify({
     schemaVersion: 2,

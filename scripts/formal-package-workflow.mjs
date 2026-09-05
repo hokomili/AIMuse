@@ -11,7 +11,7 @@ import {
   createPackageSubject,
   sha256File,
 } from './package-subject.mjs';
-import { inspectProtectedRunRoot } from './release-protected-root-verifier.mjs';
+import { inspectProtectedDirectory, inspectProtectedRunRoot } from './release-protected-root-verifier.mjs';
 
 const contractUrl = new URL('./formal-release-contract.json', import.meta.url);
 
@@ -107,6 +107,7 @@ export async function runFormalPackageWorkflow({
   captureInputs = captureSourceInputs,
   createSubject = createPackageSubject,
   inspectRunRoot = inspectProtectedRunRoot,
+  inspectExecutionTemp = inspectProtectedDirectory,
   publishArtifact = publishExclusive,
   executeWitness = spawnWitness,
   loadDeclaredInputs = declaredInputsFrom,
@@ -141,6 +142,8 @@ export async function runFormalPackageWorkflow({
   ]);
   const initialRoot = await inspectRunRoot({ workspace: root, formalRunRoot: runRoot });
   if (JSON.stringify(initialRoot.identity) !== JSON.stringify(declared.manifest.protectedRunRoot?.identity)) throw new Error('Protected formal run-root identity drifted after input declaration.');
+  const initialExecutionTemp = await inspectExecutionTemp({ directory: declared.manifest.paths.executionTemp });
+  if (JSON.stringify(initialExecutionTemp.identity) !== JSON.stringify(declared.manifest.protectedExecutionTemp?.identity)) throw new Error('Protected execution temporary-directory identity drifted after input declaration.');
   const runLeaseArtifact = await publishArtifact(join(runRoot, 'run-lease.json'), Buffer.from(`${JSON.stringify({
     schemaVersion: 2,
     kind: 'aimuse-formal-run-lease',
@@ -149,9 +152,11 @@ export async function runFormalPackageWorkflow({
     declaredInputsSha256: declared.digest,
     protectedRunRootIdentity: initialRoot.identity,
   }, null, 2)}\n`));
-  const assertRunRootStable = async () => {
+  const assertBoundariesStable = async () => {
     const observed = await inspectRunRoot({ workspace: root, formalRunRoot: runRoot });
     if (!sameRootIdentity(initialRoot, observed)) throw new Error('Protected formal run-root identity changed during automation.');
+    const observedExecutionTemp = await inspectExecutionTemp({ directory: declared.manifest.paths.executionTemp });
+    if (!sameRootIdentity(initialExecutionTemp, observedExecutionTemp)) throw new Error('Protected execution temporary-directory identity changed during automation.');
   };
   const sourceCaptureOptions = {
     gitPath: declared.manifest.toolchain?.externalTools?.git?.canonicalPath,
@@ -163,7 +168,7 @@ export async function runFormalPackageWorkflow({
   let packageSubject;
   for (let index = 0; index < stages.length; index += 1) {
     const stage = stages[index];
-    await assertRunRootStable();
+    await assertBoundariesStable();
     if (stage.packageSubjectRequired && !packageSubject) {
       assertSourceInputsStable(declared.manifest.sourceInputs, await captureInputs(root, sourceCaptureOptions));
       const created = await createSubject({
@@ -193,7 +198,7 @@ export async function runFormalPackageWorkflow({
   }
   if (!packageSubject) throw new Error('Formal workflow did not freeze a package subject.');
   assertSourceInputsStable(declared.manifest.sourceInputs, await captureInputs(root, sourceCaptureOptions));
-  await assertRunRootStable();
+  await assertBoundariesStable();
   const observations = {
     schemaVersion: 2,
     kind: 'aimuse-formal-release-automation-observations',
@@ -218,7 +223,7 @@ export async function runFormalPackageWorkflow({
   };
   assertContractFields(observations, contract.schemaFields.automationObservations, 'Automation observation');
   const artifact = await publishArtifact(join(runRoot, 'automation-observations.json'), Buffer.from(`${JSON.stringify(observations, null, 2)}\n`));
-  await assertRunRootStable();
+  await assertBoundariesStable();
   return {
     level,
     inputs: declared.manifest,

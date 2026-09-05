@@ -16,6 +16,7 @@ describe('formal package workflow ordering', () => {
     const declaredPath = join(formalRunRoot, 'declared-release-inputs.json');
     const contractBytes = await readFile(join(workspace, 'scripts', 'formal-release-contract.json'));
     const protectedRoot = { identity: { canonicalPath: formalRunRoot, device: '1', inode: '2' }, owner: 'launching-user', allowedPrincipals: ['launching-user'] };
+    const protectedExecutionTemp = { identity: { canonicalPath: `/private/tmp/fake-run-${suffix}`, device: '3', inode: '4' }, owner: 'launching-user', allowedPrincipals: ['launching-user'] };
     const declared = {
       path: declaredPath,
       bytes: Buffer.from('{}'),
@@ -32,10 +33,12 @@ describe('formal package workflow ordering', () => {
           forgeOutDirectory: join(formalRunRoot, 'package-output'),
           packageSubjectManifest: requestedManifest,
           packagedPlaywrightOutput: join(workspace, 'test-results', 'playwright', `fake-run-${suffix}`),
+          executionTemp: protectedExecutionTemp.identity.canonicalPath,
           architecture: 'arm64',
         },
         contract: { path: 'scripts/formal-release-contract.json', bytes: contractBytes.length, sha256: sha256(contractBytes) },
         protectedRunRoot: protectedRoot,
+        protectedExecutionTemp,
       },
     };
     const witnessed = [];
@@ -64,6 +67,7 @@ describe('formal package workflow ordering', () => {
       },
       loadWitnessReceipt: async ({ stage }) => ({ stageId: stage.id, path: `execution/${stage.id}.receipt.json`, bytes: 1, sha256: 'E'.repeat(64) }),
       inspectRunRoot: async () => protectedRoot,
+      inspectExecutionTemp: async () => protectedExecutionTemp,
       publishArtifact: async (path, bytes) => ({ path, bytes: bytes.length, sha256: 'F'.repeat(64) }),
     });
     expect(witnessed.map(({ stageId }) => stageId)).toEqual(formalWorkflowStages(2));

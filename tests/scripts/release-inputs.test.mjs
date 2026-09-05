@@ -22,7 +22,8 @@ afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recur
 describe('caller-declared release inputs', () => {
   it('binds the stable contract, manifest source, direct tooling, dependency inventory, and run paths before automation', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'aimuse-release-inputs-'));
-    roots.push(workspace);
+    const executionTemp = await realpath(await mkdtemp(join(tmpdir(), 'aimuse-release-execution-temp-')));
+    roots.push(workspace, executionTemp);
     const runRoot = join(workspace, 'test-results', 'luna-high', 'declared-run');
     const playwrightRoot = join(workspace, 'test-results', 'playwright', 'declared-run');
     await mkdir(runRoot, { recursive: true, mode: 0o700 });
@@ -56,6 +57,7 @@ describe('caller-declared release inputs', () => {
       playwrightOutputDirectory: playwrightRoot,
       subjectManifestPath: join(runRoot, 'package-subject.json'),
       implementationTaskId: 'implementation-task',
+      executionTempDirectory: executionTemp,
       captureSource: async () => sourceInputs,
       captureToolchain: async () => tools,
       captureDependencyInventory: async () => Buffer.from('{"dependencies":{}}\n'),
@@ -81,12 +83,14 @@ describe('caller-declared release inputs', () => {
       sourceInputs,
       contract: { sha256: sha256(contractBytes) },
       protectedRunRoot: { identity: protectedIdentity },
+      protectedExecutionTemp: { identity: { canonicalPath: executionTemp } },
       toolchain: { dependencyInventory: { path: 'dependency-inventory.json' } },
     });
     expect(result.manifest.executionEnvironment.PATH).not.toContain('/declared-path');
     expect(result.manifest.executionEnvironment.PATH.split(delimiter)[0]).toBe(join(workspace, 'scripts', 'npm-shims'));
     expect(result.manifest.executionEnvironment.npm_config_script_shell).toBe(tool.requestedPath);
     expect(result.manifest.executionEnvironment.HOME).toBe(join(runRoot, 'execution-home'));
+    expect(result.manifest.executionEnvironment.TMPDIR).toBe(executionTemp);
     expect(result.manifest.controls).toHaveProperty('scripts/release-command-witness.mjs');
     expect(result.manifest.controls).toHaveProperty('scripts/release-inputs.mjs');
     expect(result.manifest.toolchain.javascriptTools).toHaveProperty('playwright');

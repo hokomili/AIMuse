@@ -21,8 +21,9 @@ async function writePrivate(path, bytes) {
 }
 
 async function fixture() {
-  const workspace = await mkdtemp(join(tmpdir(), 'aimuse-release-verifier-'));
-  roots.push(workspace);
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), 'aimuse-release-verifier-')));
+  const executionTemp = await realpath(await mkdtemp(join(tmpdir(), 'aimuse-release-verifier-temp-')));
+  roots.push(workspace, executionTemp);
   const runRoot = join(workspace, 'test-results', 'luna-high', 'fresh-run');
   await mkdir(runRoot, { recursive: true, mode: 0o700 });
   await chmod(runRoot, 0o700);
@@ -80,11 +81,12 @@ async function fixture() {
   const miniaudioInventoryBytes = Buffer.from(`${JSON.stringify(miniaudioInventory, null, 2)}\n`);
   await writePrivate(miniaudioInventoryPath, miniaudioInventoryBytes);
   const executionHome = join(runRoot, 'execution-home');
-  const executionTemp = join(runRoot, 'execution-tmp');
   const npmCache = join(runRoot, 'npm-cache');
-  await Promise.all([executionHome, executionTemp, npmCache].map((path) => mkdir(path, { mode: 0o700 })));
+  await Promise.all([executionHome, npmCache].map((path) => mkdir(path, { mode: 0o700 })));
   const rootInfo = await lstat(runRoot);
   const protectedIdentity = { version: 1, canonicalPath: await realpath(runRoot), device: String(rootInfo.dev), inode: String(rootInfo.ino) };
+  const executionTempInfo = await lstat(executionTemp);
+  const protectedExecutionTempIdentity = { version: 1, canonicalPath: executionTemp, device: String(executionTempInfo.dev), inode: String(executionTempInfo.ino) };
   const toolPath = [join(workspace, 'scripts', 'npm-shims'), ...new Set(Object.values(externalTools).flatMap((tool) => [dirname(tool.requestedPath), dirname(tool.canonicalPath)]))].join(delimiter);
   const executionEnvironment = {
     HOME: executionHome,
@@ -138,6 +140,7 @@ async function fixture() {
     implementationTaskId: 'implementation-task',
     expectedIndependentTester: { model: 'gpt-5.6-luna', reasoningEffort: 'high', distinctTaskRequired: true },
     protectedRunRoot: { identity: protectedIdentity, owner: 'launching-user', allowedPrincipals: ['launching-user'] },
+    protectedExecutionTemp: { identity: protectedExecutionTempIdentity, owner: 'launching-user', allowedPrincipals: ['launching-user'] },
     sourceInputs,
     paths: {
       workspace,
@@ -270,7 +273,7 @@ async function fixture() {
     },
   });
   return {
-    workspace, runRoot, inputPath, inputSha256, observationPath, observations, receiptObjects,
+    workspace, runRoot, executionTemp, inputPath, inputSha256, observationPath, observations, receiptObjects,
     writeObservations, verifyPackageSubject,
     verifierSha256: sha256(await readFile(actualVerifierPath)),
     witnessSha256: controls['scripts/release-command-witness.mjs'].sha256,
@@ -328,5 +331,16 @@ describe('independent release evidence verifier', () => {
       verifyPackageSubject: value.verifyPackageSubject,
       reproduceDependencyInventory: () => ({}),
     })).rejects.toThrow(/did not terminate successfully/u);
+  });
+
+  it('rejects replacement of the declared external execution temporary directory', async () => {
+    const value = await fixture();
+    const observationSha256 = await value.writeObservations();
+    await rm(value.executionTemp, { recursive: true });
+    await mkdir(value.executionTemp, { mode: 0o700 });
+    await expect(verifyReleaseEvidence(verificationArguments(value, observationSha256), {
+      verifyPackageSubject: value.verifyPackageSubject,
+      reproduceDependencyInventory: () => ({}),
+    })).rejects.toThrow(/temporary-directory identity drifted/u);
   });
 });
