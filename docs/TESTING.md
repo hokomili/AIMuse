@@ -44,7 +44,9 @@ Playwright is valuable automated coverage, but it does not replace Computer Use.
 
 The `:auto` commands and `AUTOMATED_GATES_PASS` are only the automated portion. The distinct-task MCP + native Computer Use report, structured certification manifest, cleanup and final certifier remain mandatory.
 
-## Current formal evidence
+## Historical formal evidence recorded in this document
+
+The following snapshot records the August 2026 subjects. Later accepted subjects and their exact evidence links are maintained in the live [AIMuse context](../../Secretary/shared/projects/aimuse.md); this section is not the latest-certification index. The testing requirements above continue to govern new formal runs.
 
 The newest independent Luna/high Level 2 run, [`20260810T061608Z-macos-level2`](../test-results/luna-high/20260810T061608Z-macos-level2/report.md), is a strict macOS `PASS` for workspace-input identity `3B35E237F0EBAFBC7F5ECFC589D4C18A283498F77C2B2959BBA2CD39B0D2AC24`. Its immutable report SHA-256 is `3F902EDDB757FB65F50B21DD4B2D56E02ECC24CBF654B4D16976A7450DE85E4`; manifest SHA-256 `092D52EBCB805B4DB0CAF1BE747A0027A11B7767A6EBB665473F8A2F283063B1` binds subject `AE5F9D807F961E27B845CA90220A27AE8C0AA5A0784820C7DB7FBFAC24048B7E`, executable `4673F18E341C3273E4033D4A379EA03B434AE69902338470980959823B0C1EC7` and ASAR `887A7FF1B2B7D334AFCB3C4D5298F1C13C55929A95BF090A5A22B12EF90C8E89`. One formal/package invocation passed 76 files plus 1 skipped / 329 tests plus 3 skipped, renderer 6/6, CTest 1/1 and packaged E2E 2/2. Both dirty force-discard subjects stayed absent after same-profile restart, the independent dirty recovery control returned identically, maximum waiting approvals was one, the competing producer received sanitized `approval_pending` with no job/write/leak, and all mandatory CoreAudio, trace, lock, native edit, serial-export, headless/reattach and cleanup gates passed. No P0–P3 finding remained. This Level 2 certificate is exact-subject development evidence, not Developer ID/notarization, Level 3 or release readiness.
 

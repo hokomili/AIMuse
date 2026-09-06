@@ -71,7 +71,8 @@ describe('native agent-driven DAW product boundary', () => {
     expect(producer).not.toContain('verified: true');
     expect(producer).toContain("acceptanceVerdict: null");
     expect(workflow).not.toContain('formalAutomationPassed');
-    expect(workflow).not.toContain("from './release-evidence-verifier.mjs'");
+    // Keep this assertion text from being mistaken for an actual relative import by the portability scanner.
+    expect(workflow).not.toContain("from " + "'./release-evidence-verifier.mjs'");
     expect(workflow).toContain("kind: 'aimuse-formal-release-automation-observations'");
     expect(witness).toContain("kind: 'aimuse-witnessed-command-execution'");
     expect(witness).toContain('termination: { exitCode: observed.exitCode, signal: observed.signal }');

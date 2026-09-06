@@ -4,13 +4,13 @@ export interface DecodedWav { sampleRate: number; channels: number; frames: numb
 
 function fourcc(buffer: Buffer, offset: number): string { return buffer.toString('ascii', offset, offset + 4); }
 
-export function encodeFloat32Wav(channels: Float32Array[], sampleRate: number): Buffer {
+export function encodeFloat32Wav(channels: Float32Array[], sampleRate: number, clamp = true): Buffer {
   const channelCount = channels.length; const frames = channels[0]?.length ?? 0; const dataBytes = frames * channelCount * 4;
   const output = Buffer.alloc(44 + dataBytes);
   output.write('RIFF', 0); output.writeUInt32LE(36 + dataBytes, 4); output.write('WAVE', 8); output.write('fmt ', 12); output.writeUInt32LE(16, 16);
   output.writeUInt16LE(3, 20); output.writeUInt16LE(channelCount, 22); output.writeUInt32LE(sampleRate, 24); output.writeUInt32LE(sampleRate * channelCount * 4, 28); output.writeUInt16LE(channelCount * 4, 32); output.writeUInt16LE(32, 34); output.write('data', 36); output.writeUInt32LE(dataBytes, 40);
   let offset = 44;
-  for (let frame = 0; frame < frames; frame += 1) for (let channel = 0; channel < channelCount; channel += 1) { output.writeFloatLE(Math.max(-1, Math.min(1, channels[channel][frame] ?? 0)), offset); offset += 4; }
+  for (let frame = 0; frame < frames; frame += 1) for (let channel = 0; channel < channelCount; channel += 1) { const sample = channels[channel][frame] ?? 0; output.writeFloatLE(clamp ? Math.max(-1, Math.min(1, sample)) : sample, offset); offset += 4; }
   return output;
 }
 

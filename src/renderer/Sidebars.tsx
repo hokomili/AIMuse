@@ -8,22 +8,25 @@ import type { AIMuseProject, AsyncJob, BuiltinDeviceKind, Clip, Device, Marker, 
 import type { AgentPresence, McpConnectionInfo, TimelineSelection } from '../common/contracts';
 import { CommitNumberInput, CommitRange, CommitTextInput } from './CommitControls';
 import { db, entity, transaction } from './editor-helpers';
+import { RENDERED_BUILTINS } from '../common/render-capabilities';
 
 export type BrowserTab = 'media' | 'instruments' | 'effects' | 'plugins' | 'sfx';
 export type RightTab = 'inspector' | 'structure' | 'activity' | 'jobs' | 'agents';
 
 const instruments: Array<{ kind: BuiltinDeviceKind; name: string; detail: string; glyph: string }> = [
-  { kind: 'sampler', name: 'Sampler', detail: 'Chromatic sample instrument', glyph: 'S' },
-  { kind: 'drum-rack', name: 'Drum Rack', detail: '16-pad drum instrument', glyph: '▦' },
-  { kind: 'subtractive-synth', name: 'Muse Synth', detail: 'Two-oscillator subtractive synth', glyph: '∿' },
+  { kind: 'sampler', name: 'Sampler', detail: 'Stored setup; audio rendering unavailable', glyph: 'S' },
+  { kind: 'drum-rack', name: 'Drum Rack', detail: 'Stored setup; audio rendering unavailable', glyph: '▦' },
+  { kind: 'subtractive-synth', name: 'Muse Synth', detail: 'Sine voice · envelope · resonant low-pass', glyph: '∿' },
 ];
-const effects: Array<{ kind: BuiltinDeviceKind; name: string; category: string }> = [
+const effectDefinitions: Array<{ kind: BuiltinDeviceKind; name: string; category: string }> = [
   { kind: 'utility', name: 'Utility', category: 'Utility' }, { kind: 'eq', name: 'Parametric EQ', category: 'Tone' },
   { kind: 'compressor', name: 'Compressor', category: 'Dynamics' }, { kind: 'gate', name: 'Gate', category: 'Dynamics' },
   { kind: 'saturator', name: 'Saturator', category: 'Color' }, { kind: 'chorus', name: 'Chorus', category: 'Modulation' },
   { kind: 'delay', name: 'Delay', category: 'Space' }, { kind: 'reverb', name: 'Algorithmic Reverb', category: 'Space' },
   { kind: 'limiter', name: 'Limiter', category: 'Dynamics' }, { kind: 'analyzer', name: 'Spectrum & Loudness', category: 'Metering' },
 ];
+
+const effects = effectDefinitions.map((effect) => ({ ...effect, category: RENDERED_BUILTINS.some((kind) => kind === effect.kind) ? effect.category : 'Audio rendering unavailable' }));
 
 interface LeftBrowserProps {
   project: AIMuseProject;

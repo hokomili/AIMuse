@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
 import { createId, entityBase, HUMAN_ACTOR, nowIso, type AsyncJob, type AuthorityPolicy, type GenerationProvenance, type MediaAsset, type MidiClip, type ProjectTransaction } from '@aimuse/core';
+import { decodeWav } from '../../src/main/wav';
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
@@ -201,6 +202,45 @@ describe('authenticated localhost MCP contract', () => {
 
   let sequence = 0;
   function createRequestId(): number { sequence += 1; return sequence; }
+
+  it('lets a cold client compose and render using only public help payloads and nested tool schemas', async () => {
+    const { sessionId } = await initialize();
+    const call = async (name: string, arguments_: Record<string, unknown>) => {
+      const response = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/call', params: { name, arguments: arguments_ } }, sessionId);
+      expect(response.message?.error).toBeUndefined();
+      return response.message?.result as { isError?: boolean; structuredContent?: { data: Record<string, unknown> }; content: Array<{ text: string }> };
+    };
+    const joined = await call('session_manage', { action: 'join', name: 'Cold composer' });
+    const actor = joined.structuredContent!.data.actor as { id: string };
+    const observed = await call('project_observe', {});
+    const project = observed.structuredContent!.data.project as { id: string };
+    const help = await call('aimuse_help', { topic: 'composition' });
+    const example = help.structuredContent!.data.example as Record<string, unknown>;
+    expect(example.projectId).toBe(project.id);
+    const contract = await call('aimuse_help', { topic: 'operation-schemas', operationKind: 'midi.note.add' });
+    expect(JSON.stringify(contract.structuredContent!.data.schemas)).toContain('releaseVelocity');
+    const rendering = await call('aimuse_help', { topic: 'rendering' });
+    expect(JSON.stringify(rendering.structuredContent!.data)).toContain('Sampler/drum-rack');
+    const listed = await request({ jsonrpc: '2.0', id: createRequestId(), method: 'tools/list', params: {} }, sessionId);
+    const apply = (listed.message?.result?.tools as Array<{ name: string; inputSchema: unknown }>).find((tool) => tool.name === 'project_apply')!;
+    const schemaText = JSON.stringify(apply.inputSchema);
+    expect(schemaText).toContain('sourceDurationSamples'); expect(schemaText).toContain('releaseVelocity'); expect(schemaText).toContain('parameters');
+    expect(schemaText).not.toContain('provenance.register');
+    const committed = await call('project_apply', example); expect(committed.structuredContent!.data.status).toBe('committed');
+    const after = await call('project_observe', {}); const state = after.structuredContent!.data.project as { tracks: Record<string, { createdBy: string; name: string }> };
+    expect(Object.values(state.tracks).find((track) => track.name === 'Help melody')?.createdBy).toBe(actor.id);
+    const duplicate = await call('project_apply', example); expect(duplicate.structuredContent!.data.status).toBe('duplicate');
+    // File authority is test setup; composition itself consumes only public responses.
+    await authority.install({ version: 1, id: createId('policy'), issuedAt: nowIso(), expiresAt: new Date(Date.now() + 60_000).toISOString(), maxRuntimeMinutes: 5, readRoots: [root], writeRoots: [root], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false });
+    const exported = await call('export_manage', { projectId: project.id, kind: 'master', destination: join(root, 'cold-composition.wav'), format: 'wav' });
+    const jobId = exported.structuredContent!.data.jobId;
+    expect(typeof jobId).toBe('string');
+    let job: Record<string, unknown> = {};
+    for (let attempt = 0; attempt < 100; attempt += 1) { const result = await call('job_manage', { action: 'wait', jobId, timeoutMs: 100 }); job = result.structuredContent!.data; if (['completed', 'failed', 'waiting-for-user'].includes(String(job.status))) break; }
+    expect(job.status).toBe('completed');
+    const wav = decodeWav(await readFile(join(root, 'cold-composition.wav')));
+    expect(wav.data[0].some((sample) => Math.abs(sample) > 0.01)).toBe(true);
+  });
 
   it('rejects unauthenticated and malformed requests before creating state', async () => {
     const { instanceId, profileId } = host.connection();

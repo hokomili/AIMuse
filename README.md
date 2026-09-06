@@ -1,5 +1,7 @@
 # AIMuse
 
+Agent startup: read [AGENTS.md](AGENTS.md) before repository discovery. The live [AIMuse shared context](../Secretary/shared/projects/aimuse.md) maintains current intentions, accepted decisions and work status; detailed specifications and dated evidence remain in this repository.
+
 AIMuse is a native, agent-driven, Windows-first music and sound-design workstation. One canonical engine serves both an attachable Electron editor and authenticated external MCP clients, so a creator can work directly while an agent observes and edits the same project. AIMuse is not a built-in generative-content platform: it ships no external generation-provider adapter, provider credential store, generation job, or generation UI. External agents may create material with capabilities they control, then use AIMuse's ordinary import and editing tools.
 
 The repository is currently **`0.1.0-alpha.0`**. It contains a working foundation and packaged cross-surface alpha; it is deliberately not labeled `1.0.0` because the complete live audio graph, recording, third-party plug-in hosting, codec, performance, and exhaustive release gates in the v1 plan are not complete. See [the feature tracker](docs/FEATURE_TRACKER.md).
@@ -67,3 +69,7 @@ On macOS, invoke the packaged executable inside the app bundle when passing life
 - [macOS acceptance gate matrix](docs/MACOS_GATE_MATRIX.md)
 - [Security policy](SECURITY.md)
 - [Third-party and licensing status](THIRD_PARTY_NOTICES.md)
+
+### Audio rendering contract
+
+See [supported audio rendering](docs/AUDIO_RENDERING.md) for the current synth/effect subset, WAV resampling, routing, stem/master behavior and loop checks. Public `aimuse_help` composition and operation-schemas topics provide complete authoring payloads; rendering help makes unsupported DSP explicit before export.

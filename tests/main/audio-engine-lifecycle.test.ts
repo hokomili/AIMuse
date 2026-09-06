@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createProject, type AIMuseProject } from '@aimuse/core';
 import { AudioEngineController } from '../../src/main/audio-engine';
 
 interface Deferred<T> {
@@ -66,4 +67,21 @@ describe('audio engine lifecycle', () => {
     expect(lifecycle.previewBuilds.size).toBe(0);
     expect(lifecycle.previewRefreshTask).toBeUndefined();
   });
+  it('pauses a stale preview when the current authored revision cannot render', async () => {
+    const controller = new AudioEngineController(); const project = createProject('song');
+    const runtime = controller as unknown as {
+      project: AIMuseProject; previewRefreshRequested: AIMuseProject;
+      ensurePreviewBuilt(project: AIMuseProject): Promise<unknown>;
+      drainPreviewRefresh(): Promise<void>;
+      nativePreviewKey?: string;
+    };
+    await controller.synchronizeProject(project); await controller.transport('play');
+    runtime.previewRefreshRequested = project; runtime.nativePreviewKey = 'older-revision';
+    vi.spyOn(runtime, 'ensurePreviewBuilt').mockRejectedValue(new Error('Sampler is not supported by audio rendering.'));
+    await runtime.drainPreviewRefresh();
+    expect(controller.snapshot().status).toBe('paused'); expect(runtime.nativePreviewKey).toBeUndefined();
+    expect(controller.status().message).toContain('current revision could not render');
+    await controller.stop();
+  });
+
 });

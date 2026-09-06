@@ -14,6 +14,7 @@ import type { ExportReport } from '../../src/main/export-manager';
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { AuthorityManager } from '../../src/main/authority-manager';
 import { ExportManager } from '../../src/main/export-manager';
+import { decodeWav, encodeFloat32Wav } from '../../src/main/wav';
 import { RecoveryJournal } from '../../src/main/journal';
 import { ProjectService } from '../../src/main/project-service';
 import { TransactionTraceStore } from '../../src/main/trace-store';
@@ -220,4 +221,44 @@ describe('export pipeline', () => {
     expect(manifest.files).toHaveLength(3);
     expect(manifest.files[0]).toMatchObject({ deliverableId: deliverable.id, variant: 1, tags: ['ui', 'magic'], targetLufs: -16, variation: { pitchSemitones: 0, gainDb: 0, timingMilliseconds: 0 } });
   });
+  async function edit(operations: ProjectOperation[]): Promise<void> {
+    expect(await projects.apply({ id: createId('tx'), clientOperationId: createId('edit'), projectId: projects.getActiveProjectId()!, actor: HUMAN_ACTOR, label: 'Export regression edit', createdAt: nowIso(), operations, checkpointPolicy: 'none' }, HUMAN_ACTOR)).toMatchObject({ status: 'committed' });
+  }
+  const energy = (channel: Float32Array) => Math.sqrt(channel.reduce((sum, sample) => sum + sample * sample, 0) / channel.length);
+  it('preserves renderer warnings and applies the master fader after loudness normalization', async () => {
+    const projectId = projects.getActiveProjectId()!;
+    const first = await terminal(exports.start({ projectId, kind: 'master', destination: join(root, 'full.wav') }).jobId);
+    expect(first.result?.warnings.join(' ')).toContain('sine guide voice'); expect(first.message).toContain('warning');
+    const full = decodeWav(await readFile(join(root, 'full.wav')));
+    const master = Object.values(projects.getActiveProject()!.tracks).find((track) => track.kind === 'master')!;
+    await edit([{ kind: 'track.update', trackId: master.id, changes: { gainDb: -18 } }]);
+    expect((await terminal(exports.start({ projectId, kind: 'master', destination: join(root, 'quiet.wav') }).jobId)).status).toBe('completed');
+    const quiet = decodeWav(await readFile(join(root, 'quiet.wav')));
+    expect(energy(quiet.data[0]) / energy(full.data[0])).toBeCloseTo(10 ** (-18 / 20), 5);
+    await edit([{ kind: 'track.update', trackId: master.id, changes: { mute: true } }]);
+    expect((await terminal(exports.start({ projectId, kind: 'master', destination: join(root, 'muted.wav') }).jobId)).status).toBe('completed');
+    expect(energy(decodeWav(await readFile(join(root, 'muted.wav'))).data[0])).toBe(0);
+  });
+  it('exports every final loop variant with verified endpoints after pitch/timing changes and normalization', async () => {
+    const project = projects.getActiveProject()!; const path = join(root, 'loop-source.wav');
+    const source = Float32Array.from({ length: 192000 }, (_, index) => 0.3 * Math.sin(2 * Math.PI * 233.7 * index / 48000 + 0.4));
+    const bytes = encodeFloat32Wav([source, source], 48000); await writeFile(path, bytes);
+    const asset: MediaAsset = { ...entityBase('asset'), kind: 'audio', name: 'Loop source.wav', mimeType: 'audio/wav', sha256: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length, storage: 'linked', externalPath: path, sampleRate: 48000, channels: 2, durationSamples: source.length };
+    const track = createTrack('audio', 'Seam fixture', '#06b6d4');
+    const clip: AudioClip = { ...entityBase('clip'), kind: 'audio', assetId: asset.id, trackId: track.id, name: 'Non-periodic tone', color: track.color, startTick: 0, durationTicks: 7680, sourceStartSample: 0, sourceDurationSamples: source.length, transposeSemitones: 0, stretchMode: 'repitch', reverse: false, warpMarkers: [], muted: false, gainDb: 0, fadeIn: { durationTicks: 0, curve: 'linear' }, fadeOut: { durationTicks: 0, curve: 'linear' }, loopEnabled: false };
+    const deliverable: SfxDeliverable = { ...entityBase('sfx'), id: 'tide-hum-loop', name: 'Tide hum loop', startTick: 0, endTick: 7680, variantCount: 5, tags: [], seamlessLoop: true, tailMilliseconds: 0, variation: { seed: 42, pitchRangeSemitones: 1, gainRangeDb: 0.5, timingRangeMilliseconds: 1 }, targetLufs: -18, namingTemplate: 'loop-{index}', exportFormat: 'wav' };
+    await edit([{ kind: 'asset.add', asset }, { kind: 'track.add', track }, { kind: 'clip.add', clip }, { kind: 'sfx-deliverable.add', deliverable }]);
+    const destination = join(root, 'loops'); expect((await terminal(exports.start({ projectId: project.id, kind: 'sfx-batch', destination }).jobId)).status).toBe('completed');
+    const manifest = JSON.parse(await readFile(join(destination, 'sfx-export.json'), 'utf8')) as { files: Array<{ file: string; seamlessLoop: boolean; loopEndSample: number; loopVerification: { seamJump: number } }> };
+    expect(manifest.files).toHaveLength(5);
+    for (const entry of manifest.files) {
+      const pcm = decodeWav(await readFile(join(destination, entry.file))); expect(pcm.frames).toBe(192000); expect(entry.loopEndSample).toBe(pcm.frames);
+      expect(entry.seamlessLoop).toBe(true); expect(entry.loopVerification.seamJump).toBeLessThanOrEqual(1e-6);
+      for (const channel of pcm.data) { expect(Math.abs(channel[0] - channel[channel.length - 1])).toBe(0); expect(Math.abs(channel[1] - channel[0])).toBeLessThan(0.0001); expect(energy(channel)).toBeGreaterThan(0.01); }
+    }
+    await edit([{ kind: 'sfx-deliverable.update', deliverableId: deliverable.id, changes: { loopStartSample: 0, loopEndSample: 3, variantCount: 1 } }]);
+    const tiny = join(root, 'tiny'); expect((await terminal(exports.start({ projectId: project.id, kind: 'sfx-batch', destination: tiny }).jobId)).status).toBe('completed');
+    const tinyPcm = decodeWav(await readFile(join(tiny, 'loop-01.wav'))); expect(tinyPcm.frames).toBe(3); expect(tinyPcm.data[0][0]).toBe(tinyPcm.data[0][2]);
+  });
+
 });

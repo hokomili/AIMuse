@@ -13,7 +13,7 @@ import { settleAudioChildShutdown } from './audio-child-lifecycle';
 import { unavailableMidiDiscovery, validateNativeMidiDiscovery, type MidiDiscoveryStatus } from './midi-discovery';
 import { settleAudioPreviewWork } from './audio-preview-lifecycle';
 import { reconcileNativeAudioTelemetry } from './audio-telemetry';
-import { renderProjectToWav, type ProjectRenderResult } from './project-renderer';
+import { RENDER_CACHE_VERSION, renderProjectToWav, type ProjectRenderResult } from './project-renderer';
 
 export interface AudioEngineStatus { mode: 'native' | 'fallback'; connected: boolean; driver: NativeAudioDriver; requestedPlaybackMode: AudioPlaybackMode; effectivePlaybackMode: EffectiveAudioPlaybackMode; midiDiscovery: MidiDiscoveryStatus; message?: string }
 interface NativeHello { protocolVersion: number; serviceVersion: string; driver: NativeAudioDriver; requestedPlaybackMode?: unknown; effectivePlaybackMode?: unknown; realtimeBackendReady: boolean; features: string[]; sampleRate?: number; latencySamples?: number; midiDiscovery?: unknown; diagnostic?: string }
@@ -191,15 +191,15 @@ export class AudioEngineController extends EventEmitter {
     this.emit('transport', this.snapshot()); return this.snapshot();
   }
 
-  private previewKey(project: AIMuseProject): string { return `${project.id}:${project.revision}`; }
+  private previewKey(project: AIMuseProject): string { return `${RENDER_CACHE_VERSION}:${project.id}:${project.revision}`; }
 
   private async ensureNativePlayback(): Promise<void> {
     const project = this.project;
     if (!project) throw new Error('No committed project is available for playback.');
     const key = this.previewKey(project);
-    if (this.nativePreviewProjectId === project.id) { if (this.nativePreviewKey !== key) this.schedulePreviewRefresh(project); return; }
+    if (this.nativePreviewProjectId === project.id && this.nativePreviewKey === key) return;
     const preview = await this.ensurePreviewBuilt(project);
-    await this.installPreview(project, preview, false);
+    await this.installPreview(project, preview, this.nativePreviewProjectId === project.id);
   }
 
   private async installPreview(project: AIMuseProject, preview: PlaybackPreview, preserveTransport: boolean): Promise<void> {
@@ -238,7 +238,9 @@ export class AudioEngineController extends EventEmitter {
       }
     } catch (error) {
       if (this.project && this.previewKey(this.project) === this.previewKey(project)) {
-        this.statusValue = { ...this.statusValue, message: `Playback refresh failed: ${error instanceof Error ? error.message : String(error)} The previous revision remains available.` };
+        await this.transport('pause');
+        this.nativePreviewKey = undefined;
+        this.statusValue = { ...this.statusValue, message: `Playback paused because the current revision could not render: ${error instanceof Error ? error.message : String(error)}` };
         this.emit('status', this.status());
       }
     } finally {
@@ -262,7 +264,7 @@ export class AudioEngineController extends EventEmitter {
   private async buildPlaybackPreview(project: AIMuseProject): Promise<PlaybackPreview> {
     const key = this.previewKey(project);
     const safeProjectId = project.id.replaceAll(/[^a-zA-Z0-9_-]/g, '_');
-    const path = join(this.playbackCacheRoot, `${safeProjectId}-${project.revision}.wav`);
+    const path = join(this.playbackCacheRoot, `${RENDER_CACHE_VERSION}-${safeProjectId}-${project.revision}.wav`);
     const endTick = Math.max(
       project.settings.ppq * 4 * 16,
       ...Object.values(project.clips).map((clip) => clip.startTick + clip.durationTicks),
@@ -347,8 +349,8 @@ export class AudioEngineController extends EventEmitter {
     this.state.sample = ticksToSamples(this.project, this.state.tick);
   }
 
-  async render(project: AIMuseProject, destination: string, startTick = 0, endTick?: number, trackIds?: Id[]): Promise<{ destination: string; durationSamples: number; warnings: string[] }> {
-    const request = { project, destination, startTick, endTick, trackIds };
+  async render(project: AIMuseProject, destination: string, startTick = 0, endTick?: number, trackIds?: Id[], options: { stem?: boolean; skipMasterFader?: boolean } = {}): Promise<{ destination: string; durationSamples: number; warnings: string[] }> {
+    const request = { project, destination, startTick, endTick, trackIds, ...options };
     if (await this.hasRenderWorker()) return this.renderInWorker(request);
     return renderProjectToWav(request);
   }

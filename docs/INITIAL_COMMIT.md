@@ -1,6 +1,6 @@
 # Initial Git snapshot boundary
 
-This checkout has a local Git directory but no commit, no staged entry and no remote. The intended first snapshot is therefore a future reviewed action, not something this preparation performs.
+This document originated before the first Git snapshot. Its descriptions of an uncommitted checkout and proposed first commit are historical, not current repository status or an assignment. The manifest and never-track boundaries below remain applicable. Read the live [AIMuse context](../../Secretary/shared/projects/aimuse.md) for current decisions and work.
 
 ## Never-track boundary
 
