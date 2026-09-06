@@ -14,6 +14,7 @@ import { RENDER_CAPABILITIES } from '../common/render-capabilities';
 import { COMPOSITION_RULES, compositionExample, OPERATION_SCHEMAS, PUBLIC_OPERATION_KINDS } from './composition-help';
 import { FairAgentMutationScheduler, type AgentMutationResult } from './agent-mutation-scheduler';
 import { AudioEngineController } from './audio-engine';
+import { UnsupportedAudioRenderError } from './audio-render-error';
 import { AuthorityManager } from './authority-manager';
 import { ExportManager } from './export-manager';
 import { isEphemeralMcpToken } from './mcp-ephemeral-authority';
@@ -944,7 +945,7 @@ export class McpHost {
         if (retainCancellation()) return;
         const current = this.options.projects.getJob(jobId); if (!current) return;
         const message = error instanceof Error ? error.message : String(error);
-        this.options.projects.upsertJob({ ...current, status: 'failed', message, updatedAt: nowIso(), cancellable: false, result: { ...(typeof current.result === 'object' && current.result ? current.result : {}), ...effectResult() }, error: { code: 'audition-render-failed', message, retryable: true } });
+        this.options.projects.upsertJob({ ...current, status: 'failed', message, updatedAt: nowIso(), cancellable: false, result: { ...(typeof current.result === 'object' && current.result ? current.result : {}), ...effectResult() }, error: { code: error instanceof UnsupportedAudioRenderError ? error.code : 'audition-render-failed', message, retryable: !(error instanceof UnsupportedAudioRenderError) } });
       }
     })();
     return { jobId };

@@ -13,6 +13,7 @@ import { settleAudioChildShutdown } from './audio-child-lifecycle';
 import { unavailableMidiDiscovery, validateNativeMidiDiscovery, type MidiDiscoveryStatus } from './midi-discovery';
 import { settleAudioPreviewWork } from './audio-preview-lifecycle';
 import { reconcileNativeAudioTelemetry } from './audio-telemetry';
+import { UnsupportedAudioRenderError } from './audio-render-error';
 import { RENDER_CACHE_VERSION, renderProjectToWav, type ProjectRenderResult } from './project-renderer';
 
 export interface AudioEngineStatus { mode: 'native' | 'fallback'; connected: boolean; driver: NativeAudioDriver; requestedPlaybackMode: AudioPlaybackMode; effectivePlaybackMode: EffectiveAudioPlaybackMode; midiDiscovery: MidiDiscoveryStatus; message?: string }
@@ -366,9 +367,9 @@ export class AudioEngineController extends EventEmitter {
       const worker = new Worker(this.renderWorkerPath!, { workerData: request });
       let settled = false;
       const finish = (callback: () => void) => { if (settled) return; settled = true; callback(); void worker.terminate(); };
-      worker.once('message', (message: { ok: boolean; result?: ProjectRenderResult; error?: string }) => {
+      worker.once('message', (message: { ok: boolean; result?: ProjectRenderResult; error?: string; errorCode?: string }) => {
         if (message.ok && message.result) finish(() => resolvePromise(message.result!));
-        else finish(() => reject(new Error(message.error ?? 'Playback render worker failed.')));
+        else finish(() => reject(message.errorCode === 'unsupported-audio-render' ? new UnsupportedAudioRenderError(message.error ?? 'Unsupported audio processing.') : new Error(message.error ?? 'Playback render worker failed.')));
       });
       worker.once('error', (error) => finish(() => reject(error)));
       worker.once('exit', (code) => { if (code !== 0) finish(() => reject(new Error(`Playback render worker exited with code ${code}.`))); });

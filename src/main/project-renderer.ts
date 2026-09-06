@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { ticksToSamples, samplesToTicks, type AIMuseProject, type AudioClip, type Clip, type Device, type Fade, type Id, type MidiClip, type Track } from '@aimuse/core';
 import { RENDERED_BUILTINS } from '../common/render-capabilities';
 import { atomicWriteFile } from './persistence';
+import { UnsupportedAudioRenderError } from './audio-render-error';
 import { decodeWav, encodeFloat32Wav } from './wav';
 import { gainFromDb, lowPass, parameter, processDevice, sampleInterpolator, type Stereo } from './render-dsp';
 
@@ -22,7 +23,7 @@ export interface ProjectRenderRequest {
 export interface ProjectRenderResult { destination: string; durationSamples: number; warnings: string[] }
 
 function unsupported(subject: string, feature: string): never {
-  throw new Error(`${subject}: ${feature} is not supported by audio rendering. Bypass/remove this processing or render it externally and import WAV. See aimuse_help topic rendering.`);
+  throw new UnsupportedAudioRenderError(`${subject}: ${feature} is not supported by audio rendering. Bypass/remove this processing or render it externally and import WAV. See aimuse_help topic rendering.`);
 }
 const parameterRanges: Record<string, Record<string, [number, number]>> = {
   'subtractive-synth': { cutoff: [20, 20_000], resonance: [0, 1], attack: [0, 5], release: [0, 10] },

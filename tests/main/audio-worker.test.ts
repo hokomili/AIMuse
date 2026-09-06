@@ -22,4 +22,9 @@ describe('background audio rendering', () => {
     await expect(rendering).resolves.toEqual({ destination, durationSamples: 1, warnings: [] });
     expect(decodeWav(await readFile(destination))).toMatchObject({ sampleRate: 48_000, channels: 2, frames: 1 });
   });
+  it('retains a non-retryable capability error across the render worker boundary', async () => {
+    const audio = new AudioEngineController(undefined, 'test', join(root, 'cache'), resolve('tests/fixtures/render-worker-capability-error.mjs'));
+    await expect(audio.render(createProject('song'), join(root, 'unsupported.wav'))).rejects.toMatchObject({ code: 'unsupported-audio-render', retryable: false, message: 'Unsupported fixture processing.' });
+  });
+
 });

@@ -261,4 +261,11 @@ describe('export pipeline', () => {
     const tinyPcm = decodeWav(await readFile(join(tiny, 'loop-01.wav'))); expect(tinyPcm.frames).toBe(3); expect(tinyPcm.data[0][0]).toBe(tinyPcm.data[0][2]);
   });
 
+  it('reports unsupported authored processing as non-retryable until the project changes', async () => {
+    const project = projects.getActiveProject()!; const track = Object.values(project.tracks).find((track) => track.name === 'Fixture Lead')!;
+    await edit([{ kind: 'device.add', device: { ...entityBase('device'), trackId: track.id, name: 'Unsupported Reverb', format: 'builtin', builtinKind: 'reverb', bypassed: false, degraded: false, latencySamples: 0, parameters: {} } }]);
+    const job = await terminal(exports.start({ projectId: project.id, kind: 'master', destination: join(root, 'unsupported.wav') }).jobId);
+    expect(job).toMatchObject({ status: 'failed', error: { code: 'unsupported-audio-render', retryable: false, message: expect.stringContaining('Bypass/remove') } });
+  });
+
 });
