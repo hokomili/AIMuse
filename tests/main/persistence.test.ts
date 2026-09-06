@@ -35,6 +35,26 @@ describe('project folder and portable pack persistence', () => {
     expect(await readFile(join(unpacked, 'assets', asset.sha256))).toEqual(bytes);
   });
 
+  it('resolves recovered media before rewriting its descriptor and preserves unavailable references', async () => {
+    const source = join(root, 'recovered.wav');
+    const bytes = Buffer.from('recovered managed media');
+    await writeFile(source, bytes);
+    const project = createProject('song', 'Recovered');
+    const asset: MediaAsset = { ...entityBase('asset', HUMAN_ACTOR), kind: 'audio', name: 'Recovered source', mimeType: 'audio/wav', sha256: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length, storage: 'managed-cache', externalPath: source, source: 'import' };
+    project.assets[asset.id] = asset;
+    const saved = await saveProjectFolder(project, join(root, 'Recovered'), { appVersion: 'test', resolveAssetSource: async (original) => original.externalPath });
+    expect(saved.warnings).toEqual([]);
+    expect(await readFile(join(saved.projectPath, 'assets', asset.sha256))).toEqual(bytes);
+    expect((await readProjectFolder(saved.projectPath)).project.assets[asset.id].storage).toBe('embedded');
+    expect(project.assets[asset.id]).toEqual(asset);
+
+    await rm(source);
+    const unavailable = await saveProjectFolder(project, join(root, 'Unavailable'), { appVersion: 'test', resolveAssetSource: async (original) => original.externalPath });
+    expect(unavailable.warnings).toHaveLength(1);
+    const persisted = JSON.parse(await readFile(join(unavailable.projectPath, 'project.json'), 'utf8'));
+    expect(persisted.assets[asset.id]).toMatchObject({ storage: 'managed-cache', externalPath: source });
+  });
+
   it('keeps the previous atomic file when validation rejects a replacement', async () => {
     const path = join(root, 'atomic.json');
     await atomicWriteFile(path, '{"valid":true}');

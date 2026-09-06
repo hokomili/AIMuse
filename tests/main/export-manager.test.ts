@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -125,6 +125,26 @@ describe('export pipeline', () => {
     const track = midi.tracks.find((value) => value.name === 'Fixture Lead')!;
     expect(track.notes[0]).toMatchObject({ ticks: 480, durationTicks: 480, midi: 69 });
     expect(track.pitchBends[0]).toMatchObject({ ticks: 720, value: 0.25 });
+  });
+
+  it('never writes an expired export after a stale allow, and admits a fresh request', async () => {
+    const actor: Actor = { id: 'expiry-agent', kind: 'agent', name: 'Expiry agent', color: '#123456' };
+    const destination = join(root, 'expired.mid');
+    const request = { projectId: projects.getActiveProject()!.id, kind: 'midi' as const, destination, overwrite: false };
+    const started = exports.start(request, actor);
+    const waiting = await terminal(started.jobId);
+    expect(waiting.status).toBe('waiting-for-user');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(waiting.approval!.expiresAt));
+    try {
+      expect(projects.resolveJob(started.jobId, 'allow-once')).toMatchObject({ status: 'cancelled', error: { code: 'approval-expired' } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await expect(stat(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+      const reservation = projects.reserveApproval(actor.id)!;
+      expect(reservation).toBeDefined();
+      const fresh = exports.start({ ...request, destination: join(root, 'fresh.mid') }, actor, reservation.reservationId);
+      expect((await terminal(fresh.jobId)).status).toBe('waiting-for-user');
+      projects.resolveJob(fresh.jobId, 'deny');
+    } finally { clock.mockRestore(); }
   });
 
   it('does not resurrect a queued agent export after cancellation during approval preflight', async () => {

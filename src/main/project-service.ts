@@ -107,6 +107,8 @@ export class ProjectService extends EventEmitter {
   private readonly operationIds = new Map<Id, Map<string, number>>();
   private readonly changes = new Map<Id, ChangeEntry[]>();
   private readonly jobs = new Map<Id, AsyncJob>();
+  private readonly approvalExpiryTimers = new Map<Id, ReturnType<typeof setTimeout>>();
+  private expiringApprovals = false;
   private approvalReservation?: { id: Id; ownerActorId: Id; jobId?: Id };
   private readonly locks = new Map<Id, HumanLock>();
   private readonly lockExpiryTimers = new Map<Id, ReturnType<typeof setTimeout>>();
@@ -144,6 +146,7 @@ export class ProjectService extends EventEmitter {
   getMcpInfo(): McpConnectionInfo { this.expireLocks(); return { ...clone(this.mcpInfo), sessions: [...this.presence.values()].map(clone) }; }
 
   snapshot(actorId = HUMAN_ACTOR.id): WorkspaceSnapshot {
+    this.expireApprovals();
     this.expireLocks();
     const active = this.activeProjectId ? this.projects.get(this.activeProjectId) : undefined;
     const history = active ? this.getHistory(active.id, actorId) : undefined;
@@ -415,11 +418,14 @@ export class ProjectService extends EventEmitter {
   removePresence(actorId: Id): void { this.presence.delete(actorId); this.publish(); }
   stopAgents(projectId?: Id): number { const stopped = new Set<Id>(); let count = 0; for (const [id, presence] of this.presence) if (!projectId || presence.projectId === projectId) { this.presence.delete(id); stopped.add(id); count += 1; } for (const job of this.jobs.values()) if ((!projectId || job.projectId === projectId) && !['completed', 'failed', 'cancelled'].includes(job.status) && stopped.has(job.ownerActorId)) this.upsertJob({ ...job, status: 'cancelled', message: 'Cancelled by Stop Agents.', updatedAt: nowIso() }); this.publish(); return count; }
 
-  reserveApproval(ownerActorId: Id): { reservationId: Id } | undefined { if (this.approvalReservation || [...this.jobs.values()].some((job) => job.status === 'waiting-for-user')) return undefined; const id = createId('approval-reservation'); this.approvalReservation = { id, ownerActorId }; return { reservationId: id }; }
+  reserveApproval(ownerActorId: Id): { reservationId: Id } | undefined { this.expireApprovals(); if (this.approvalReservation || [...this.jobs.values()].some((job) => job.status === 'waiting-for-user')) return undefined; const id = createId('approval-reservation'); this.approvalReservation = { id, ownerActorId }; return { reservationId: id }; }
   bindApprovalReservation(reservationId: Id, jobId: Id, ownerActorId: Id): boolean { const reservation = this.approvalReservation; if (!reservation || reservation.id !== reservationId || reservation.ownerActorId !== ownerActorId || (reservation.jobId !== undefined && reservation.jobId !== jobId)) return false; reservation.jobId = jobId; const job = this.jobs.get(jobId); if (job && job.status !== 'queued') this.approvalReservation = undefined; return true; }
   releaseApprovalReservation(reservationId: Id): void { if (this.approvalReservation?.id === reservationId) this.approvalReservation = undefined; }
   upsertJob(job: AsyncJob): void {
+    this.expireApprovals();
+    if (this.jobs.get(job.id)?.error?.code === 'approval-expired') return;
     let next = clone(job); const reservation = this.approvalReservation;
+    if (this.approvalExpired(next)) next = this.expiredApproval(next);
     if (next.status === 'waiting-for-user') {
       const incumbent = [...this.jobs.values()].find((candidate) => candidate.id !== next.id && candidate.status === 'waiting-for-user');
       const reservedForJob = reservation?.jobId === next.id;
@@ -429,12 +435,39 @@ export class ProjectService extends EventEmitter {
         next = { ...next, status: 'failed', message, approval: undefined, error: { code: 'approval_pending', message, retryable: true } };
       } else if (reservedForJob) this.approvalReservation = undefined;
     } else if (reservation?.jobId === next.id && next.status !== 'queued') this.approvalReservation = undefined;
-    this.jobs.set(next.id, clone(next)); this.emitEvent({ type: 'job', job: clone(next) }); this.publish();
+    if (['completed', 'failed', 'cancelled'].includes(next.status)) delete next.approval;
+    const timer = this.approvalExpiryTimers.get(next.id);
+    if (timer) clearTimeout(timer);
+    this.approvalExpiryTimers.delete(next.id);
+    this.jobs.set(next.id, clone(next));
+    if (next.status === 'waiting-for-user' && next.approval) {
+      const delay = Math.min(2_147_483_647, Math.max(1, Date.parse(next.approval.expiresAt) - Date.now()));
+      const timer = setTimeout(() => { this.approvalExpiryTimers.delete(next.id); this.expireApprovals(); const current = this.jobs.get(next.id); if (current?.status === 'waiting-for-user') this.upsertJob(current); }, delay);
+      timer.unref?.(); this.approvalExpiryTimers.set(next.id, timer);
+    }
+    if (next.error?.code === 'approval-expired') this.emit('approval-expired', clone(next));
+    this.emitEvent({ type: 'job', job: clone(next) }); this.publish();
   }
-  getJob<T = unknown>(jobId: Id): AsyncJob<T> | undefined { const job = this.jobs.get(jobId); return job ? clone(job) as AsyncJob<T> : undefined; }
-  listJobs(ownerActorId?: Id): AsyncJob[] { return [...this.jobs.values()].filter((job) => !ownerActorId || job.ownerActorId === ownerActorId).map(clone); }
-  cancelJob(jobId: Id): AsyncJob | undefined { const job = this.jobs.get(jobId); if (!job || ['completed', 'failed', 'cancelled'].includes(job.status)) return job ? clone(job) : undefined; const next = { ...job, status: 'cancelled' as const, updatedAt: nowIso(), message: 'Cancelled.' }; this.upsertJob(next); return clone(next); }
-  resolveJob(jobId: Id, decision: 'allow-once' | 'allow-session' | 'allow-always' | 'deny'): AsyncJob | undefined { const job = this.jobs.get(jobId); if (!job || job.status !== 'waiting-for-user') return job ? clone(job) : undefined; const next: AsyncJob = decision === 'deny' ? { ...job, status: 'cancelled', message: 'Denied by user.', updatedAt: nowIso(), approval: undefined } : { ...job, status: 'queued', message: `Approved (${decision}).`, updatedAt: nowIso(), approval: undefined, result: { ...(typeof job.result === 'object' && job.result ? job.result : {}), approvalDecision: decision } }; this.upsertJob(next); this.emit('approval-resolved', clone(next), decision); return clone(next); }
+  private approvalExpired(job: AsyncJob): boolean { return job.status === 'waiting-for-user' && Boolean(job.approval) && (!Number.isFinite(Date.parse(job.approval!.expiresAt)) || Date.parse(job.approval!.expiresAt) <= Date.now()); }
+  private expiredApproval(job: AsyncJob): AsyncJob {
+    const message = 'Approval expired before a decision. No approved action was started. Submit a new request if it is still needed.';
+    return { ...job, status: 'cancelled', cancellable: false, approval: undefined, updatedAt: nowIso(), message, error: { code: 'approval-expired', message, retryable: false } };
+  }
+  private expireApprovals(): void {
+    if (this.expiringApprovals) return;
+    this.expiringApprovals = true;
+    try { for (const job of this.jobs.values()) if (this.approvalExpired(job)) this.upsertJob(this.expiredApproval(job)); }
+    finally { this.expiringApprovals = false; }
+  }
+  cancelPendingApprovals(): void {
+    for (const job of this.jobs.values()) if (job.status === 'waiting-for-user') this.cancelJob(job.id);
+    for (const timer of this.approvalExpiryTimers.values()) clearTimeout(timer);
+    this.approvalExpiryTimers.clear(); this.approvalReservation = undefined;
+  }
+  getJob<T = unknown>(jobId: Id): AsyncJob<T> | undefined { this.expireApprovals(); const job = this.jobs.get(jobId); return job ? clone(job) as AsyncJob<T> : undefined; }
+  listJobs(ownerActorId?: Id): AsyncJob[] { this.expireApprovals(); return [...this.jobs.values()].filter((job) => !ownerActorId || job.ownerActorId === ownerActorId).map(clone); }
+  cancelJob(jobId: Id): AsyncJob | undefined { this.expireApprovals(); const job = this.jobs.get(jobId); if (!job || ['completed', 'failed', 'cancelled'].includes(job.status)) return job ? clone(job) : undefined; const next = { ...job, status: 'cancelled' as const, updatedAt: nowIso(), message: 'Cancelled.' }; this.upsertJob(next); return this.getJob(jobId); }
+  resolveJob(jobId: Id, decision: 'allow-once' | 'allow-session' | 'allow-always' | 'deny'): AsyncJob | undefined { this.expireApprovals(); const job = this.jobs.get(jobId); if (!job || job.status !== 'waiting-for-user') return job ? clone(job) : undefined; const next: AsyncJob = decision === 'deny' ? { ...job, status: 'cancelled', message: 'Denied by user.', updatedAt: nowIso(), approval: undefined } : { ...job, status: 'queued', message: `Approved (${decision}).`, updatedAt: nowIso(), approval: undefined, result: { ...(typeof job.result === 'object' && job.result ? job.result : {}), approvalDecision: decision } }; this.upsertJob(next); const committed = this.getJob(jobId)!; if (committed.error?.code !== 'approval-expired') this.emit('approval-resolved', clone(committed), decision); return committed; }
 
   getChanges(projectId: Id, afterRevision: number): ChangeEntry[] { return (this.changes.get(projectId) ?? []).filter((entry) => entry.revision > afterRevision).map(clone); }
   listTrace(projectId: Id, limit?: number): Promise<TransactionTraceEntry[]> { return this.options.trace.list(projectId, limit); }

@@ -138,19 +138,21 @@ export async function saveProjectFolder(project: AIMuseProject, requestedPath: s
   for (const asset of Object.values(persisted.assets)) {
     if (asset.storage === 'linked') continue;
     const destination = join(projectPath, 'assets', asset.sha256);
+    if (!(await exists(destination))) {
+      // Resolve the original descriptor: recovered projects have no process-local source registry.
+      const source = await options.resolveAssetSource?.(asset);
+      if (!source || !(await exists(source))) { warnings.push(`Media unavailable while saving: ${asset.name}`); continue; }
+      const actual = await sha256File(source);
+      if (actual.sha256.toLowerCase() !== asset.sha256.toLowerCase() || actual.byteLength !== asset.byteLength) {
+        warnings.push(`Media changed and was not embedded: ${asset.name}`); continue;
+      }
+      const temporary = `${destination}.${process.pid}.tmp`;
+      await copyFile(source, temporary);
+      await rename(temporary, destination);
+    }
     asset.relativePath = relative(projectPath, destination).split(sep).join('/');
     asset.externalPath = undefined;
     asset.storage = 'embedded';
-    if (await exists(destination)) continue;
-    const source = await options.resolveAssetSource?.(asset);
-    if (!source || !(await exists(source))) { warnings.push(`Media unavailable while saving: ${asset.name}`); continue; }
-    const actual = await sha256File(source);
-    if (actual.sha256.toLowerCase() !== asset.sha256.toLowerCase() || actual.byteLength !== asset.byteLength) {
-      warnings.push(`Media changed and was not embedded: ${asset.name}`); continue;
-    }
-    const temporary = `${destination}.${process.pid}.tmp`;
-    await copyFile(source, temporary);
-    await rename(temporary, destination);
   }
   const manifest: ProjectManifest = {
     format: 'AIMuse', schemaVersion: 1, projectId: persisted.id, name: persisted.name, kind: persisted.kind,

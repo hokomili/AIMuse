@@ -3,12 +3,14 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HUMAN_ACTOR, createId, entityBase, nowIso, validateProjectIntegrity, type Actor, type AsyncJob, type Checkpoint, type GenerationProvenance, type MediaAsset, type ProjectOperation, type ProjectTransaction } from '@aimuse/core';
+import { HUMAN_ACTOR, createId, createTrack, entityBase, nowIso, validateProjectIntegrity, type Actor, type AsyncJob, type AudioClip, type Checkpoint, type GenerationProvenance, type MediaAsset, type ProjectOperation, type ProjectTransaction } from '@aimuse/core';
 import { AudioEngineController } from '../../src/main/audio-engine';
 import { RecoveryJournal } from '../../src/main/journal';
 import { readProjectFolder, saveProjectFolder } from '../../src/main/persistence';
 import { ProjectService } from '../../src/main/project-service';
 import { TransactionTraceStore } from '../../src/main/trace-store';
+import { renderProjectToWav } from '../../src/main/project-renderer';
+import { decodeWav, encodeFloat32Wav } from '../../src/main/wav';
 import type { WorkspaceEvent } from '../../src/common/contracts';
 
 const AGENT_A: Actor = { id: 'agent-a', kind: 'agent', name: 'Muse A', color: '#22c55e', client: { product: 'test' } };
@@ -489,6 +491,94 @@ describe('ProjectService collaboration invariants', () => {
     }
   });
 
+  it('saves and saves as recovered managed media without a process-local source registration', async () => {
+    const project = projects.getActiveProject()!;
+    const samples = Float32Array.from({ length: 4800 }, (_, i) => Math.sin(i * Math.PI / 24) * 0.25);
+    const source = join(root, 'managed-source.wav'); const bytes = encodeFloat32Wav([samples], 48000);
+    await writeFile(source, bytes);
+    const asset: MediaAsset = { ...entityBase('asset', HUMAN_ACTOR), kind: 'audio', name: 'Recovered media', mimeType: 'audio/wav', sha256: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.length, storage: 'managed-cache', externalPath: source, source: 'import', sampleRate: 48000, channels: 1, durationSamples: samples.length };
+    const track = createTrack('audio', 'Recovered audio', '#123456', HUMAN_ACTOR);
+    track.routing.outputTrackId = Object.values(project.tracks).find((value) => value.kind === 'master')!.id;
+    const clip: AudioClip = { ...entityBase('clip', HUMAN_ACTOR), kind: 'audio', assetId: asset.id, trackId: track.id, name: 'Recovered clip', color: track.color, startTick: 0, durationTicks: 192, sourceStartSample: 0, sourceDurationSamples: samples.length, transposeSemitones: 0, stretchMode: 'repitch', reverse: false, warpMarkers: [], muted: false, gainDb: 0, fadeIn: { durationTicks: 0, curve: 'linear' }, fadeOut: { durationTicks: 0, curve: 'linear' }, loopEnabled: false };
+    expect(await projects.apply(transaction(HUMAN_ACTOR, [{ kind: 'asset.add', asset }, { kind: 'track.add', track }, { kind: 'clip.add', clip }]), HUMAN_ACTOR)).toMatchObject({ status: 'committed' });
+    const recovered = new ProjectService({ appVersion: 'test', checkpointRoot: join(root, 'checkpoints'), journal: new RecoveryJournal(join(root, 'recovery')), trace: new TransactionTraceStore(join(root, 'traces')), audio });
+    await recovered.initialize();
+    expect(recovered.getAssetSource(project.id, asset.id)).toBe(source);
+    for (const name of ['Recovered Save', 'Recovered Save As']) {
+      const saved = await recovered.save(project.id, join(root, name));
+      expect(saved.warnings).toEqual([]);
+      const reopened = await readProjectFolder(saved.projectPath);
+      expect(reopened.warnings).toEqual([]);
+      expect(reopened.project.assets[asset.id].storage).toBe('embedded');
+      expect(await readFile(join(saved.projectPath, reopened.project.assets[asset.id].relativePath!))).toEqual(bytes);
+      const destination = join(root, `${name}.wav`);
+      await renderProjectToWav({ project: reopened.project, destination, trackIds: [track.id], stem: true, endTick: 192 });
+      expect(decodeWav(await readFile(destination)).data[0]).toEqual(samples);
+    }
+    expect(await readFile(source)).toEqual(bytes);
+  });
+
+  it('expires approval at its deadline, publishes removal, and rejects stale decisions', () => {
+    vi.useFakeTimers();
+    try {
+      const timestamp = nowIso();
+      const job: AsyncJob = { id: 'deadline-job', ownerActorId: AGENT_A.id, kind: 'render', status: 'waiting-for-user', cancellable: true, progress: 0, message: 'Review', createdAt: timestamp, updatedAt: timestamp, approval: { kind: 'file-write', summary: 'Export', request: {}, expiresAt: new Date(Date.now() + 1000).toISOString() } };
+      const resolved = vi.fn(); projects.on('approval-resolved', resolved);
+      const events: AsyncJob[] = [];
+      projects.on('event', (event: WorkspaceEvent) => { if (event.type === 'job') events.push(event.job); });
+      projects.upsertJob(job);
+      vi.advanceTimersByTime(999);
+      expect(projects.getJob(job.id)?.status).toBe('waiting-for-user');
+      vi.advanceTimersByTime(1);
+      expect(events.at(-1)).toMatchObject({ status: 'cancelled', error: { code: 'approval-expired', retryable: false } });
+      expect(projects.resolveJob(job.id, 'allow-session')?.status).toBe('cancelled');
+      expect(resolved).not.toHaveBeenCalled();
+      expect(projects.getJob(job.id)).not.toHaveProperty('approval');
+      expect(projects.reserveApproval(AGENT_B.id)).toBeDefined();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['get', 'list', 'snapshot', 'reserve', 'resolve'] as const)('enforces approval expiry on %s even when its timer has not run', (action) => {
+    vi.useFakeTimers();
+    try {
+      const timestamp = nowIso();
+      const job: AsyncJob = { id: 'delayed-deadline', ownerActorId: AGENT_A.id, kind: 'media', status: 'waiting-for-user', cancellable: true, progress: 0, message: 'Review', createdAt: timestamp, updatedAt: timestamp, approval: { kind: 'file-read', summary: 'Open', request: {}, expiresAt: new Date(Date.now() + 1000).toISOString() } };
+      projects.upsertJob(job);
+      const resolved = vi.fn(); projects.on('approval-resolved', resolved);
+      vi.setSystemTime(Date.now() + 1000);
+      if (action === 'get') projects.getJob(job.id);
+      if (action === 'list') projects.listJobs();
+      if (action === 'snapshot') projects.snapshot();
+      if (action === 'reserve') expect(projects.reserveApproval(AGENT_B.id)).toBeDefined();
+      if (action === 'resolve') projects.resolveJob(job.id, 'allow-once');
+      expect(projects.getJob(job.id)).toMatchObject({ status: 'cancelled', error: { code: 'approval-expired' } });
+      expect(resolved).not.toHaveBeenCalled();
+      expect(projects.getJob(job.id)).not.toHaveProperty('approval');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('replaces approval timers, clears them on resolution/shutdown, and cannot revive expired work', () => {
+    vi.useFakeTimers();
+    try {
+      const timestamp = nowIso();
+      const job: AsyncJob = { id: 'timer-replacement', ownerActorId: AGENT_A.id, kind: 'render', status: 'waiting-for-user', cancellable: true, progress: 0, message: 'Review', createdAt: timestamp, updatedAt: timestamp, approval: { kind: 'file-write', summary: 'Export', request: {}, expiresAt: new Date(Date.now() + 1000).toISOString() } };
+      projects.upsertJob(job);
+      projects.upsertJob({ ...job, approval: { ...job.approval!, expiresAt: new Date(Date.now() + 2000).toISOString() } });
+      vi.advanceTimersByTime(1000);
+      expect(projects.getJob(job.id)?.status).toBe('waiting-for-user');
+      expect(projects.resolveJob(job.id, 'allow-once')?.status).toBe('queued');
+      expect(vi.getTimerCount()).toBe(0);
+      projects.upsertJob({ ...job, id: 'shutdown-wait', approval: { ...job.approval!, expiresAt: new Date(Date.now() + 1000).toISOString() } });
+      projects.cancelPendingApprovals();
+      expect(projects.getJob('shutdown-wait')?.status).toBe('cancelled');
+      expect(vi.getTimerCount()).toBe(0);
+      projects.upsertJob({ ...job, id: 'already-expired' });
+      expect(projects.getJob('already-expired')?.error?.code).toBe('approval-expired');
+      projects.upsertJob({ ...job, id: 'already-expired', status: 'queued' });
+      expect(projects.getJob('already-expired')?.status).toBe('cancelled');
+    } finally { vi.useRealTimers(); }
+  });
+
   it('admits only one exact approval reservation and never publishes a second waiting request', () => {
     let maxWaiting = 0;
     projects.on('event', (event: WorkspaceEvent) => { if (event.type === 'job') maxWaiting = Math.max(maxWaiting, projects.listJobs().filter((job) => job.status === 'waiting-for-user').length); });
@@ -500,7 +590,7 @@ describe('ProjectService collaboration invariants', () => {
     const timestamp = nowIso();
     const rogue: AsyncJob = { id: 'approval-same-owner-rogue', ownerActorId: AGENT_A.id, kind: 'render', status: 'waiting-for-user', progress: 0, message: 'Unbound approval.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, approval: { kind: 'file-write', summary: 'Unbound approval', request: {}, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
     projects.upsertJob(rogue);
-    expect(projects.getJob(rogue.id)).toMatchObject({ status: 'failed', approval: undefined, error: { code: 'approval_pending' } });
+    expect(projects.getJob(rogue.id)).toMatchObject({ status: 'failed', error: { code: 'approval_pending' } });
 
     const first: AsyncJob = { id: 'approval-first', ownerActorId: AGENT_A.id, kind: 'render', status: 'waiting-for-user', progress: 0, message: 'First approval.', createdAt: timestamp, updatedAt: timestamp, cancellable: true, approval: { kind: 'file-write', summary: 'First approval', request: { privatePath: '/owner-a/first' }, expiresAt: new Date(Date.now() + 60_000).toISOString() } };
     expect(projects.bindApprovalReservation(reservation!.reservationId, first.id, AGENT_B.id)).toBe(false);
@@ -512,7 +602,7 @@ describe('ProjectService collaboration invariants', () => {
 
     const second: AsyncJob = { ...first, id: 'approval-second', ownerActorId: AGENT_A.id, message: 'Second approval.', approval: { ...first.approval!, request: { privatePath: '/owner-a/second' } } };
     projects.upsertJob(second);
-    expect(projects.getJob(second.id)).toMatchObject({ status: 'failed', approval: undefined, error: { code: 'approval_pending', retryable: true } });
+    expect(projects.getJob(second.id)).toMatchObject({ status: 'failed', error: { code: 'approval_pending', retryable: true } });
     expect(maxWaiting).toBe(1);
 
     expect(projects.resolveJob(first.id, 'deny')).toMatchObject({ status: 'cancelled' });

@@ -339,6 +339,7 @@ export class McpHost {
   private token = ''; private port?: number; private httpServer?: HttpServer; private readonly instanceId = randomUUID(); private readonly sessions = new Map<string, McpSession>(); private readonly sessionReservations = new Map<string, PendingSessionReservation>(); private sessionGeneration = 0; private sessionSequence = 0; private acceptingSessions = false; private stopPromise?: Promise<void>; private readonly pending = new Map<Id, PendingAction>(); private readonly showAcks = new Map<string, ShowAcknowledgement>(); private readonly mutationScheduler = new FairAgentMutationScheduler(); private lastRevisions = new Map<Id, number>();
   constructor(private readonly options: McpHostOptions) {
     options.projects.on('event', (event) => { if (event.type !== 'workspace') return; for (const project of event.snapshot.projects) if (this.lastRevisions.get(project.id) !== project.revision) { this.lastRevisions.set(project.id, project.revision); void this.notifyProject(project.id, project.revision); } });
+    options.projects.on('approval-expired', (job: AsyncJob) => this.pending.delete(job.id));
     options.projects.on('approval-resolved', (job: AsyncJob, decision: string) => { const pending = this.pending.get(job.id); if (pending && decision !== 'deny') void this.runPending(job, pending); else if (decision === 'deny') this.pending.delete(job.id); });
   }
 
