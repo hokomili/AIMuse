@@ -13,6 +13,7 @@ import { AuthorityManager } from './authority-manager';
 import { atomicWriteFile, sha256File } from './persistence';
 import { ProjectService } from './project-service';
 import { decodeWav, type DecodedWav } from './wav';
+import { measureLoudness, type LoudnessMeasurement } from './loudness';
 
 const SUPPORTED = new Map<string, string>([
   ['.wav', 'audio/wav'], ['.flac', 'audio/flac'], ['.mp3', 'audio/mpeg'], ['.aac', 'audio/aac'], ['.m4a', 'audio/mp4'],
@@ -21,7 +22,7 @@ const SUPPORTED = new Map<string, string>([
 
 export interface AudioAnalysis {
   version: 1; assetId: Id; sampleRate: number; channels: number; durationSamples: number;
-  peakDbfs: number; rmsDbfs: number; integratedLufs: number; estimatedTempo?: number; estimatedKey?: string;
+  peakDbfs: number; rmsDbfs: number; integratedLufs: number; loudness: LoudnessMeasurement; estimatedTempo?: number; estimatedKey?: string;
   transientSamples: number[]; waveform: Array<{ min: number; max: number; rms: number }>;
 }
 
@@ -55,9 +56,10 @@ function xml(value: string): string { return value.replace(/[&<>"']/g, (match) =
 function mono(decoded: DecodedWav): Float32Array { const output = new Float32Array(decoded.frames); for (let channel = 0; channel < decoded.channels; channel += 1) for (let index = 0; index < decoded.frames; index += 1) output[index] += decoded.data[channel][index] / decoded.channels; return output; }
 
 export function analyzePcm(decoded: DecodedWav, assetId: Id): AudioAnalysis {
-  const signal = mono(decoded); let peak = 0; let energy = 0;
-  for (const sample of signal) { peak = Math.max(peak, Math.abs(sample)); energy += sample * sample; }
-  const rms = Math.sqrt(energy / Math.max(1, signal.length));
+  const loudness = measureLoudness(decoded);
+  const signal = mono(decoded); let energy = 0;
+  for (const channel of decoded.data) for (const sample of channel) energy += sample * sample;
+  const rms = Math.sqrt(energy / Math.max(1, decoded.frames * decoded.channels));
   const waveform: AudioAnalysis['waveform'] = []; const binCount = Math.min(1024, Math.max(64, Math.ceil(signal.length / 2048))); const binSize = Math.max(1, Math.ceil(signal.length / binCount));
   const envelope = new Float32Array(Math.ceil(signal.length / 512));
   for (let bin = 0; bin < binCount; bin += 1) { let minimum = 1; let maximum = -1; let sum = 0; const start = bin * binSize; const end = Math.min(signal.length, start + binSize); for (let index = start; index < end; index += 1) { const value = signal[index]; minimum = Math.min(minimum, value); maximum = Math.max(maximum, value); sum += value * value; } waveform.push({ min: end > start ? minimum : 0, max: end > start ? maximum : 0, rms: Math.sqrt(sum / Math.max(1, end - start)) }); }
@@ -71,8 +73,10 @@ export function analyzePcm(decoded: DecodedWav, assetId: Id): AudioAnalysis {
   for (let midi = 36; midi <= 83; midi += 1) { const frequency = 440 * 2 ** ((midi - 69) / 12); const omega = 2 * Math.PI * frequency / decoded.sampleRate; let real = 0; let imaginary = 0; for (let index = 0; index < analysisFrames; index += stride) { real += signal[index] * Math.cos(omega * index); imaginary -= signal[index] * Math.sin(omega * index); } pitchEnergy[midi % 12] += Math.hypot(real, imaginary); }
   const major = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]; const minor = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]; const names = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B']; let key: string | undefined; let keyScore = 0;
   for (let root = 0; root < 12; root += 1) for (const [profile, suffix] of [[major, 'major'], [minor, 'minor']] as const) { let score = 0; for (let note = 0; note < 12; note += 1) score += pitchEnergy[(note + root) % 12] * profile[note]; if (score > keyScore) { keyScore = score; key = `${names[root]} ${suffix}`; } }
-  const integratedLufs = Math.max(-120, -0.691 + 10 * Math.log10(Math.max(1e-12, energy / Math.max(1, signal.length))));
-  return { version: 1, assetId, sampleRate: decoded.sampleRate, channels: decoded.channels, durationSamples: decoded.frames, peakDbfs: db(peak), rmsDbfs: db(rms), integratedLufs, estimatedTempo: bestBpm, estimatedKey: key, transientSamples: transients.slice(0, 10_000), waveform };
+  // Keep the legacy numeric floor for clients; loudness.integratedLufs=null
+  // explicitly distinguishes silence/below-gate material from a measured value.
+  const integratedLufs = loudness.integratedLufs ?? -120;
+  return { version: 1, assetId, sampleRate: decoded.sampleRate, channels: decoded.channels, durationSamples: decoded.frames, peakDbfs: db(loudness.samplePeak), rmsDbfs: db(rms), integratedLufs, loudness, estimatedTempo: bestBpm, estimatedKey: key, transientSamples: transients.slice(0, 10_000), waveform };
 }
 
 function waveformSvg(name: string, waveform: AudioAnalysis['waveform']): string {

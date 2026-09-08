@@ -250,6 +250,8 @@ describe('export pipeline', () => {
     const first = await terminal(exports.start({ projectId, kind: 'master', destination: join(root, 'full.wav') }).jobId);
     expect(first.result?.warnings.join(' ')).toContain('sine guide voice'); expect(first.message).toContain('warning');
     const full = decodeWav(await readFile(join(root, 'full.wav')));
+    expect(first.result?.loudness).toMatchObject({ targetLufs: -14, clippedSamples: 0, masterGainDb: 0, masterMuted: false });
+    expect(first.result?.loudness?.output.integratedLufs).not.toBeNull();
     const master = Object.values(projects.getActiveProject()!.tracks).find((track) => track.kind === 'master')!;
     await edit([{ kind: 'track.update', trackId: master.id, changes: { gainDb: -18 } }]);
     expect((await terminal(exports.start({ projectId, kind: 'master', destination: join(root, 'quiet.wav') }).jobId)).status).toBe('completed');

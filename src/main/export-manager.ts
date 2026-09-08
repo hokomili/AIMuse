@@ -12,16 +12,15 @@ import { AudioEngineController } from './audio-engine';
 import { AuthorityManager } from './authority-manager';
 import { atomicWriteFile, packProjectFolder, sha256File } from './persistence';
 import { ProjectService } from './project-service';
-import { analyzePcm } from './media-manager';
+import { normalizeLoudness, type LoudnessNormalization } from './loudness-normalization';
 import { decodeWav, encodeFloat32Wav } from './wav';
-import { applyTrackFader } from './project-renderer';
 import { UnsupportedAudioRenderError } from './audio-render-error';
 
 export interface ExportPartialEffects {
   output: 'unchanged' | 'may-be-partial' | 'retained';
   project: 'unchanged' | 'save-may-have-completed';
 }
-export interface ExportReport { destination: string; warnings: string[]; fallbackReport?: string; request?: ExportRequest; partial?: ExportPartialEffects }
+export interface ExportReport { destination: string; warnings: string[]; loudness?: LoudnessNormalization; fallbackReport?: string; request?: ExportRequest; partial?: ExportPartialEffects }
 function xml(value: string): string { return value.replace(/[&<>"']/g, (match) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[match]!); }
 function safeName(value: string): string {
   const cleaned = [...value].map((character) => character.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(character) ? '_' : character).join('');
@@ -42,10 +41,10 @@ function exportPartial(request: ExportRequest, output: ExportPartialEffects['out
 function jobResult(job: AsyncJob): Record<string, unknown> { return typeof job.result === 'object' && job.result ? job.result as Record<string, unknown> : {}; }
 function jobRequest(job: AsyncJob): ExportRequest | undefined { return jobResult(job).request as ExportRequest | undefined; }
 
-async function normalizeLufs(path: string, target: number, master?: AIMuseProject['tracks'][string]): Promise<void> {
-  const decoded = decodeWav(await readFile(path)); const analysis = analyzePcm(decoded, 'render'); const requestedGain = 10 ** ((target - analysis.integratedLufs) / 20); let peak = 0; for (const channel of decoded.data) for (const sample of channel) peak = Math.max(peak, Math.abs(sample)); const gain = Math.min(requestedGain, peak > 0 ? 0.98 / peak : requestedGain);
-  for (const channel of decoded.data) for (let index = 0; index < channel.length; index += 1) channel[index] = Math.tanh(channel[index] * gain * 1.02) / Math.tanh(1.02); if (master) { const stereo: [Float32Array, Float32Array] = [decoded.data[0], decoded.data[1] ?? decoded.data[0].slice()]; applyTrackFader(stereo, master); decoded.data = decoded.channels === 1 ? [stereo[0].map((sample, index) => (sample + stereo[1][index]) * 0.5)] : stereo; }
-  await atomicWriteFile(path, encodeFloat32Wav(decoded.data, decoded.sampleRate));
+async function normalizeLufs(path: string, target: number, master?: AIMuseProject['tracks'][string]): Promise<{ loudness: LoudnessNormalization; warnings: string[] }> {
+  const { wav, loudness, warnings } = normalizeLoudness(decodeWav(await readFile(path)), target, master);
+  await atomicWriteFile(path, wav);
+  return { loudness, warnings };
 }
 
 function variationRandom(deliverable: SfxDeliverable, index: number): () => number {
@@ -186,7 +185,7 @@ export class ExportManager {
     }
   }
 
-  private async master(project: AIMuseProject, request: ExportRequest): Promise<ExportReport> { if ((request.format ?? 'wav') !== 'wav') throw new UnsupportedAudioRenderError(`${request.format?.toUpperCase()} encoding requires the native codec service; AIMuse did not silently substitute WAV.`); const destination = finalExtension(request.destination, '.wav'); const rendered = await this.audio.render(project, destination, request.startTick, request.endTick, request.trackIds, { skipMasterFader: true }); await normalizeLufs(destination, project.settings.masterLufsTarget, Object.values(project.tracks).find((track) => track.kind === 'master')); return { destination, warnings: rendered.warnings }; }
+  private async master(project: AIMuseProject, request: ExportRequest): Promise<ExportReport> { if ((request.format ?? 'wav') !== 'wav') throw new UnsupportedAudioRenderError(`${request.format?.toUpperCase()} encoding requires the native codec service; AIMuse did not silently substitute WAV.`); const destination = finalExtension(request.destination, '.wav'); const rendered = await this.audio.render(project, destination, request.startTick, request.endTick, request.trackIds, { skipMasterFader: true }); const normalized = await normalizeLufs(destination, project.settings.masterLufsTarget, Object.values(project.tracks).find((track) => track.kind === 'master')); return { destination, loudness: normalized.loudness, warnings: [...rendered.warnings, ...normalized.warnings] }; }
   private async stems(project: AIMuseProject, request: ExportRequest, jobId: Id): Promise<ExportReport> { if ((request.format ?? 'wav') !== 'wav') throw new UnsupportedAudioRenderError(`${request.format?.toUpperCase()} stem encoding requires the native codec service.`); const destination = resolve(request.destination); await mkdir(destination, { recursive: true }); const tracks = Object.values(project.tracks).filter((track) => !['master', 'folder'].includes(track.kind) && (!request.trackIds || request.trackIds.includes(track.id))); const warnings: string[] = []; for (let index = 0; index < tracks.length; index += 1) { if (this.projects.getJob(jobId)?.status === 'cancelled') throw new Error('Export cancelled.'); const path = join(destination, `${String(index + 1).padStart(2, '0')} ${safeName(tracks[index].name)}.wav`); const rendered = await this.audio.render(project, path, request.startTick, request.endTick, [tracks[index].id], { stem: true }); warnings.push(...rendered.warnings); this.projects.upsertJob({ ...this.projects.getJob(jobId)!, progress: 0.05 + 0.9 * (index + 1) / Math.max(1, tracks.length), message: `Rendered stem ${index + 1}/${tracks.length}`, updatedAt: nowIso() }); } return { destination, warnings }; }
   private async sfx(project: AIMuseProject, request: ExportRequest, jobId: Id): Promise<ExportReport> {
     const destination = resolve(request.destination); await mkdir(destination, { recursive: true }); const deliverables = Object.values(project.sfxDeliverables); if (!deliverables.length) throw new Error('Project has no SFX deliverables to export.');
@@ -198,11 +197,11 @@ export class ExportManager {
         const filename = deliverable.namingTemplate.replaceAll('{project}', safeName(project.name)).replaceAll('{name}', safeName(deliverable.name)).replaceAll('{index}', String(index).padStart(2, '0')).replaceAll('{tags}', safeName(deliverable.tags.join('-'))); const path = join(destination, `${safeName(filename)}.wav`);
         const key = process.platform === 'win32' ? path.toLowerCase() : path; if (files.has(key)) throw new Error(`SFX naming template creates a duplicate destination: ${path}`); files.add(key); if (!request.overwrite && await exists(path)) throw new Error(`SFX destination exists: ${path}`);
         const tempo = project.tempoEvents[project.tempoOrder[0]].bpm; const tailTicks = deliverable.seamlessLoop ? 0 : Math.round(deliverable.tailMilliseconds / 1_000 * tempo / 60 * project.settings.ppq);
-        const rendered = await this.audio.render(project, path, deliverable.startTick, deliverable.endTick + tailTicks); warnings.push(...rendered.warnings); const variation = await applySfxVariation(path, deliverable, index); await normalizeLufs(path, deliverable.targetLufs);
+        const rendered = await this.audio.render(project, path, deliverable.startTick, deliverable.endTick + tailTicks); warnings.push(...rendered.warnings); const variation = await applySfxVariation(path, deliverable, index); const normalized = await normalizeLufs(path, deliverable.targetLufs); warnings.push(...normalized.warnings.map(warning => `${deliverable.name} variant ${index}: ${warning}`));
         const finalPcm = decodeWav(await readFile(path));
         const seamJump = Math.max(...finalPcm.data.map((channel) => Math.abs(channel[0] - channel[channel.length - 1])));
         if (deliverable.seamlessLoop && seamJump > 1e-6) throw new Error(`${deliverable.name} variant ${index}: final PCM failed loop-boundary verification.`);
-        manifest.push({ deliverableId: deliverable.id, name: deliverable.name, file: `${safeName(filename)}.wav`, variant: index, tags: deliverable.tags, seamlessLoop: deliverable.seamlessLoop && seamJump <= 1e-6, loopVerification: deliverable.seamlessLoop ? { method: '10 ms cosine boundary fades after variation; final PCM boundary check', seamJump, threshold: 1e-6 } : undefined, loopStartSample: deliverable.seamlessLoop ? 0 : undefined, loopEndSample: deliverable.seamlessLoop ? variation.frames : undefined, targetLufs: deliverable.targetLufs, variation });
+        manifest.push({ deliverableId: deliverable.id, name: deliverable.name, file: `${safeName(filename)}.wav`, variant: index, tags: deliverable.tags, seamlessLoop: deliverable.seamlessLoop && seamJump <= 1e-6, loopVerification: deliverable.seamlessLoop ? { method: '10 ms cosine boundary fades after variation; final PCM boundary check', seamJump, threshold: 1e-6 } : undefined, loopStartSample: deliverable.seamlessLoop ? 0 : undefined, loopEndSample: deliverable.seamlessLoop ? variation.frames : undefined, targetLufs: deliverable.targetLufs, loudness: normalized.loudness, variation });
         done += 1; this.projects.upsertJob({ ...this.projects.getJob(jobId)!, progress: 0.05 + 0.9 * done / Math.max(1, total), message: `Rendered SFX ${done}/${total}`, updatedAt: nowIso() });
       }
     }
