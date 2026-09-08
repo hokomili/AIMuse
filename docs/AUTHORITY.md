@@ -20,6 +20,8 @@ Approval jobs and their request details are owner-scoped on every public MCP too
 
 An example process-lifetime policy is available at [authority-policy.example.json](authority-policy.example.json). Replace its paths and IDs before use.
 
+`--authority-policy=<absolute path>` accepts UTF-8 JSON with or without a leading byte-order mark (BOM), including BOM-prefixed output from Windows PowerShell. Both application startup and the headless runtime use the same reader. Malformed JSON reports the policy filename and encoding guidance; schema validation, expiry and permission checks still apply.
+
 ## MCP authority lifetime
 
 Every engine start creates a fresh random 32-byte MCP bearer. Empty or malformed values are never authority. Each request captures the current authority/admission generation; POST requests revalidate it after the complete body read and immediately before allocation or transport handling. Stop synchronously closes admission, advances that generation, then discards the bearer. A slow request authenticated before stop and any request reaching the still-closing listener during pending-session cleanup therefore receive only the authentication rejection once shutdown begins. Authority is not loaded from or written to an AIMuse credential store. The installed application requires no Keychain, DPAPI, libsecret, Electron `safeStorage`, or equivalent persistent protected-secret backend.

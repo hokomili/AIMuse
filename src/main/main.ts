@@ -1,10 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, session, type IpcMainInvokeEvent } from 'electron';
-import { readFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { HUMAN_ACTOR, type AuthorityPolicy, type ProjectTransaction } from '@aimuse/core';
 import { IPC, type ExportRequest, type HumanLockRequest, type NewProjectOptions, type TimelineSelection } from '../common/contracts';
 import { buildAgentClientSetup, isAgentClientId, type AgentClientSetupResult } from '../common/agent-clients';
+import { readAuthorityPolicyFile } from './authority-policy-file';
 import { EditorPresentationLifecycle, installEarlyBackgroundPresentation } from './editor-presentation-lifecycle';
 import { EngineRuntime } from './engine-runtime';
 import { bootstrapMcpBridgeEntry, buildMcpBridgeLaunch } from './mcp-bridge-entry';
@@ -299,7 +299,7 @@ async function initialize(): Promise<void> {
     let policy: AuthorityPolicy;
     if (authorityPolicyPath) {
       if (!isAbsolute(authorityPolicyPath)) throw new Error('--authority-policy must be an absolute path.');
-      policy = JSON.parse(await readFile(authorityPolicyPath, 'utf8')) as AuthorityPolicy;
+      policy = await readAuthorityPolicyFile(authorityPolicyPath);
     } else {
       const issuedAt = new Date();
       policy = {

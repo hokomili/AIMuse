@@ -1,9 +1,9 @@
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Actor, AuthorityPolicy } from '@aimuse/core';
+import type { Actor } from '@aimuse/core';
 import type { EngineStatus } from '../common/contracts';
 import { AudioEngineController } from './audio-engine';
 import { AuthorityManager } from './authority-manager';
+import { readAuthorityPolicyFile } from './authority-policy-file';
 import { ExportManager } from './export-manager';
 import { RecoveryJournal } from './journal';
 import { McpHost } from './mcp-host';
@@ -28,7 +28,7 @@ export class EngineRuntime {
     if (this.started) return;
     this.started = true;
     if (this.options.authorityPolicyPath) {
-      const raw = JSON.parse(await readFile(this.options.authorityPolicyPath, 'utf8')) as AuthorityPolicy;
+      const raw = await readAuthorityPolicyFile(this.options.authorityPolicyPath);
       const installed = await this.authority.install(raw);
       if (!installed.installed) throw new Error(`Authority policy was rejected: ${installed.reason}`);
     }
