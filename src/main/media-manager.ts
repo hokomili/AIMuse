@@ -1,3 +1,5 @@
+import { MAX_SOUNDFONT_BYTES, parseSoundFont, soundFontPresets } from './soundfont-bank';
+import { DEFAULT_SOUNDFONT } from '../common/soundfont-library';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { basename, extname, join, resolve } from 'node:path';
@@ -14,7 +16,7 @@ import { decodeWav, type DecodedWav } from './wav';
 
 const SUPPORTED = new Map<string, string>([
   ['.wav', 'audio/wav'], ['.flac', 'audio/flac'], ['.mp3', 'audio/mpeg'], ['.aac', 'audio/aac'], ['.m4a', 'audio/mp4'],
-  ['.ogg', 'audio/ogg'], ['.mid', 'audio/midi'], ['.midi', 'audio/midi'],
+  ['.sf2', 'audio/sf2'], ['.ogg', 'audio/ogg'], ['.mid', 'audio/midi'], ['.midi', 'audio/midi'],
 ]);
 
 export interface AudioAnalysis {
@@ -91,7 +93,7 @@ function midiImportOperations(project: AIMuseProject, bytes: Uint8Array, filenam
   const master = Object.values(project.tracks).find((track) => track.kind === 'master');
   const operations: ProjectOperation[] = [];
   const sourceTracks = midi.tracks.filter((track) => track.notes.length || track.pitchBends.length || Object.values(track.controlChanges).some((events) => events?.length));
-  if (sourceTracks.length > 250) throw new Error('MIDI file has too many populated tracks for one validated import transaction.');
+  if (sourceTracks.length > 170) throw new Error('MIDI file has too many populated tracks for one validated import transaction.');
   sourceTracks.forEach((source, index) => {
     const track = createTrack('instrument', source.name.trim() || `${basename(filename, extname(filename))} ${index + 1}`, '#8b5cf6', actor);
     track.routing.outputTrackId = master?.id;
@@ -113,7 +115,7 @@ function midiImportOperations(project: AIMuseProject, bytes: Uint8Array, filenam
       startTick: 0, durationTicks: endTick, muted: false, gainDb: 0, fadeIn: { durationTicks: 0, curve: 'equal-power' }, fadeOut: { durationTicks: 0, curve: 'equal-power' }, loopEnabled: false,
       notes, noteOrder: Object.keys(notes), controls, controlOrder: Object.keys(controls), pitchBends, pitchBendOrder: Object.keys(pitchBends),
     };
-    operations.push({ kind: 'track.add', track, index: Math.max(0, project.trackOrder.length - 1) + index }, { kind: 'clip.add', clip });
+    operations.push({ kind: 'track.add', track, index: Math.max(0, project.trackOrder.length - 1) + index }, { kind: 'device.add', device: { ...entityBase('device', actor), trackId: track.id, format: 'builtin', builtinKind: 'soundfont', name: 'SoundFont', bypassed: false, degraded: false, latencySamples: 0, parameters: {}, soundfont: { ...DEFAULT_SOUNDFONT, bank: source.instrument.percussion ? 128 : 0, program: source.instrument.number } } }, { kind: 'clip.add', clip });
   });
   return operations;
 }
@@ -143,10 +145,14 @@ export class MediaManager {
       const sourcePath = resolve(requestedPath); const extension = extname(sourcePath).toLowerCase(); const mimeType = SUPPORTED.get(extension); if (!mimeType) throw new Error(`Unsupported media type: ${extension || '(none)'}`);
       if (actor.kind === 'agent' && !authorityOverride) { const decision = await this.authority.file(sourcePath, 'read', true); if (!decision.allowed) throw new Error(decision.reason); }
       const info = await this.importRuntime.statSource(sourcePath); if (!info.isFile() || info.size <= 0 || info.size > 16 * 1024 ** 3) throw new Error('Media file size is outside AIMuse limits.');
+      if (extension === '.sf2' && info.size > MAX_SOUNDFONT_BYTES) throw new Error('SoundFont exceeds the 256 MiB limit.');
       effect.sourceRead = 'may-be-partial'; report(); const hashed = await this.importRuntime.hashSource(sourcePath); effect.sourceRead = 'completed'; report();
       const managedPath = join(this.root, 'media', hashed.sha256); effect.cache = 'may-be-partial'; report(); await this.importRuntime.copyToCache(sourcePath, managedPath); effect.cache = 'retained'; report();
-      const metadata = await parseFile(sourcePath, { duration: true, skipCovers: true }).catch(() => undefined); const timestamp = nowIso(); const base = { id: createId('asset'), revision: 0, createdAt: timestamp, updatedAt: timestamp, createdBy: actor.id, updatedBy: actor.id };
-      const asset: MediaAsset = { ...base, kind: mimeType === 'audio/midi' ? 'midi' : 'audio', name: basename(sourcePath), mimeType, sha256: hashed.sha256, byteLength: hashed.byteLength, storage: 'managed-cache', externalPath: managedPath, sampleRate: metadata?.format.sampleRate, channels: metadata?.format.numberOfChannels, durationSamples: metadata?.format.duration && metadata.format.sampleRate ? Math.round(metadata.format.duration * metadata.format.sampleRate) : undefined, source: 'import' };
+      const soundfontBytes = extension === '.sf2' ? await this.importRuntime.readSource(managedPath) : undefined;
+      if (soundfontBytes && (soundfontBytes.length !== hashed.byteLength || createHash('sha256').update(soundfontBytes).digest('hex') !== hashed.sha256)) throw new Error('SoundFont changed while importing; import it again.');
+      const presets = soundfontBytes ? soundFontPresets(parseSoundFont(soundfontBytes)) : undefined;
+      const metadata = presets ? undefined : await parseFile(sourcePath, { duration: true, skipCovers: true }).catch(() => undefined); const timestamp = nowIso(); const base = { id: createId('asset'), revision: 0, createdAt: timestamp, updatedAt: timestamp, createdBy: actor.id, updatedBy: actor.id };
+      const asset: MediaAsset = { ...base, kind: presets ? 'soundfont' : mimeType === 'audio/midi' ? 'midi' : 'audio', ...(presets ? { soundfontPresets: presets } : {}), name: basename(sourcePath), mimeType, sha256: hashed.sha256, byteLength: hashed.byteLength, storage: 'managed-cache', externalPath: managedPath, sampleRate: metadata?.format.sampleRate, channels: metadata?.format.numberOfChannels, durationSamples: metadata?.format.duration && metadata.format.sampleRate ? Math.round(metadata.format.duration * metadata.format.sampleRate) : undefined, source: 'import' };
       const operations: ProjectOperation[] = [{ kind: 'asset.add', asset }];
       if (asset.kind === 'midi') operations.push(...midiImportOperations(project, await this.importRuntime.readSource(sourcePath), asset.name, actor));
       effect.assetId = asset.id; effect.projectTransaction = 'may-have-committed'; report();

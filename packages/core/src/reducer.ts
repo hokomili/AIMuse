@@ -1,3 +1,4 @@
+import { SoundFontInstrumentSchema, SoundFontPresetSchema } from './soundfont-schema';
 import { applyPatches, enablePatches, produceWithPatches, type Patch } from 'immer';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -187,11 +188,13 @@ function declaredDeviceParametersError(device: Device): string | undefined {
 function declaredDeviceError(device: Device): string | undefined {
   if (!isDeclaredId(device.trackId)) return `Device ${device.id} has an invalid track ID.`;
   if (!['builtin', 'vst3', 'clap', 'missing'].includes(device.format)) return `Device ${device.id} has an invalid format.`;
-  if (device.builtinKind !== undefined && !['sampler', 'drum-rack', 'subtractive-synth', 'utility', 'eq', 'compressor', 'gate', 'saturator', 'chorus', 'delay', 'reverb', 'limiter', 'analyzer'].includes(device.builtinKind)) return `Device ${device.id} has an invalid built-in kind.`;
+  if (device.builtinKind !== undefined && !['soundfont', 'sampler', 'drum-rack', 'subtractive-synth', 'utility', 'eq', 'compressor', 'gate', 'saturator', 'chorus', 'delay', 'reverb', 'limiter', 'analyzer'].includes(device.builtinKind)) return `Device ${device.id} has an invalid built-in kind.`;
   if (device.pluginId !== undefined && (typeof device.pluginId !== 'string' || device.pluginId.length > 500)) return `Device ${device.id} has an invalid plug-in ID.`;
   if (device.pluginVersion !== undefined && (typeof device.pluginVersion !== 'string' || device.pluginVersion.length > 100)) return `Device ${device.id} has an invalid plug-in version.`;
   if (device.pluginHash !== undefined && (typeof device.pluginHash !== 'string' || device.pluginHash.length > 128)) return `Device ${device.id} has an invalid plug-in hash.`;
   if (device.vendor !== undefined && (typeof device.vendor !== 'string' || device.vendor.length > 500)) return `Device ${device.id} has an invalid vendor.`;
+  if (device.soundfont !== undefined && (device.format !== 'builtin' || device.builtinKind !== 'soundfont' || !SoundFontInstrumentSchema.safeParse(device.soundfont).success)) return `Device ${device.id} has invalid SoundFont settings.`;
+  if (device.builtinKind === 'soundfont' && !device.soundfont) return `Device ${device.id} requires SoundFont settings.`;
   return declaredDeviceMutableError(device) ?? declaredDeviceParametersError(device);
 }
 
@@ -228,7 +231,7 @@ function declaredCompSegmentError(project: AIMuseProject, segment: CompSegment):
 }
 
 function declaredMediaAssetError(asset: MediaAsset): string | undefined {
-  if (!['audio', 'midi', 'plugin-state', 'analysis', 'audition', 'checkpoint'].includes(asset.kind)) return `Media asset ${asset.id} has an invalid kind.`;
+  if (!['audio', 'midi', 'soundfont', 'plugin-state', 'analysis', 'audition', 'checkpoint'].includes(asset.kind)) return `Media asset ${asset.id} has an invalid kind.`;
   if (typeof asset.name !== 'string' || asset.name.length < 1 || asset.name.length > 500) return `Media asset ${asset.id} has an invalid name.`;
   if (typeof asset.mimeType !== 'string' || asset.mimeType.length < 1 || asset.mimeType.length > 200) return `Media asset ${asset.id} has an invalid MIME type.`;
   if (typeof asset.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(asset.sha256)) return `Media asset ${asset.id} has an invalid SHA-256.`;
@@ -239,6 +242,7 @@ function declaredMediaAssetError(asset: MediaAsset): string | undefined {
   if (asset.sampleRate !== undefined && (!Number.isInteger(asset.sampleRate) || asset.sampleRate < 1)) return `Media asset ${asset.id} has invalid audio metadata.`;
   if (asset.channels !== undefined && (!Number.isInteger(asset.channels) || asset.channels < 1 || asset.channels > 64)) return `Media asset ${asset.id} has invalid audio metadata.`;
   if (asset.durationSamples !== undefined && (!Number.isInteger(asset.durationSamples) || asset.durationSamples < 0)) return `Media asset ${asset.id} has invalid audio metadata.`;
+  if (asset.soundfontPresets !== undefined && (asset.kind !== 'soundfont' || !Array.isArray(asset.soundfontPresets) || asset.soundfontPresets.length < 1 || asset.soundfontPresets.length > 16_512 || asset.soundfontPresets.some((preset) => !SoundFontPresetSchema.safeParse(preset).success))) return `Media asset ${asset.id} has invalid SoundFont presets.`;
   if (asset.source !== undefined && !['import', 'recording', 'generation', 'render', 'system'].includes(asset.source)) return `Media asset ${asset.id} has an invalid source.`;
   return undefined;
 }
@@ -911,7 +915,7 @@ function applyOperation(project: AIMuseProject, operation: ProjectOperation, ope
     case 'asset.delete': {
       const asset = expectEntity(project.assets[operation.assetId], operationIndex, 'Asset', operation.expectedRevision);
       assertDeclaredEntityBase(asset, operationIndex, 'Media asset');
-      if (Object.values(project.clips).some((clip) => clip.kind === 'audio' && clip.assetId === asset.id) || Object.values(project.devices).some((device) => device.stateAssetId === asset.id) || Object.values(project.checkpoints).some((checkpoint) => checkpoint.snapshotAssetId === asset.id) || Object.values(project.provenance).some((entry) => entry.assetId === asset.id || entry.referenceAssetIds.includes(asset.id)) || Object.values(project.variants).some((variant) => variant.snapshotAssetId === asset.id)) conflict(operationIndex, 'Asset is still referenced.');
+      if (Object.values(project.clips).some((clip) => clip.kind === 'audio' && clip.assetId === asset.id) || Object.values(project.devices).some((device) => device.stateAssetId === asset.id || device.soundfont?.assetId === asset.id) || Object.values(project.checkpoints).some((checkpoint) => checkpoint.snapshotAssetId === asset.id) || Object.values(project.provenance).some((entry) => entry.assetId === asset.id || entry.referenceAssetIds.includes(asset.id)) || Object.values(project.variants).some((variant) => variant.snapshotAssetId === asset.id)) conflict(operationIndex, 'Asset is still referenced.');
       delete project.assets[asset.id]; return;
     }
     case 'provenance.register': {
@@ -1148,6 +1152,7 @@ export function validateProjectIntegrity(project: AIMuseProject): void {
     const track = project.tracks[device.trackId];
     if (!track || !track.deviceIds.includes(device.id)) throw new Error(`Device ${device.id} is orphaned.`);
     if (track.kind === 'folder' || track.kind === 'midi') throw new Error(`Device ${device.id} is assigned to an unsupported track kind.`);
+    if (device.soundfont?.source === 'asset' && project.assets[device.soundfont.assetId!]?.kind !== 'soundfont') throw new Error(`Device ${device.id} references missing SoundFont media.`);
     if (device.stateAssetId && !project.assets[device.stateAssetId]) throw new Error(`Device ${device.id} references missing state media.`);
   }
   for (const lane of Object.values(project.automationLanes)) {

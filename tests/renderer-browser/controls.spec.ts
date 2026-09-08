@@ -25,6 +25,7 @@ function snapshot(empty = false, waitingApproval = false): WorkspaceSnapshot {
     kind: 'audition', name: 'Audition fixture.wav', mimeType: 'audio/wav', sha256: 'b'.repeat(64), byteLength: 384_044,
     storage: 'managed-cache', sampleRate: 48_000, channels: 2, durationSamples: 96_000, source: 'render',
   };
+  project.assets.asset_sf2_ui = { id: 'asset_sf2_ui', revision: 0, createdAt: timestamp, updatedAt: timestamp, createdBy: 'human-local', updatedBy: 'human-local', kind: 'soundfont', name: 'Custom library.sf2', mimeType: 'audio/sf2', sha256: 'c'.repeat(64), byteLength: 1000, storage: 'managed-cache', soundfontPresets: [{ bank: 0, program: 5, name: 'Custom keys' }] };
   const approvalJob: AsyncJob = {
     id: 'approval-job_ui', ownerActorId: 'agent-ui', projectId: project.id, kind: 'render', status: 'waiting-for-user', progress: 0,
     message: 'Export requires approval.', createdAt: timestamp, updatedAt: timestamp, cancellable: true,
@@ -66,6 +67,7 @@ async function openEditor(page: Page, empty = false, waitingApproval = false): P
       if (operation.kind === 'section.update') { Object.assign(project.sections[String(operation.sectionId)], operation.changes); project.sections[String(operation.sectionId)].revision += 1; }
       if (operation.kind === 'section.delete') { delete project.sections[String(operation.sectionId)]; project.sectionOrder = project.sectionOrder.filter((id: string) => id !== operation.sectionId); }
       if (operation.kind === 'lyrics.set') project.lyrics = String(operation.lyrics);
+      if (operation.kind === 'device.update') { Object.assign(project.devices[String(operation.deviceId)], operation.changes); project.devices[String(operation.deviceId)].revision += 1; }
       if (operation.kind === 'device.add') { const device = structuredClone(operation.device) as Record<string, any>; project.devices[device.id] = device; project.tracks[device.trackId].deviceIds.push(device.id); }
       if (operation.kind === 'automation.lane.add') { const lane = structuredClone(operation.lane) as Record<string, any>; project.automationLanes[lane.id] = lane; project.tracks[lane.trackId].automationLaneIds.push(lane.id); }
       project.revision += 1; state.projects[0].revision = project.revision;
@@ -141,6 +143,7 @@ test('wires the main studio controls to durable UI actions', async ({ page }) =>
   await expect(page.getByRole('button', { name: 'Draw MIDI clip tool' })).toHaveAttribute('aria-pressed', 'true');
   await page.locator('.track-lane').first().click({ position: { x: 40, y: 30 } });
   await expect.poll(() => transactionLabels(page)).toContain('Create MIDI clip');
+  await expect(page.getByRole('combobox', { name: 'SoundFont preset' })).toHaveValue('0:0');
   await page.getByRole('button', { name: 'Split tool' }).click();
   await page.locator('.arrangement-clip').first().click({ position: { x: 30, y: 20 } });
   await expect.poll(() => transactionLabels(page)).toContain('Split “New idea”');
@@ -267,4 +270,25 @@ test('does not expose built-in generation or provider credential controls', asyn
   await expect(page.getByRole('button', { name: 'Generate', exact: true })).toHaveCount(0);
   await expect(page.getByText(/provider credential/i)).toHaveCount(0);
   await expect(page.getByText(/API key/i)).toHaveCount(0);
+});
+
+
+test('selects and searches SoundFont instruments through attributed preset edits', async ({ page }) => {
+  await openEditor(page);
+  await page.locator('.track-header').first().click();
+  await page.getByRole('button', { name: 'Add device to Ideas' }).click();
+  await page.getByRole('button', { name: /SoundFont.*287 presets/ }).click();
+  const preset = page.getByRole('combobox', { name: 'SoundFont preset' });
+  await expect(preset).toHaveValue('0:0');
+  await preset.selectOption('0:48');
+  await expect(preset).toHaveValue('0:48');
+  await page.getByRole('textbox', { name: 'Find SoundFont preset' }).fill('drums');
+  await preset.selectOption('128:0');
+  await expect(preset).toHaveValue('128:0');
+  await expect(page.getByText('Drum notes use General MIDI key mapping.', { exact: false })).toBeVisible();
+  await page.getByRole('combobox', { name: 'SoundFont library' }).selectOption('asset_sf2_ui');
+  await expect(preset).toHaveValue('0:5');
+  await expect(preset).toContainText('Custom keys');
+  const edits = await page.evaluate(() => (window as unknown as { __aimuseCalls: Array<{ name: string; args: Array<{ operations?: Array<Record<string, unknown>> }> }> }).__aimuseCalls.flatMap((call) => call.args[0]?.operations ?? []).filter((operation) => operation.kind === 'device.update'));
+  expect(edits).toEqual(expect.arrayContaining([expect.objectContaining({ changes: { soundfont: { source: 'generaluser-gs-2.0.3', bank: 128, program: 0 }, presetName: 'Standard 1' }, expectedRevision: 1 })]));
 });

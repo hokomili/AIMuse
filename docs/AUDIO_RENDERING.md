@@ -1,14 +1,16 @@
 # Audio rendering contract
 
-Updated 2026-09-06. This describes current source behavior; acceptance evidence applies only to its recorded package bytes. It does not expand the unfinished DSP roadmap.
+Updated 2026-09-08. This describes current source behavior; acceptance evidence applies only to its recorded package bytes. It does not expand the unfinished DSP roadmap.
 
 Playback previews, audition/consolidation and WAV exports share one renderer. Preview cache names include a renderer version so a corrected package cannot reuse an old renderer's revision file. A failed refresh pauses playback and reports the current revision's error; starting playback requires a render of the current revision.
 
 ## Supported processing
 
+- SoundFont provides sampled instruments and drums from the bundled GeneralUser GS library or imported SF2 banks; UI and agents can select saved presets. See [SoundFont instruments](SOUNDFONTS.md) for controls, assets and limits.
+
 - MIDI with no instrument uses a sine guide voice and reports that choice. Muse Synth provides one sine oscillator per note, attack, note-off release and a resonant low-pass filter. It is not a two-oscillator synthesizer. It must be the first active device, with at most one instrument per track.
 - Utility provides gain and stereo width. Compressor uses a linked stereo peak envelope, threshold, ratio, attack and release. Delay provides time, feedback and dry/wet mix. Analyzer is observational. Device bypass skips processing.
-- MIDI notes, CC7 volume, CC11 expression and pitch bend (fixed ±2 semitones) render per channel. Velocity zero and probability zero are intentional silence. Fractional probability and other CC controllers fail explicitly.
+- MIDI notes, CC7 volume, CC11 expression and pitch bend (fixed ±2 semitones) render per channel. Velocity zero and probability zero are intentional silence. SoundFont additionally supports CC1 modulation, CC10 pan and CC64 sustain. Fractional probability and other CC controllers fail explicitly.
 - PCM/float WAV sources at 8–192 kHz, mono/stereo, use finite windowed-sinc interpolation for sample-rate conversion and repitch. Downsampling reduces the filter cutoff to suppress aliasing. Same-rate integer sample access is direct. Source crop, reverse, timeline duration, fades and explicit clip looping are honored. New imports default to repitch. Legacy stretch-tagged clips are accepted only at natural speed without independent transposition or duration expansion; warp and time stretching fail.
 - Fades use the authored linear, equal-power or S curve across the clip's timeline. `loopEnabled` requires `loopLengthTicks`; loops repeat clip-relative content within the total clip duration. Tempo conversion determines timeline and note positions.
 - Track output routes form an acyclic graph to aux/master. Inserts precede static track gain and stereo-balance pan (unity at centre). Mute silences a track and its inputs. A solo admits sources whose output path contains that soloed track. Folder hierarchy alone does not route audio.

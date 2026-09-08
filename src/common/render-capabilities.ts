@@ -1,12 +1,12 @@
 /** Shared by public help and the editor; do not advertise descriptor-only DSP. */
-export const RENDERED_BUILTINS = ['subtractive-synth', 'utility', 'compressor', 'delay', 'analyzer'] as const;
+export const RENDERED_BUILTINS = ['soundfont', 'subtractive-synth', 'utility', 'compressor', 'delay', 'analyzer'] as const;
 export const RENDER_CAPABILITIES = {
-  instruments: 'MIDI without an instrument uses a sine guide voice. Muse Synth is one sine oscillator with attack, note-off release and a resonant low-pass filter.',
+  instruments: 'SoundFont plays bundled GeneralUser GS instruments/drums or imported SF2 presets with sample envelopes, velocity layers, filters and modulation. Preset selection is device.soundfont (source, assetId when imported, bank, program). MIDI without an instrument uses a sine guide voice. Muse Synth is one sine oscillator with attack, note-off release and a resonant low-pass filter.',
   devices: RENDERED_BUILTINS,
   audio: 'PCM/float WAV, mono or stereo at 8–192 kHz; windowed-sinc sample-rate conversion, crop, reverse, repitch, clip fades and explicit clip looping.',
   limits: 'Offline renders include preroll from the project origin and support up to 30 minutes. Legacy stretch-tagged imports render at natural speed only when no stretching or independent transposition is needed. New WAV imports default to repitch.',
   loops: 'SFX applies pitch/timing variation, crops declared loop points, adds up to 10 ms cosine boundary fades, normalizes, then verifies final endpoint continuity for every variant. Metadata reports measured seamJump. This is an objective splice check, not a listening-quality verdict. loopStartSample/end must be provided together.',
-  midi: 'Notes, clip looping/fades, CC7 volume, CC11 expression and pitch bend with a fixed +/-2-semitone range. Other CCs and fractional note probability are not rendered.',
+  midi: 'Notes, clip looping/fades, CC7 volume, CC11 expression and pitch bend with a fixed +/-2-semitone range. SoundFont additionally supports CC1 modulation, CC10 pan and CC64 sustain. Other CCs and fractional note probability are not rendered. SoundFont voices use their bank envelopes; internal reverb/chorus are disabled. Clip/loop boundaries cut release tails.',
   routing: 'Acyclic track-to-aux/master output routes and static gain/pan/mute/solo. Stems tap each selected track after its inserts and fader, before downstream buses/master; an aux stem includes its inputs.',
   master: 'Master exports apply the existing approximate loudness normalization to the premaster mix, then apply the master gain/pan/mute. Master fader changes therefore remain audible. Stems are not normalized.',
   unsupported: 'Sampler/drum-rack voices, other effects, VST3/CLAP processing, nonzero latency compensation, sends/sidechains, automation and warp/time-stretch processing are unavailable. Affected audio renders fail explicitly; bypass/remove unsupported processing or render the source externally and import WAV. MIDI/DAWproject may still preserve editable data, not rendered sound.',

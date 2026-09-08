@@ -1,3 +1,4 @@
+import { SoundFontInstrumentSchema, SoundFontPresetSchema } from './soundfont-schema';
 import { z } from 'zod';
 import type { AIMuseProject } from './model';
 import type { ProjectOperation, ProjectTransaction } from './operations';
@@ -60,9 +61,9 @@ const CompSegmentSchema = z.object({ ...EntityBaseShape, trackId: IdSchema, take
 const ParameterSchema = z.object({ id: z.string().min(1).max(500), name: z.string().min(1).max(500), value: FiniteSchema, defaultValue: FiniteSchema, min: FiniteSchema, max: FiniteSchema, unit: z.string().max(80).optional(), automatable: z.boolean() }).strict();
 const DeviceSchema = z.object({
   ...EntityBaseShape, trackId: IdSchema, format: z.enum(['builtin', 'vst3', 'clap', 'missing']),
-  builtinKind: z.enum(['sampler', 'drum-rack', 'subtractive-synth', 'utility', 'eq', 'compressor', 'gate', 'saturator', 'chorus', 'delay', 'reverb', 'limiter', 'analyzer']).optional(),
+  builtinKind: z.enum(['soundfont', 'sampler', 'drum-rack', 'subtractive-synth', 'utility', 'eq', 'compressor', 'gate', 'saturator', 'chorus', 'delay', 'reverb', 'limiter', 'analyzer']).optional(),
   pluginId: z.string().max(500).optional(), pluginVersion: z.string().max(100).optional(), pluginHash: z.string().max(128).optional(), name: z.string().min(1).max(500), vendor: z.string().max(500).optional(),
-  bypassed: z.boolean(), degraded: z.boolean(), latencySamples: z.number().int().nonnegative(), stateAssetId: IdSchema.optional(), presetName: z.string().max(500).optional(), parameters: z.record(z.string(), ParameterSchema),
+  bypassed: z.boolean(), degraded: z.boolean(), latencySamples: z.number().int().nonnegative(), stateAssetId: IdSchema.optional(), soundfont: SoundFontInstrumentSchema.optional(), presetName: z.string().max(500).optional(), parameters: z.record(z.string(), ParameterSchema),
 }).strict();
 const SendSchema = z.object({ ...EntityBaseShape, sourceTrackId: IdSchema, destinationTrackId: IdSchema, gainDb: FiniteSchema.min(-120).max(24), preFader: z.boolean(), enabled: z.boolean() }).strict();
 const SidechainSchema = z.object({ ...EntityBaseShape, sourceTrackId: IdSchema, destinationDeviceId: IdSchema, busIndex: z.number().int().nonnegative(), enabled: z.boolean() }).strict();
@@ -71,8 +72,8 @@ const TargetSchema = z.union([z.object({ kind: z.literal('track'), parameter: z.
 const LaneSchema = z.object({ ...EntityBaseShape, trackId: IdSchema, target: TargetSchema, points: z.record(IdSchema, PointSchema), pointOrder: z.array(IdSchema), armed: z.boolean(), visible: z.boolean() }).strict();
 
 const AssetSchema = z.object({
-  ...EntityBaseShape, kind: z.enum(['audio', 'midi', 'plugin-state', 'analysis', 'audition', 'checkpoint']), name: z.string().min(1).max(500), mimeType: z.string().min(1).max(200), sha256: z.string().regex(/^[a-f0-9]{64}$/i), byteLength: z.number().int().nonnegative(), storage: z.enum(['embedded', 'linked', 'managed-cache']),
-  relativePath: z.string().max(2_000).optional(), externalPath: z.string().max(32_000).optional(), sampleRate: z.number().int().positive().optional(), channels: z.number().int().min(1).max(64).optional(), durationSamples: z.number().int().nonnegative().optional(), source: z.enum(['import', 'recording', 'generation', 'render', 'system']).optional(),
+  ...EntityBaseShape, kind: z.enum(['audio', 'midi', 'soundfont', 'plugin-state', 'analysis', 'audition', 'checkpoint']), name: z.string().min(1).max(500), mimeType: z.string().min(1).max(200), sha256: z.string().regex(/^[a-f0-9]{64}$/i), byteLength: z.number().int().nonnegative(), storage: z.enum(['embedded', 'linked', 'managed-cache']),
+  soundfontPresets: z.array(SoundFontPresetSchema).min(1).max(16_512).optional(), relativePath: z.string().max(2_000).optional(), externalPath: z.string().max(32_000).optional(), sampleRate: z.number().int().positive().optional(), channels: z.number().int().min(1).max(64).optional(), durationSamples: z.number().int().nonnegative().optional(), source: z.enum(['import', 'recording', 'generation', 'render', 'system']).optional(),
 }).strict();
 const ProvenanceSchema = z.object({ ...EntityBaseShape, assetId: IdSchema, provider: z.enum(['elevenlabs', 'stability', 'lyria']), model: z.string().min(1).max(300), modelVersion: z.string().max(100).optional(), kind: z.enum(['music', 'sfx', 'audio-to-audio', 'section-replace']), prompt: z.string().min(1).max(20_000), lyrics: z.string().max(200_000).optional(), referenceAssetIds: z.array(IdSchema).max(20), requestId: z.string().max(500).optional(), costMinor: z.number().int().nonnegative().optional(), currency: z.string().max(10).optional(), rightsDeclaration: z.enum(['original', 'licensed', 'owned-reference']), transformations: z.array(z.string().max(500)).max(200), experimental: z.boolean() }).strict();
 const VariationSchema = z.object({ seed: z.number().int(), pitchRangeSemitones: FiniteSchema.min(0).max(24), gainRangeDb: FiniteSchema.min(0).max(24), timingRangeMilliseconds: FiniteSchema.min(0).max(5_000) }).strict();
@@ -146,7 +147,7 @@ export function projectOperationSchema(kind: ProjectOperation['kind']): z.ZodTyp
     case 'automation.point.upsert': return z.object({ kind: z.literal(raw.kind), laneId: IdSchema, point: PointSchema, expectedRevision: z.number().int().nonnegative().optional() }).strict();
     case 'automation.point.delete': return z.object({ kind: z.literal(raw.kind), laneId: IdSchema, pointId: IdSchema, expectedRevision: z.number().int().nonnegative().optional() }).strict();
     case 'device.add': return z.object({ kind: z.literal(raw.kind), device: DeviceSchema, index: z.number().int().nonnegative().optional() }).strict();
-    case 'device.update': return z.object({ kind: z.literal(raw.kind), deviceId: IdSchema, changes: z.object({ name: z.string().min(1).max(500).optional(), bypassed: z.boolean().optional(), degraded: z.boolean().optional(), latencySamples: z.number().int().nonnegative().optional(), stateAssetId: IdSchema.optional(), presetName: z.string().max(500).optional() }).strict(), expectedRevision: z.number().int().nonnegative().optional() }).strict();
+    case 'device.update': return z.object({ kind: z.literal(raw.kind), deviceId: IdSchema, changes: z.object({ name: z.string().min(1).max(500).optional(), bypassed: z.boolean().optional(), degraded: z.boolean().optional(), latencySamples: z.number().int().nonnegative().optional(), stateAssetId: IdSchema.optional(), soundfont: SoundFontInstrumentSchema.optional(), presetName: z.string().max(500).optional() }).strict(), expectedRevision: z.number().int().nonnegative().optional() }).strict();
     case 'device.move': return z.object({ kind: z.literal(raw.kind), deviceId: IdSchema, trackId: IdSchema, index: z.number().int().nonnegative(), expectedRevision: z.number().int().nonnegative().optional() }).strict();
     case 'device.parameter.set': return z.object({ kind: z.literal(raw.kind), deviceId: IdSchema, parameterId: z.string().min(1).max(500), value: FiniteSchema, expectedRevision: z.number().int().nonnegative().optional() }).strict();
     case 'device.delete': return z.object({ kind: z.literal(raw.kind), deviceId: IdSchema, expectedRevision: z.number().int().nonnegative().optional() }).strict();

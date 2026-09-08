@@ -1,3 +1,4 @@
+import { BUNDLED_SOUNDFONT, DEFAULT_SOUNDFONT } from '../common/soundfont-library';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { mkdir, readFile, stat } from 'node:fs/promises';
@@ -309,12 +310,13 @@ Each tool's JSON Schema has action-specific \`oneOf\` branches and field descrip
 
 Inline media bytes, external provider calls, agent approval, writes to historical provenance, and generic server-owned operations are rejected. AIMuse has no provider adapter, provider credential, content-generation job, or source-separation adapter. Recording and plug-in hosting can require human approval. Use tool results—not assumptions about client support for instructions, prompts, or resources—as the authoritative next-step surface.`;
 
-const HelpTopicSchema = z.enum(['getting-started', 'tool-contracts', 'projects-and-edits', 'jobs-and-approvals', 'files-and-audit', 'collaboration', 'resources', 'composition', 'operation-schemas', 'rendering']).describe('Focused help topic; omit for getting-started.');
+const HelpTopicSchema = z.enum(['getting-started', 'tool-contracts', 'projects-and-edits', 'jobs-and-approvals', 'files-and-audit', 'collaboration', 'resources', 'composition', 'operation-schemas', 'rendering', 'instruments']).describe('Focused help topic; omit for getting-started.');
 function helpTopic(topic = 'getting-started', operationKind?: string, projectId = '<observed project ID>', actorId = '<session actor ID>'): Record<string, unknown> {
   const topics: Record<string, Record<string, unknown>> = {
     composition: { rules: COMPOSITION_RULES, example: compositionExample(projectId, actorId), nextSteps: ['Submit example as project_apply arguments, or adapt the IDs/note values first.', 'project_observe the committed entities.', 'export_manage kind master or sfx-batch to an authorized fresh destination, then job_manage wait/inspect.'] },
     'operation-schemas': { operationKinds: PUBLIC_OPERATION_KINDS, schemas: operationKind ? { [operationKind]: OPERATION_SCHEMAS[operationKind] } : OPERATION_SCHEMAS, rules: COMPOSITION_RULES },
     rendering: { capabilities: RENDER_CAPABILITIES },
+    instruments: { library: BUNDLED_SOUNDFONT, defaultSettings: DEFAULT_SOUNDFONT, guidance: 'Add builtinKind soundfont with soundfont settings, before track effects. Select a preset using device.update changes.soundfont. Bank/program are zero-based; bank 128 is drums on any note channel. Import .sf2 with media_manage import, observe asset.soundfontPresets, then select source asset with assetId. Imported banks are copied into project assets on Save/Pack. One active instrument per track; bypass the existing instrument before adding a replacement. Use project_observe after editing and render/audition to hear changes. MIDI export cannot preserve custom SoundFont timbres; export WAV stems for other DAWs.' },
     'getting-started': { workflow: ['session_manage join', 'project_manage list', 'project_observe', 'project_apply or a domain tool', 'trace_replay for selected durable transaction visualization', 'job_manage for returned jobId', 're-observe'], rules: ['Use unique clientOperationId values.', 'Treat next as actionable guidance.', 'A human alone can resolve approvals.'] },
     'tool-contracts': { guidance: 'Read tools/list. Every action tool exposes oneOf branches that declare required and forbidden fields; important fields and the structured output envelope are described. Invalid action/field combinations are rejected before execution.' },
     'projects-and-edits': { guidance: 'Observe before applying. project_apply is idempotent and actor-authenticated; branch commits require variantId. Server-owned checkpoint/variant create, merge, and discard actions use fair bounded admission but are not idempotent; compare is read-only. Re-observe revisions after every commit or queued cancellation. trace_replay visualizes a selected durable transaction and returns before/after canonical hashes; it never reapplies the transaction.' },
@@ -649,7 +651,17 @@ export class McpHost {
       if (!deviceId || !project.devices[deviceId]) return jsonText({ error: 'device_not_found' });
       let operation: ProjectOperation;
       if (action === 'set-parameter' && parameterId && value !== undefined) operation = { kind: 'device.parameter.set', deviceId, parameterId, value, expectedRevision: project.devices[deviceId].revision };
-      else if (action === 'set-preset' && presetName) operation = { kind: 'device.update', deviceId, changes: { presetName }, expectedRevision: project.devices[deviceId].revision };
+      else if (action === 'set-preset' && presetName) {
+        const device = project.devices[deviceId];
+        const settings = device.soundfont;
+        if (device.builtinKind === 'soundfont' && settings) {
+          const presets = settings.source === 'asset' ? project.assets[settings.assetId!]?.soundfontPresets ?? [] : BUNDLED_SOUNDFONT.presets;
+          const matches = presets.filter((preset) => preset.name === presetName);
+          const preset = matches.find((entry) => entry.bank === settings.bank) ?? (matches.length === 1 ? matches[0] : undefined);
+          if (!preset) return jsonText({ status: 'conflict', message: 'SoundFont preset name is missing or ambiguous. Use aimuse_help instruments and device.update changes.soundfont with exact bank/program.' });
+          operation = { kind: 'device.update', deviceId, changes: { presetName, soundfont: { ...settings, bank: preset.bank, program: preset.program } }, expectedRevision: device.revision };
+        } else operation = { kind: 'device.update', deviceId, changes: { presetName }, expectedRevision: device.revision };
+      }
       else if (action === 'bypass') operation = { kind: 'device.update', deviceId, changes: { bypassed: bypassed ?? true }, expectedRevision: project.devices[deviceId].revision };
       else if (action === 'remove') operation = { kind: 'device.delete', deviceId, expectedRevision: project.devices[deviceId].revision };
       else return jsonText({ error: 'invalid_arguments' });

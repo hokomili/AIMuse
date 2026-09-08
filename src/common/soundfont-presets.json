@@ -1,0 +1,1437 @@
+[
+  {
+    "bank": 0,
+    "program": 0,
+    "name": "Grand Piano"
+  },
+  {
+    "bank": 11,
+    "program": 0,
+    "name": "Piano & Str.-Fade"
+  },
+  {
+    "bank": 12,
+    "program": 0,
+    "name": "Bell Piano"
+  },
+  {
+    "bank": 120,
+    "program": 0,
+    "name": "Standard 1 Kit"
+  },
+  {
+    "bank": 0,
+    "program": 1,
+    "name": "Bright Grand Piano"
+  },
+  {
+    "bank": 11,
+    "program": 1,
+    "name": "Piano & Str.-Sus"
+  },
+  {
+    "bank": 120,
+    "program": 1,
+    "name": "Standard 2 Kit"
+  },
+  {
+    "bank": 0,
+    "program": 2,
+    "name": "Electric Grand Piano"
+  },
+  {
+    "bank": 120,
+    "program": 2,
+    "name": "Standard 3 Kit"
+  },
+  {
+    "bank": 0,
+    "program": 3,
+    "name": "Honky-Tonk Piano"
+  },
+  {
+    "bank": 0,
+    "program": 4,
+    "name": "Tine Electric Piano"
+  },
+  {
+    "bank": 8,
+    "program": 4,
+    "name": "Chorused Tine EP"
+  },
+  {
+    "bank": 11,
+    "program": 4,
+    "name": "Tine & FM EPs"
+  },
+  {
+    "bank": 12,
+    "program": 4,
+    "name": "Bell Tine EP"
+  },
+  {
+    "bank": 0,
+    "program": 5,
+    "name": "FM Electric Piano"
+  },
+  {
+    "bank": 8,
+    "program": 5,
+    "name": "Chorused FM EP"
+  },
+  {
+    "bank": 11,
+    "program": 5,
+    "name": "Piano & FM EP"
+  },
+  {
+    "bank": 0,
+    "program": 6,
+    "name": "Harpsichord"
+  },
+  {
+    "bank": 8,
+    "program": 6,
+    "name": "Coupled Harpsichord"
+  },
+  {
+    "bank": 11,
+    "program": 6,
+    "name": "Harpsichord noVel"
+  },
+  {
+    "bank": 12,
+    "program": 6,
+    "name": "Coupled Harpsi noVel"
+  },
+  {
+    "bank": 0,
+    "program": 7,
+    "name": "Clavinet"
+  },
+  {
+    "bank": 0,
+    "program": 8,
+    "name": "Celeste"
+  },
+  {
+    "bank": 11,
+    "program": 8,
+    "name": "Tinkling Bells"
+  },
+  {
+    "bank": 120,
+    "program": 8,
+    "name": "Room Kit"
+  },
+  {
+    "bank": 0,
+    "program": 9,
+    "name": "Glockenspiel"
+  },
+  {
+    "bank": 0,
+    "program": 10,
+    "name": "Music Box"
+  },
+  {
+    "bank": 12,
+    "program": 10,
+    "name": "Christmas Bells"
+  },
+  {
+    "bank": 0,
+    "program": 11,
+    "name": "Vibraphone"
+  },
+  {
+    "bank": 11,
+    "program": 11,
+    "name": "Vibraphone No Trem."
+  },
+  {
+    "bank": 0,
+    "program": 12,
+    "name": "Marimba"
+  },
+  {
+    "bank": 0,
+    "program": 13,
+    "name": "Xylophone"
+  },
+  {
+    "bank": 0,
+    "program": 14,
+    "name": "Tubular Bells"
+  },
+  {
+    "bank": 8,
+    "program": 14,
+    "name": "Church Bells"
+  },
+  {
+    "bank": 9,
+    "program": 14,
+    "name": "Carillon"
+  },
+  {
+    "bank": 11,
+    "program": 14,
+    "name": "Bell Tower"
+  },
+  {
+    "bank": 0,
+    "program": 15,
+    "name": "Dulcimer"
+  },
+  {
+    "bank": 0,
+    "program": 16,
+    "name": "Tonewheel Organ"
+  },
+  {
+    "bank": 8,
+    "program": 16,
+    "name": "Detuned Tnwl. Organ"
+  },
+  {
+    "bank": 11,
+    "program": 16,
+    "name": "Tonewheel Org noVel"
+  },
+  {
+    "bank": 12,
+    "program": 16,
+    "name": "Detun Tnwl Org noVel"
+  },
+  {
+    "bank": 120,
+    "program": 16,
+    "name": "Power Kit"
+  },
+  {
+    "bank": 0,
+    "program": 17,
+    "name": "Percussive Organ"
+  },
+  {
+    "bank": 8,
+    "program": 17,
+    "name": "Detuned Perc. Organ"
+  },
+  {
+    "bank": 11,
+    "program": 17,
+    "name": "Percussive Org noVel"
+  },
+  {
+    "bank": 12,
+    "program": 17,
+    "name": "Detun Perc Org noVel"
+  },
+  {
+    "bank": 0,
+    "program": 18,
+    "name": "Rock Organ"
+  },
+  {
+    "bank": 11,
+    "program": 18,
+    "name": "Rock Organ noVel"
+  },
+  {
+    "bank": 0,
+    "program": 19,
+    "name": "Pipe Organ"
+  },
+  {
+    "bank": 8,
+    "program": 19,
+    "name": "Pipe Organ 2"
+  },
+  {
+    "bank": 11,
+    "program": 19,
+    "name": "Pipe Organ noVel"
+  },
+  {
+    "bank": 12,
+    "program": 19,
+    "name": "Pipe Organ 2 noVel"
+  },
+  {
+    "bank": 0,
+    "program": 20,
+    "name": "Reed Organ"
+  },
+  {
+    "bank": 11,
+    "program": 20,
+    "name": "Reed Organ noVel"
+  },
+  {
+    "bank": 0,
+    "program": 21,
+    "name": "Accordion"
+  },
+  {
+    "bank": 8,
+    "program": 21,
+    "name": "Italian Accordion"
+  },
+  {
+    "bank": 0,
+    "program": 22,
+    "name": "Harmonica"
+  },
+  {
+    "bank": 0,
+    "program": 23,
+    "name": "Bandoneon"
+  },
+  {
+    "bank": 0,
+    "program": 24,
+    "name": "Nylon Guitar"
+  },
+  {
+    "bank": 8,
+    "program": 24,
+    "name": "Ukulele"
+  },
+  {
+    "bank": 120,
+    "program": 24,
+    "name": "Electronic Kit"
+  },
+  {
+    "bank": 0,
+    "program": 25,
+    "name": "Steel Guitar"
+  },
+  {
+    "bank": 8,
+    "program": 25,
+    "name": "12-String Guitar"
+  },
+  {
+    "bank": 16,
+    "program": 25,
+    "name": "Mandolin"
+  },
+  {
+    "bank": 120,
+    "program": 25,
+    "name": "808/909 Kit"
+  },
+  {
+    "bank": 0,
+    "program": 26,
+    "name": "Jazz Guitar"
+  },
+  {
+    "bank": 8,
+    "program": 26,
+    "name": "Hawaiian Guitar"
+  },
+  {
+    "bank": 120,
+    "program": 26,
+    "name": "Dance Kit"
+  },
+  {
+    "bank": 0,
+    "program": 27,
+    "name": "Clean Guitar"
+  },
+  {
+    "bank": 8,
+    "program": 27,
+    "name": "Chorused Clean Gt."
+  },
+  {
+    "bank": 12,
+    "program": 27,
+    "name": "Clean Guitar 2"
+  },
+  {
+    "bank": 0,
+    "program": 28,
+    "name": "Muted Guitar"
+  },
+  {
+    "bank": 8,
+    "program": 28,
+    "name": "Funk Guitar"
+  },
+  {
+    "bank": 0,
+    "program": 29,
+    "name": "Overdrive Guitar"
+  },
+  {
+    "bank": 11,
+    "program": 29,
+    "name": "Wah Guitar (CC21)"
+  },
+  {
+    "bank": 0,
+    "program": 30,
+    "name": "Distortion Guitar"
+  },
+  {
+    "bank": 8,
+    "program": 30,
+    "name": "Feedback Guitar"
+  },
+  {
+    "bank": 0,
+    "program": 31,
+    "name": "Guitar Harmonics"
+  },
+  {
+    "bank": 8,
+    "program": 31,
+    "name": "Guitar Feedback"
+  },
+  {
+    "bank": 0,
+    "program": 32,
+    "name": "Acoustic Bass"
+  },
+  {
+    "bank": 120,
+    "program": 32,
+    "name": "Jazz Kit"
+  },
+  {
+    "bank": 0,
+    "program": 33,
+    "name": "Finger Bass"
+  },
+  {
+    "bank": 0,
+    "program": 34,
+    "name": "Pick Bass"
+  },
+  {
+    "bank": 0,
+    "program": 35,
+    "name": "Fretless Bass"
+  },
+  {
+    "bank": 0,
+    "program": 36,
+    "name": "Slap Bass 1"
+  },
+  {
+    "bank": 0,
+    "program": 37,
+    "name": "Slap Bass 2"
+  },
+  {
+    "bank": 0,
+    "program": 38,
+    "name": "Synth Bass 1"
+  },
+  {
+    "bank": 1,
+    "program": 38,
+    "name": "Synth Bass 101"
+  },
+  {
+    "bank": 8,
+    "program": 38,
+    "name": "Acid Bass"
+  },
+  {
+    "bank": 11,
+    "program": 38,
+    "name": "Techno Bass"
+  },
+  {
+    "bank": 12,
+    "program": 38,
+    "name": "Mean Saw Bass"
+  },
+  {
+    "bank": 0,
+    "program": 39,
+    "name": "Synth Bass 2"
+  },
+  {
+    "bank": 8,
+    "program": 39,
+    "name": "Beef FM Bass"
+  },
+  {
+    "bank": 11,
+    "program": 39,
+    "name": "Pulse Bass"
+  },
+  {
+    "bank": 0,
+    "program": 40,
+    "name": "Violin"
+  },
+  {
+    "bank": 120,
+    "program": 40,
+    "name": "Brush Kit"
+  },
+  {
+    "bank": 0,
+    "program": 41,
+    "name": "Viola"
+  },
+  {
+    "bank": 0,
+    "program": 42,
+    "name": "Cello"
+  },
+  {
+    "bank": 0,
+    "program": 43,
+    "name": "Double Bass"
+  },
+  {
+    "bank": 0,
+    "program": 44,
+    "name": "Tremolo Strings"
+  },
+  {
+    "bank": 1,
+    "program": 44,
+    "name": "Tremolo Strings Mono"
+  },
+  {
+    "bank": 0,
+    "program": 45,
+    "name": "Pizzicato Strings"
+  },
+  {
+    "bank": 0,
+    "program": 46,
+    "name": "Orchestral Harp"
+  },
+  {
+    "bank": 0,
+    "program": 47,
+    "name": "Timpani"
+  },
+  {
+    "bank": 0,
+    "program": 48,
+    "name": "Fast Strings"
+  },
+  {
+    "bank": 1,
+    "program": 48,
+    "name": "Fast Strings Mono"
+  },
+  {
+    "bank": 8,
+    "program": 48,
+    "name": "Orchestra Pad"
+  },
+  {
+    "bank": 12,
+    "program": 48,
+    "name": "Full Orchestra"
+  },
+  {
+    "bank": 13,
+    "program": 48,
+    "name": "Woodwind Choir"
+  },
+  {
+    "bank": 120,
+    "program": 48,
+    "name": "Orchestral Kit"
+  },
+  {
+    "bank": 0,
+    "program": 49,
+    "name": "Slow Strings"
+  },
+  {
+    "bank": 1,
+    "program": 49,
+    "name": "Slow Strings Mono"
+  },
+  {
+    "bank": 11,
+    "program": 49,
+    "name": "Velo Strings"
+  },
+  {
+    "bank": 12,
+    "program": 49,
+    "name": "Velo Strings Mono"
+  },
+  {
+    "bank": 0,
+    "program": 50,
+    "name": "Synth Strings 1"
+  },
+  {
+    "bank": 8,
+    "program": 50,
+    "name": "Synth Strings 3"
+  },
+  {
+    "bank": 11,
+    "program": 50,
+    "name": "Synth Strings 4"
+  },
+  {
+    "bank": 0,
+    "program": 51,
+    "name": "Synth Strings 2"
+  },
+  {
+    "bank": 11,
+    "program": 51,
+    "name": "Synth Strings 5"
+  },
+  {
+    "bank": 0,
+    "program": 52,
+    "name": "Concert Choir"
+  },
+  {
+    "bank": 1,
+    "program": 52,
+    "name": "Concert Choir Mono"
+  },
+  {
+    "bank": 0,
+    "program": 53,
+    "name": "Voice Oohs"
+  },
+  {
+    "bank": 0,
+    "program": 54,
+    "name": "Synth Voice"
+  },
+  {
+    "bank": 0,
+    "program": 55,
+    "name": "Orchestra Hit"
+  },
+  {
+    "bank": 0,
+    "program": 56,
+    "name": "Trumpet"
+  },
+  {
+    "bank": 1,
+    "program": 56,
+    "name": "Trumpet 2"
+  },
+  {
+    "bank": 120,
+    "program": 56,
+    "name": "SFX Kit"
+  },
+  {
+    "bank": 0,
+    "program": 57,
+    "name": "Trombone"
+  },
+  {
+    "bank": 1,
+    "program": 57,
+    "name": "Trombone 2"
+  },
+  {
+    "bank": 0,
+    "program": 58,
+    "name": "Tuba"
+  },
+  {
+    "bank": 0,
+    "program": 59,
+    "name": "Muted Trumpet"
+  },
+  {
+    "bank": 0,
+    "program": 60,
+    "name": "French Horns"
+  },
+  {
+    "bank": 1,
+    "program": 60,
+    "name": "Solo French Horn"
+  },
+  {
+    "bank": 0,
+    "program": 61,
+    "name": "Brass Section"
+  },
+  {
+    "bank": 1,
+    "program": 61,
+    "name": "Brass Section Mono"
+  },
+  {
+    "bank": 8,
+    "program": 61,
+    "name": "Brass Section 2"
+  },
+  {
+    "bank": 11,
+    "program": 61,
+    "name": "Brass Section 3"
+  },
+  {
+    "bank": 0,
+    "program": 62,
+    "name": "Synth Brass 1"
+  },
+  {
+    "bank": 8,
+    "program": 62,
+    "name": "Synth Brass 3"
+  },
+  {
+    "bank": 0,
+    "program": 63,
+    "name": "Synth Brass 2"
+  },
+  {
+    "bank": 8,
+    "program": 63,
+    "name": "Synth Brass 4"
+  },
+  {
+    "bank": 0,
+    "program": 64,
+    "name": "Soprano Sax"
+  },
+  {
+    "bank": 0,
+    "program": 65,
+    "name": "Alto Sax"
+  },
+  {
+    "bank": 0,
+    "program": 66,
+    "name": "Tenor Sax"
+  },
+  {
+    "bank": 0,
+    "program": 67,
+    "name": "Baritone Sax"
+  },
+  {
+    "bank": 0,
+    "program": 68,
+    "name": "Oboe"
+  },
+  {
+    "bank": 0,
+    "program": 69,
+    "name": "English Horn"
+  },
+  {
+    "bank": 0,
+    "program": 70,
+    "name": "Bassoon"
+  },
+  {
+    "bank": 0,
+    "program": 71,
+    "name": "Clarinet"
+  },
+  {
+    "bank": 0,
+    "program": 72,
+    "name": "Piccolo"
+  },
+  {
+    "bank": 0,
+    "program": 73,
+    "name": "Flute"
+  },
+  {
+    "bank": 0,
+    "program": 74,
+    "name": "Recorder"
+  },
+  {
+    "bank": 0,
+    "program": 75,
+    "name": "Pan Flute"
+  },
+  {
+    "bank": 24,
+    "program": 75,
+    "name": "Tin Whistle"
+  },
+  {
+    "bank": 25,
+    "program": 75,
+    "name": "Tin Whistle Nm"
+  },
+  {
+    "bank": 26,
+    "program": 75,
+    "name": "Tin Whistle Or"
+  },
+  {
+    "bank": 0,
+    "program": 76,
+    "name": "Bottle Blow"
+  },
+  {
+    "bank": 0,
+    "program": 77,
+    "name": "Shakuhachi"
+  },
+  {
+    "bank": 0,
+    "program": 78,
+    "name": "Whistle"
+  },
+  {
+    "bank": 11,
+    "program": 78,
+    "name": "Whistlin'"
+  },
+  {
+    "bank": 0,
+    "program": 79,
+    "name": "Ocarina"
+  },
+  {
+    "bank": 0,
+    "program": 80,
+    "name": "Square Lead"
+  },
+  {
+    "bank": 1,
+    "program": 80,
+    "name": "Square Wave"
+  },
+  {
+    "bank": 8,
+    "program": 80,
+    "name": "Sine Wave"
+  },
+  {
+    "bank": 12,
+    "program": 80,
+    "name": "Square Lead 2"
+  },
+  {
+    "bank": 13,
+    "program": 80,
+    "name": "Square Lead 3"
+  },
+  {
+    "bank": 0,
+    "program": 81,
+    "name": "Saw Lead"
+  },
+  {
+    "bank": 1,
+    "program": 81,
+    "name": "Saw Wave"
+  },
+  {
+    "bank": 8,
+    "program": 81,
+    "name": "Doctor Solo"
+  },
+  {
+    "bank": 11,
+    "program": 81,
+    "name": "Sawtooth Stab"
+  },
+  {
+    "bank": 12,
+    "program": 81,
+    "name": "Saw Lead 2"
+  },
+  {
+    "bank": 13,
+    "program": 81,
+    "name": "Saw Lead 3"
+  },
+  {
+    "bank": 0,
+    "program": 82,
+    "name": "Synth Calliope"
+  },
+  {
+    "bank": 0,
+    "program": 83,
+    "name": "Chiffer Lead"
+  },
+  {
+    "bank": 0,
+    "program": 84,
+    "name": "Charang"
+  },
+  {
+    "bank": 0,
+    "program": 85,
+    "name": "Solo Vox"
+  },
+  {
+    "bank": 0,
+    "program": 86,
+    "name": "5th Saw Wave"
+  },
+  {
+    "bank": 0,
+    "program": 87,
+    "name": "Bass & Lead"
+  },
+  {
+    "bank": 0,
+    "program": 88,
+    "name": "Fantasia"
+  },
+  {
+    "bank": 11,
+    "program": 88,
+    "name": "Harpsi Pad"
+  },
+  {
+    "bank": 12,
+    "program": 88,
+    "name": "Fantasia 2"
+  },
+  {
+    "bank": 13,
+    "program": 88,
+    "name": "Night Vision"
+  },
+  {
+    "bank": 0,
+    "program": 89,
+    "name": "Warm Pad"
+  },
+  {
+    "bank": 11,
+    "program": 89,
+    "name": "Solar Wind"
+  },
+  {
+    "bank": 12,
+    "program": 89,
+    "name": "Solar Wind 2"
+  },
+  {
+    "bank": 0,
+    "program": 90,
+    "name": "Polysynth"
+  },
+  {
+    "bank": 0,
+    "program": 91,
+    "name": "Space Voice"
+  },
+  {
+    "bank": 0,
+    "program": 92,
+    "name": "Bowed Glass"
+  },
+  {
+    "bank": 0,
+    "program": 93,
+    "name": "Metal Pad"
+  },
+  {
+    "bank": 0,
+    "program": 94,
+    "name": "Halo Pad"
+  },
+  {
+    "bank": 0,
+    "program": 95,
+    "name": "Sweep Pad"
+  },
+  {
+    "bank": 0,
+    "program": 96,
+    "name": "Ice Rain"
+  },
+  {
+    "bank": 11,
+    "program": 96,
+    "name": "Mystery Pad"
+  },
+  {
+    "bank": 0,
+    "program": 97,
+    "name": "Soundtrack"
+  },
+  {
+    "bank": 0,
+    "program": 98,
+    "name": "Crystal"
+  },
+  {
+    "bank": 1,
+    "program": 98,
+    "name": "Synth Mallet"
+  },
+  {
+    "bank": 11,
+    "program": 98,
+    "name": "Synth Chime"
+  },
+  {
+    "bank": 0,
+    "program": 99,
+    "name": "Atmosphere"
+  },
+  {
+    "bank": 0,
+    "program": 100,
+    "name": "Brightness"
+  },
+  {
+    "bank": 11,
+    "program": 100,
+    "name": "Bright Saw Stack"
+  },
+  {
+    "bank": 0,
+    "program": 101,
+    "name": "Goblin"
+  },
+  {
+    "bank": 0,
+    "program": 102,
+    "name": "Echo Drops"
+  },
+  {
+    "bank": 2,
+    "program": 102,
+    "name": "Echo Pan"
+  },
+  {
+    "bank": 0,
+    "program": 103,
+    "name": "Star Theme"
+  },
+  {
+    "bank": 0,
+    "program": 104,
+    "name": "Sitar"
+  },
+  {
+    "bank": 0,
+    "program": 105,
+    "name": "Banjo"
+  },
+  {
+    "bank": 0,
+    "program": 106,
+    "name": "Shamisen"
+  },
+  {
+    "bank": 0,
+    "program": 107,
+    "name": "Koto"
+  },
+  {
+    "bank": 8,
+    "program": 107,
+    "name": "Taisho Koto"
+  },
+  {
+    "bank": 0,
+    "program": 108,
+    "name": "Kalimba"
+  },
+  {
+    "bank": 0,
+    "program": 109,
+    "name": "Bagpipes"
+  },
+  {
+    "bank": 0,
+    "program": 110,
+    "name": "Fiddle"
+  },
+  {
+    "bank": 0,
+    "program": 111,
+    "name": "Shenai"
+  },
+  {
+    "bank": 0,
+    "program": 112,
+    "name": "Tinker Bell"
+  },
+  {
+    "bank": 0,
+    "program": 113,
+    "name": "Agogo"
+  },
+  {
+    "bank": 0,
+    "program": 114,
+    "name": "Steel Drums"
+  },
+  {
+    "bank": 0,
+    "program": 115,
+    "name": "Wood Block"
+  },
+  {
+    "bank": 8,
+    "program": 115,
+    "name": "Castanets"
+  },
+  {
+    "bank": 0,
+    "program": 116,
+    "name": "Taiko Drum"
+  },
+  {
+    "bank": 8,
+    "program": 116,
+    "name": "Concert Bass Drum"
+  },
+  {
+    "bank": 0,
+    "program": 117,
+    "name": "Melodic Tom"
+  },
+  {
+    "bank": 8,
+    "program": 117,
+    "name": "Melodic Tom 2"
+  },
+  {
+    "bank": 0,
+    "program": 118,
+    "name": "Synth Drum"
+  },
+  {
+    "bank": 8,
+    "program": 118,
+    "name": "808 Tom"
+  },
+  {
+    "bank": 0,
+    "program": 119,
+    "name": "Reverse Cymbal"
+  },
+  {
+    "bank": 11,
+    "program": 119,
+    "name": "Cymbal Crash"
+  },
+  {
+    "bank": 12,
+    "program": 119,
+    "name": "Tambourine"
+  },
+  {
+    "bank": 0,
+    "program": 120,
+    "name": "Fret Noise"
+  },
+  {
+    "bank": 1,
+    "program": 120,
+    "name": "Cut Noise"
+  },
+  {
+    "bank": 2,
+    "program": 120,
+    "name": "String Slap"
+  },
+  {
+    "bank": 0,
+    "program": 121,
+    "name": "Breath Noise"
+  },
+  {
+    "bank": 1,
+    "program": 121,
+    "name": "Fl. Key Click"
+  },
+  {
+    "bank": 11,
+    "program": 121,
+    "name": "Filter Snap"
+  },
+  {
+    "bank": 0,
+    "program": 122,
+    "name": "Seashore"
+  },
+  {
+    "bank": 1,
+    "program": 122,
+    "name": "Rain"
+  },
+  {
+    "bank": 2,
+    "program": 122,
+    "name": "Thunder"
+  },
+  {
+    "bank": 3,
+    "program": 122,
+    "name": "Wind"
+  },
+  {
+    "bank": 4,
+    "program": 122,
+    "name": "Stream"
+  },
+  {
+    "bank": 5,
+    "program": 122,
+    "name": "Bubbles"
+  },
+  {
+    "bank": 11,
+    "program": 122,
+    "name": "Howling Winds"
+  },
+  {
+    "bank": 12,
+    "program": 122,
+    "name": "White Noise Wave"
+  },
+  {
+    "bank": 0,
+    "program": 123,
+    "name": "Birds"
+  },
+  {
+    "bank": 1,
+    "program": 123,
+    "name": "Dog"
+  },
+  {
+    "bank": 2,
+    "program": 123,
+    "name": "Horse Gallop"
+  },
+  {
+    "bank": 3,
+    "program": 123,
+    "name": "Bird 2"
+  },
+  {
+    "bank": 0,
+    "program": 124,
+    "name": "Telephone 1"
+  },
+  {
+    "bank": 1,
+    "program": 124,
+    "name": "Telephone 2"
+  },
+  {
+    "bank": 2,
+    "program": 124,
+    "name": "Door Creaking"
+  },
+  {
+    "bank": 3,
+    "program": 124,
+    "name": "Door"
+  },
+  {
+    "bank": 4,
+    "program": 124,
+    "name": "Scratch"
+  },
+  {
+    "bank": 5,
+    "program": 124,
+    "name": "Windchime"
+  },
+  {
+    "bank": 0,
+    "program": 125,
+    "name": "Helicopter"
+  },
+  {
+    "bank": 1,
+    "program": 125,
+    "name": "Car-Engine"
+  },
+  {
+    "bank": 2,
+    "program": 125,
+    "name": "Car-Stop"
+  },
+  {
+    "bank": 3,
+    "program": 125,
+    "name": "Car-Pass"
+  },
+  {
+    "bank": 4,
+    "program": 125,
+    "name": "Car-Crash"
+  },
+  {
+    "bank": 5,
+    "program": 125,
+    "name": "Siren"
+  },
+  {
+    "bank": 6,
+    "program": 125,
+    "name": "Train"
+  },
+  {
+    "bank": 7,
+    "program": 125,
+    "name": "Jet Plane"
+  },
+  {
+    "bank": 8,
+    "program": 125,
+    "name": "Starship"
+  },
+  {
+    "bank": 9,
+    "program": 125,
+    "name": "Burst Noise"
+  },
+  {
+    "bank": 0,
+    "program": 126,
+    "name": "Applause"
+  },
+  {
+    "bank": 1,
+    "program": 126,
+    "name": "Laughing"
+  },
+  {
+    "bank": 2,
+    "program": 126,
+    "name": "Scream"
+  },
+  {
+    "bank": 3,
+    "program": 126,
+    "name": "Punch"
+  },
+  {
+    "bank": 4,
+    "program": 126,
+    "name": "Heart Beat"
+  },
+  {
+    "bank": 5,
+    "program": 126,
+    "name": "Footsteps"
+  },
+  {
+    "bank": 0,
+    "program": 127,
+    "name": "Gun Shot"
+  },
+  {
+    "bank": 1,
+    "program": 127,
+    "name": "Machine Gun"
+  },
+  {
+    "bank": 2,
+    "program": 127,
+    "name": "Lasergun"
+  },
+  {
+    "bank": 3,
+    "program": 127,
+    "name": "Explosion"
+  },
+  {
+    "bank": 11,
+    "program": 127,
+    "name": "Interference"
+  },
+  {
+    "bank": 12,
+    "program": 127,
+    "name": "Shooting Star"
+  },
+  {
+    "bank": 120,
+    "program": 127,
+    "name": "CM-64/32L Kit"
+  },
+  {
+    "bank": 128,
+    "program": 0,
+    "name": "Standard 1"
+  },
+  {
+    "bank": 128,
+    "program": 1,
+    "name": "Standard 2"
+  },
+  {
+    "bank": 128,
+    "program": 2,
+    "name": "Standard 3"
+  },
+  {
+    "bank": 128,
+    "program": 8,
+    "name": "Room"
+  },
+  {
+    "bank": 128,
+    "program": 16,
+    "name": "Power"
+  },
+  {
+    "bank": 128,
+    "program": 24,
+    "name": "Electronic"
+  },
+  {
+    "bank": 128,
+    "program": 25,
+    "name": "808/909"
+  },
+  {
+    "bank": 128,
+    "program": 26,
+    "name": "Dance"
+  },
+  {
+    "bank": 128,
+    "program": 32,
+    "name": "Jazz"
+  },
+  {
+    "bank": 128,
+    "program": 40,
+    "name": "Brush"
+  },
+  {
+    "bank": 128,
+    "program": 48,
+    "name": "Orchestral"
+  },
+  {
+    "bank": 128,
+    "program": 56,
+    "name": "SFX"
+  },
+  {
+    "bank": 128,
+    "program": 127,
+    "name": "CM-64/32L"
+  }
+]

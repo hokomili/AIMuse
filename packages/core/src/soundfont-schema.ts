@@ -1,0 +1,3 @@
+import { z } from 'zod';
+export const SoundFontPresetSchema = z.object({ bank: z.number().int().min(0).max(128), program: z.number().int().min(0).max(127), name: z.string().min(1).max(500) }).strict();
+export const SoundFontInstrumentSchema = z.object({ source: z.enum(['generaluser-gs-2.0.3', 'asset']), assetId: z.string().min(1).max(240).optional(), bank: z.number().int().min(0).max(128), program: z.number().int().min(0).max(127) }).strict().refine((value) => value.source === 'asset' ? Boolean(value.assetId) : value.assetId === undefined, 'Imported SoundFonts require assetId; bundled SoundFonts must omit it.');

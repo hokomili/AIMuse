@@ -1,3 +1,4 @@
+import { DEFAULT_SOUNDFONT } from '../common/soundfont-library';
 import type {
   Actor,
   AIMuseProject,
@@ -137,6 +138,7 @@ const parameter = (id: string, name: string, value: number, min: number, max: nu
 });
 
 const builtinParameters: Record<BuiltinDeviceKind, DeviceParameter[]> = {
+  soundfont: [parameter('gain', 'Gain', 0, -48, 12, 'dB')],
   sampler: [parameter('gain', 'Gain', 0, -48, 12, 'dB'), parameter('attack', 'Attack', 0.005, 0, 5, 's'), parameter('release', 'Release', 0.2, 0, 10, 's')],
   'drum-rack': [parameter('gain', 'Gain', 0, -48, 12, 'dB'), parameter('choke', 'Choke', 0, 0, 1)],
   'subtractive-synth': [parameter('cutoff', 'Cutoff', 8_000, 20, 20_000, 'Hz'), parameter('resonance', 'Resonance', 0.15, 0, 1), parameter('attack', 'Attack', 0.01, 0, 5, 's'), parameter('release', 'Release', 0.4, 0, 10, 's')],
@@ -154,11 +156,11 @@ const builtinParameters: Record<BuiltinDeviceKind, DeviceParameter[]> = {
 
 export function makeBuiltinDevice(trackId: string, kind: BuiltinDeviceKind): Device {
   const labels: Record<BuiltinDeviceKind, string> = {
-    sampler: 'Sampler', 'drum-rack': 'Drum Rack', 'subtractive-synth': 'Muse Synth', utility: 'Utility', eq: 'Parametric EQ',
+    soundfont: 'SoundFont', sampler: 'Sampler', 'drum-rack': 'Drum Rack', 'subtractive-synth': 'Muse Synth', utility: 'Utility', eq: 'Parametric EQ',
     compressor: 'Compressor', gate: 'Gate', saturator: 'Saturator', chorus: 'Chorus', delay: 'Delay', reverb: 'Algorithmic Reverb', limiter: 'Limiter', analyzer: 'Spectrum & Loudness',
   };
   const parameters = Object.fromEntries(builtinParameters[kind].map((entry) => [entry.id, { ...entry }]));
-  return { ...entity('device'), trackId, format: 'builtin', builtinKind: kind, name: labels[kind], bypassed: false, degraded: false, latencySamples: 0, parameters };
+  return { ...entity('device'), trackId, format: 'builtin', builtinKind: kind, name: labels[kind], bypassed: false, degraded: false, latencySamples: 0, parameters, ...(kind === 'soundfont' ? { soundfont: { ...DEFAULT_SOUNDFONT } } : {}) };
 }
 
 export function barBeat(tick: number, ppq = 960): string {

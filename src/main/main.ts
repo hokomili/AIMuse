@@ -181,7 +181,7 @@ async function importMedia(projectId?: string) {
     title: 'Import media',
     defaultPath: nativeDialogDirectory('read', project?.projectPath ? dirname(project.projectPath) : undefined),
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'Supported media', extensions: ['wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg', 'mid', 'midi'] }, { name: 'Audio', extensions: ['wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg'] }, { name: 'MIDI', extensions: ['mid', 'midi'] }],
+    filters: [{ name: 'Supported media', extensions: ['wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg', 'mid', 'midi', 'sf2'] }, { name: 'Audio', extensions: ['wav', 'flac', 'mp3', 'aac', 'm4a', 'ogg'] }, { name: 'MIDI', extensions: ['mid', 'midi'] }, { name: 'SoundFont', extensions: ['sf2'] }],
   });
   if (choice.canceled) return { imported: 0, warnings: [] };
   const result = await runtime.media.importPaths(id, choice.filePaths, HUMAN_ACTOR);

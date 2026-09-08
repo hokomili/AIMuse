@@ -216,6 +216,9 @@ describe('authenticated localhost MCP contract', () => {
     const project = observed.structuredContent!.data.project as { id: string };
     const help = await call('aimuse_help', { topic: 'composition' });
     const example = help.structuredContent!.data.example as Record<string, unknown>;
+    const instruments = await call('aimuse_help', { topic: 'instruments' });
+    expect((instruments.structuredContent!.data.library as { presets: unknown[] }).presets).toHaveLength(287);
+    expect(JSON.stringify(example)).toContain('generaluser-gs-2.0.3');
     expect(example.projectId).toBe(project.id);
     const contract = await call('aimuse_help', { topic: 'operation-schemas', operationKind: 'midi.note.add' });
     expect(JSON.stringify(contract.structuredContent!.data.schemas)).toContain('releaseVelocity');
@@ -230,6 +233,13 @@ describe('authenticated localhost MCP contract', () => {
     const after = await call('project_observe', {}); const state = after.structuredContent!.data.project as { tracks: Record<string, { createdBy: string; name: string }> };
     expect(Object.values(state.tracks).find((track) => track.name === 'Help melody')?.createdBy).toBe(actor.id);
     const duplicate = await call('project_apply', example); expect(duplicate.structuredContent!.data.status).toBe('duplicate');
+    const soundfontId = (example.operations as Array<{ kind: string; device?: { id: string; builtinKind?: string } }>).find((operation) => operation.device?.builtinKind === 'soundfont')!.device!.id;
+    const selected = await call('plugin_manage', { action: 'set-preset', projectId: project.id, deviceId: soundfontId, presetName: 'Fast Strings' });
+    expect(selected.structuredContent!.data.status).toBe('committed');
+    const selectedProject = (await call('project_observe', {})).structuredContent!.data.project as { devices: Record<string, { soundfont: { program: number } }> };
+    expect(selectedProject.devices[soundfontId].soundfont.program).toBe(48);
+    const missing = await call('plugin_manage', { action: 'set-preset', projectId: project.id, deviceId: soundfontId, presetName: 'Not a real preset' });
+    expect(missing.structuredContent!.data.status).toBe('conflict');
     // File authority is test setup; composition itself consumes only public responses.
     await authority.install({ version: 1, id: createId('policy'), issuedAt: nowIso(), expiresAt: new Date(Date.now() + 60_000).toISOString(), maxRuntimeMinutes: 5, readRoots: [root], writeRoots: [root], overwritePaths: [], pluginAllowlist: [], allowMicrophone: false, allowMidiInput: false, allowMidiOutput: false });
     const exported = await call('export_manage', { projectId: project.id, kind: 'master', destination: join(root, 'cold-composition.wav'), format: 'wav' });

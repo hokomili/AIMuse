@@ -73,7 +73,7 @@ export type ProjectOperation =
   | { kind: 'automation.point.upsert'; laneId: Id; point: AutomationPoint; expectedRevision?: number }
   | { kind: 'automation.point.delete'; laneId: Id; pointId: Id; expectedRevision?: number }
   | { kind: 'device.add'; device: Device; index?: number }
-  | { kind: 'device.update'; deviceId: Id; changes: Partial<Pick<Device, 'name' | 'bypassed' | 'degraded' | 'latencySamples' | 'stateAssetId' | 'presetName'>>; expectedRevision?: number }
+  | { kind: 'device.update'; deviceId: Id; changes: Partial<Pick<Device, 'name' | 'bypassed' | 'degraded' | 'latencySamples' | 'stateAssetId' | 'presetName' | 'soundfont'>>; expectedRevision?: number }
   | { kind: 'device.move'; deviceId: Id; trackId: Id; index: number; expectedRevision?: number }
   | { kind: 'device.parameter.set'; deviceId: Id; parameterId: string; value: number; expectedRevision?: number }
   | { kind: 'device.delete'; deviceId: Id; expectedRevision?: number }

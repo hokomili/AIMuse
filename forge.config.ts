@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import soundFontManifest from './build/soundfonts/manifest.json';
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { MakerZIP } from '@electron-forge/maker-zip';
@@ -29,6 +32,13 @@ function runRequired(program: string, arguments_: string[], failure: string): st
   const result = spawnSync(program, arguments_, { encoding: 'utf8', shell: false, windowsHide: true });
   if (result.error || result.status !== 0) throw new Error(`${failure}${result.stderr?.trim() ? `: ${result.stderr.trim()}` : ''}`);
   return result.stdout.trim();
+}
+
+export function validateSoundFontResources(directory: string): void {
+  for (const file of soundFontManifest.files) {
+    const bytes = readFileSync(resolve(directory, file.name));
+    if (bytes.byteLength !== file.byteLength || createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw new Error(`Packaged SoundFont resource failed verification: ${file.name}`);
+  }
 }
 
 function validatePackagedNativeArchitectures(nativeDirectory: string, architecture: string): void {
@@ -73,9 +83,10 @@ const config: ForgeConfig = {
       LSUIElement: true,
       NSMicrophoneUsageDescription: 'AIMuse accesses the microphone only after you explicitly authorize and start recording.',
     },
-    extraResource: [nativeDistribution],
+    extraResource: [nativeDistribution, resolve('build', 'soundfonts')],
     afterCopyExtraResources: [(buildPath, _electronVersion, platform, architecture, callback) => {
       try {
+        validateSoundFontResources(platform === 'darwin' ? resolve(buildPath, 'AIMuse.app', 'Contents', 'Resources', 'soundfonts') : resolve(buildPath, 'resources', 'soundfonts'));
         if (platform === 'darwin') validatePackagedNativeArchitectures(resolve(buildPath, 'AIMuse.app', 'Contents', 'Resources', 'native'), activeMacPackageArchitecture ?? architecture);
         callback();
       } catch (error) {
@@ -103,6 +114,7 @@ const config: ForgeConfig = {
   makers: [new MakerSquirrel({ name: 'aimuse', setupExe: 'AIMuse-Setup.exe' }), new MakerZIP({}, ['win32', 'darwin'])],
   hooks: {
     prePackage: async (_config, platform, architecture) => {
+      validateSoundFontResources(resolve('build', 'soundfonts'));
       if (platform !== 'darwin') return;
       if (process.platform !== 'darwin') throw new Error('macOS native package assets must be built on Darwin.');
       requiredMacArchitectures(architecture);

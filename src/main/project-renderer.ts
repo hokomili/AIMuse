@@ -1,3 +1,5 @@
+import { loadSoundFont } from './soundfont-bank';
+import { renderSoundFontClip } from './soundfont-renderer';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ticksToSamples, samplesToTicks, type AIMuseProject, type AudioClip, type Clip, type Device, type Fade, type Id, type MidiClip, type Track } from '@aimuse/core';
@@ -7,7 +9,7 @@ import { UnsupportedAudioRenderError } from './audio-render-error';
 import { decodeWav, encodeFloat32Wav } from './wav';
 import { gainFromDb, lowPass, parameter, processDevice, sampleInterpolator, type Stereo } from './render-dsp';
 
-export const RENDER_CACHE_VERSION = 'audio-contract-v2';
+export const RENDER_CACHE_VERSION = 'audio-contract-v3-soundfont-9575028c';
 
 export interface ProjectRenderRequest {
   project: AIMuseProject;
@@ -26,6 +28,7 @@ function unsupported(subject: string, feature: string): never {
   throw new UnsupportedAudioRenderError(`${subject}: ${feature} is not supported by audio rendering. Bypass/remove this processing or render it externally and import WAV. See aimuse_help topic rendering.`);
 }
 const parameterRanges: Record<string, Record<string, [number, number]>> = {
+  soundfont: { gain: [-48, 12] },
   'subtractive-synth': { cutoff: [20, 20_000], resonance: [0, 1], attack: [0, 5], release: [0, 10] },
   utility: { gain: [-48, 24], width: [0, 2] },
   compressor: { threshold: [-60, 0], ratio: [1, 20], attack: [0.0001, 1], release: [0.01, 3] },
@@ -35,6 +38,7 @@ function validateDevice(device: Device): void {
   if (device.bypassed) return;
   if (device.format !== 'builtin' || !RENDERED_BUILTINS.some((kind) => kind === device.builtinKind)) unsupported(device.name, device.builtinKind ?? device.format);
   if (device.latencySamples || device.stateAssetId || device.degraded) unsupported(device.name, 'latency compensation, opaque state or degraded device');
+  if (device.builtinKind === 'soundfont' && !device.soundfont) unsupported(device.name, 'missing SoundFont settings');
   for (const [id, value] of Object.entries(device.parameters)) {
     const range = parameterRanges[device.builtinKind!]?.[id];
     if (!range || !Number.isFinite(value.value) || value.value < range[0] || value.value > range[1]) unsupported(device.name, `parameter ${id}=${value.value}`);
@@ -86,11 +90,12 @@ export async function renderProjectToWav({ project, destination, startTick = 0, 
     if (Object.values(project.automationLanes).some((lane) => lane.trackId === track.id && Object.keys(lane.points).length)) unsupported(track.name, 'automation');
     if (Object.values(project.compSegments).some((segment) => segment.trackId === track.id) || clips.some((clip) => clip.takeLaneId)) unsupported(track.name, 'take-lane comping');
     const devices = track.deviceIds.map((id) => project.devices[id]); for (const device of devices) { if (!device) throw new Error(`${track.name}: missing device.`); validateDevice(device); }
-    const activeDevices = devices.filter((device) => !device.bypassed); const synths = activeDevices.filter((device) => device.builtinKind === 'subtractive-synth');
+    const activeDevices = devices.filter((device) => !device.bypassed); const synths = activeDevices.filter((device) => device.builtinKind === 'subtractive-synth' || device.builtinKind === 'soundfont');
     if (synths.length > 1 || (synths.length && activeDevices[0] !== synths[0])) unsupported(track.name, 'multiple or post-effect instruments');
+    const soundfont = synths[0]?.builtinKind === 'soundfont' ? await loadSoundFont(project, synths[0].soundfont!) : undefined;
     for (const clip of clips) {
       if (clip.loopEnabled && !clip.loopLengthTicks) throw new Error(`${clip.name}: enabled clip looping requires loopLengthTicks.`);
-      if (clip.kind === 'midi') { if (!synths.length) warnings.add(`${track.name}: MIDI uses the sine guide voice; add Muse Synth for its envelope and filter controls.`); renderMidi(project, clip, data, synths[0]); }
+      if (clip.kind === 'midi') { if (!synths.length) warnings.add(`${track.name}: MIDI uses the sine guide voice; add Muse Synth for its envelope and filter controls.`); if (soundfont) await renderSoundFontClip(project, clip, data, synths[0], soundfont, clipEnvelope(project, clip)); else renderMidi(project, clip, data, synths[0]); }
       else { if (synths.length) unsupported(track.name, 'audio clips through a synth instrument'); await renderAudio(project, clip, data, warnings); }
     }
     for (const device of activeDevices) processDevice(data, device, project.settings.sampleRate);

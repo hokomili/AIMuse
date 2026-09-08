@@ -186,6 +186,7 @@ export interface CompSegment extends EntityBase {
 }
 
 export type BuiltinDeviceKind =
+  | 'soundfont'
   | 'sampler'
   | 'drum-rack'
   | 'subtractive-synth'
@@ -211,6 +212,16 @@ export interface DeviceParameter {
   automatable: boolean;
 }
 
+export interface SoundFontPreset { bank: number; program: number; name: string }
+
+/** SF2 bank 128 selects percussion; bank/program numbers are zero-based. */
+export interface SoundFontInstrument {
+  source: 'generaluser-gs-2.0.3' | 'asset';
+  assetId?: Id;
+  bank: number;
+  program: number;
+}
+
 export interface Device extends EntityBase {
   trackId: Id;
   format: 'builtin' | 'vst3' | 'clap' | 'missing';
@@ -224,6 +235,7 @@ export interface Device extends EntityBase {
   degraded: boolean;
   latencySamples: number;
   stateAssetId?: Id;
+  soundfont?: SoundFontInstrument;
   presetName?: string;
   parameters: Record<string, DeviceParameter>;
 }
@@ -259,7 +271,7 @@ export interface AutomationLane extends EntityBase {
   visible: boolean;
 }
 
-export type MediaKind = 'audio' | 'midi' | 'plugin-state' | 'analysis' | 'audition' | 'checkpoint';
+export type MediaKind = 'soundfont' | 'audio' | 'midi' | 'plugin-state' | 'analysis' | 'audition' | 'checkpoint';
 
 export interface MediaAsset extends EntityBase {
   kind: MediaKind;
@@ -273,6 +285,7 @@ export interface MediaAsset extends EntityBase {
   sampleRate?: number;
   channels?: number;
   durationSamples?: number;
+  soundfontPresets?: SoundFontPreset[];
   source?: 'import' | 'recording' | 'generation' | 'render' | 'system';
 }
 

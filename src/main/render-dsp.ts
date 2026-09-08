@@ -15,7 +15,7 @@ export function lowPass(sampleRate: number, cutoff: number, q: number): (sample:
 }
 
 export function processDevice(data: Stereo, device: Device, sampleRate: number): void {
-  if (device.bypassed || device.builtinKind === 'analyzer' || device.builtinKind === 'subtractive-synth') return;
+  if (device.bypassed || device.builtinKind === 'analyzer' || (device.builtinKind === 'subtractive-synth' || device.builtinKind === 'soundfont')) return;
   if (device.builtinKind === 'utility') {
     const gain = gainFromDb(parameter(device, 'gain', 0)); const width = parameter(device, 'width', 1);
     for (let i = 0; i < data[0].length; i += 1) { const mid = (data[0][i] + data[1][i]) * 0.5; const side = (data[0][i] - data[1][i]) * 0.5 * width; data[0][i] = (mid + side) * gain; data[1][i] = (mid - side) * gain; }

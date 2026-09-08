@@ -132,7 +132,7 @@ export function App() {
     if (!project) return;
     const track = makeTrack(project, kind);
     const operations: Parameters<typeof transaction>[2] = [{ kind: 'track.add', track, index: Math.max(0, project.trackOrder.length - 1) }];
-    if (kind === 'instrument') operations.push({ kind: 'device.add', device: makeBuiltinDevice(track.id, 'subtractive-synth') });
+    if (kind === 'instrument') operations.push({ kind: 'device.add', device: makeBuiltinDevice(track.id, 'soundfont') });
     void apply(transaction(project, `Add ${track.name}`, operations)).then((done) => {
       if (done) setSelectionAndDock({ trackIds: [track.id], clipIds: [] });
     });
@@ -146,8 +146,9 @@ export function App() {
     const operations: Parameters<typeof transaction>[2] = [];
     if (!track) {
       track = makeTrack(project, 'instrument', 'New instrument');
-      operations.push({ kind: 'track.add', track, index: Math.max(0, project.trackOrder.length - 1) }, { kind: 'device.add', device: makeBuiltinDevice(track.id, 'subtractive-synth') });
+      operations.push({ kind: 'track.add', track, index: Math.max(0, project.trackOrder.length - 1) }, { kind: 'device.add', device: makeBuiltinDevice(track.id, 'soundfont') });
     }
+    if (track.clipIds.length === 0 && track.deviceIds.length === 0 && !operations.some((operation) => operation.kind === 'device.add')) operations.push({ kind: 'device.add', device: makeBuiltinDevice(track.id, 'soundfont') });
     const clip = makeMidiClip(track.id, preferredStartTick ?? Math.round(snapshot.transport.tick / 960) * 960);
     operations.push({ kind: 'clip.add', clip });
     void apply(transaction(project, 'Create MIDI clip', operations)).then((done) => {
@@ -160,7 +161,7 @@ export function App() {
     const track = project.tracks[trackId]; if (!track) return;
     setSelectionAndDock({ trackIds: [track.id], clipIds: [] });
     void perform(() => window.aimuse.updateSelection({ trackIds: [track.id], clipIds: [] }));
-    setBrowserTab(track.kind === 'instrument' && track.deviceIds.length === 0 ? 'instruments' : 'effects');
+    setBrowserTab(track.kind === 'instrument' ? 'instruments' : 'effects');
     setLeftVisible(true);
   };
 
@@ -169,7 +170,10 @@ export function App() {
     const target = activeTrack && !['folder', 'midi'].includes(activeTrack.kind) ? activeTrack : Object.values(project.tracks).find((track) => track.kind === 'instrument' || track.kind === 'audio');
     if (!target) { workspace.notify('Select an audio, instrument, aux, or master track first.', 'warning'); return; }
     const device = makeBuiltinDevice(target.id, kind);
-    void apply(transaction(project, `Add ${device.name}`, [{ kind: 'device.add', device }])).then((done) => done && setRightTab('inspector'));
+    const instrument = ['soundfont', 'subtractive-synth', 'sampler', 'drum-rack'].includes(kind);
+    const operations: Parameters<typeof transaction>[2] = instrument ? target.deviceIds.map((id) => project.devices[id]).filter((entry) => !entry.bypassed && ['soundfont', 'subtractive-synth', 'sampler', 'drum-rack'].includes(entry.builtinKind ?? '')).map((entry) => ({ kind: 'device.update', deviceId: entry.id, changes: { bypassed: true }, expectedRevision: entry.revision })) : [];
+    operations.push({ kind: 'device.add', device, ...(instrument ? { index: 0 } : {}) });
+    void apply(transaction(project, `Add ${device.name}`, operations)).then((done) => done && setRightTab('inspector'));
   };
 
   const changeTempo = (value: number) => {

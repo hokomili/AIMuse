@@ -1,0 +1,27 @@
+{
+  "id": "generaluser-gs-2.0.3",
+  "source": "https://github.com/mrbumpy409/GeneralUser-GS",
+  "revision": "684543d5e5efaef08d02be50dcda8d552478fa60",
+  "files": [
+    {
+      "name": "GeneralUser-GS.sf2",
+      "sha256": "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe",
+      "byteLength": 32319396
+    },
+    {
+      "name": "GeneralUser-GS-LICENSE.txt",
+      "sha256": "7b32efefdf95ce38a043799f0659853ddc00fbaa14d8c50f0aca16b9b8b405be",
+      "byteLength": 2317
+    },
+    {
+      "name": "SpessaSynth-Core-LICENSE.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "byteLength": 11358
+    },
+    {
+      "name": "stb-vorbis-LICENSE.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "byteLength": 11358
+    }
+  ]
+}

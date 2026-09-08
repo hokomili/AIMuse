@@ -76,6 +76,7 @@
     "music-metadata": "11.14.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "spessasynth_core": "4.3.22",
     "yauzl": "3.4.0",
     "zod": "4.4.3",
     "zustand": "5.0.14"

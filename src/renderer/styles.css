@@ -473,3 +473,8 @@ button.primary.subtle { background: #332a50; color: #d8ceff; }
 .agent-setup-result.one-time { border-color: #594a75; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; } }
+
+.soundfont-controls { padding: 5px 7px 8px; }
+.soundfont-controls label { grid-template-columns: 1fr; gap: 4px; padding: 4px 0; }
+.soundfont-controls input, .soundfont-controls select { width: 100%; min-width: 0; min-height: 28px; padding: 5px; border: 1px solid #393445; border-radius: 4px; color: var(--text); background: #11131a; font-size: 10px; }
+.soundfont-controls small { display: block; margin-top: 5px; color: #9396a3; font-size: 9px; line-height: 1.5; }

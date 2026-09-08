@@ -46,3 +46,7 @@ CMakeLists.txt text eol=lf
 *.so -text
 *.wav -text
 *.zip -text
+
+# Bundled upstream assets are hash-pinned; preserve their exact bytes on every host.
+build/soundfonts/*.sf2 -text
+build/soundfonts/*-LICENSE.txt -text
