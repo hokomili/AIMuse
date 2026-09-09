@@ -114,7 +114,7 @@ function reportFor(summary) {
 ## Outcome
 
 - **PASS** for the default, non-injected Windows private-root verifier.
-- This is a launch-free ACL/filesystem integration check, not package or Luna/high certification.
+- This is a launch-free ACL/filesystem integration check, not package or independent Computer Use certification.
 
 ## Evidence
 

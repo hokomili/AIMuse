@@ -20,7 +20,7 @@ The top-level object contains exactly:
 | `coverageExceptions` | Empty array |
 | `cleanup` | Exact all-true cleanup object |
 
-`tester` contains exactly `role`, `taskId`, `implementationTaskId`, `model`, and `reasoningEffort`. Values are `"independent-tester"`, the tester's distinct task ID, the ID from declared inputs, `"gpt-5.6-luna"`, and `"high"`. The two task IDs must differ.
+`tester` contains exactly `role`, `taskId`, `implementationTaskId`, `model`, and `reasoningEffort`. Values are `"independent-tester"`, the tester's distinct task ID, the ID from declared inputs, `"gpt-6-astra"`, and `"high"`. The two task IDs must differ. For future runs, this is Astra/high under the 2026-09-09 user decision. Historical Luna certificates keep their original attribution and originally pinned verifier controls; do not rewrite them to meet the new default. The model switch does not require a current-RC retest.
 
 `interfaces` contains exactly:
 

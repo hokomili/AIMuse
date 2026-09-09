@@ -38,7 +38,7 @@ async function fixture() {
     kind: 'aimuse-declared-release-inputs',
     level: 2,
     implementationTaskId: 'implementation-task',
-    expectedIndependentTester: { model: 'gpt-5.6-luna', reasoningEffort: 'high', distinctTaskRequired: true },
+    expectedIndependentTester: { model: 'gpt-6-astra', reasoningEffort: 'high', distinctTaskRequired: true },
     paths: { packageSubjectManifest: join(runRoot, 'package-subject.json') },
     contract: { path: 'scripts/formal-release-contract.json', bytes: contractBytes.length, sha256: sha256(contractBytes) },
     controls: { 'scripts/release-level-certifier.mjs': { sha256: certifierSha256 } },
@@ -94,7 +94,7 @@ async function fixture() {
     overall: 'PASS',
     startedAt: new Date(0).toISOString(),
     finishedAt: new Date(1000).toISOString(),
-    tester: { role: 'independent-tester', taskId: 'tester-task', implementationTaskId: 'implementation-task', model: 'gpt-5.6-luna', reasoningEffort: 'high' },
+    tester: { role: 'independent-tester', taskId: 'tester-task', implementationTaskId: 'implementation-task', model: 'gpt-6-astra', reasoningEffort: 'high' },
     interfaces: { sourceInspection: 'manifest-authorized-only', computerUse: 'native-computer-use', mcp: 'isolated-qa-mcp', playwrightSubstitute: false },
     subject: {
       declaredInputsSha256: inputSha256,

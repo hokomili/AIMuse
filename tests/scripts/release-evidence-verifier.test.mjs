@@ -178,7 +178,7 @@ async function fixture() {
     acceptanceVerdict: null,
     level: 2,
     implementationTaskId: 'implementation-task',
-    expectedIndependentTester: { model: 'gpt-5.6-luna', reasoningEffort: 'high', distinctTaskRequired: true },
+    expectedIndependentTester: { model: 'gpt-6-astra', reasoningEffort: 'high', distinctTaskRequired: true },
     protectedRunRoot: { identity: protectedIdentity, owner: 'launching-user', allowedPrincipals: ['launching-user'] },
     protectedExecutionTemp: { identity: protectedExecutionTempIdentity, owner: 'launching-user', allowedPrincipals: ['launching-user'] },
     sourceInputs,

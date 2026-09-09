@@ -413,7 +413,7 @@ export async function declareReleaseInputs({
     acceptanceVerdict: null,
     level,
     implementationTaskId: implementationTaskId.trim(),
-    expectedIndependentTester: { model: 'gpt-5.6-luna', reasoningEffort: 'high', distinctTaskRequired: true },
+    expectedIndependentTester: { model: 'gpt-6-astra', reasoningEffort: 'high', distinctTaskRequired: true },
     protectedRunRoot: {
       identity: protectedRunRoot.identity,
       owner: protectedRunRoot.owner,

@@ -376,7 +376,7 @@ async function writeReport(path, summary) {
 
 - **PASS** for exact executable SHA-256 \`${summary.executable.sha256}\` at \`${summary.executable.path}\`.
 ${summary.packageSubject ? `- Package subject manifest \`${summary.packageSubject.manifestPath}\`, digest \`${summary.packageSubject.manifestSha256}\`, subject identity \`${summary.packageSubject.subjectIdentitySha256}\`.` : ''}
-- This is a test-owned headless lifecycle acceptance, not a Luna/high certificate and not evidence for real UI, Electron renderer serialization, or Computer Use.
+- This is a test-owned headless lifecycle acceptance, not an independent Computer Use certificate and not evidence for real UI, Electron renderer serialization, or Computer Use.
 
 ## Evidence
 

@@ -323,7 +323,7 @@ export async function verifyReleaseEvidence({
   assertExactKeys(observations.declaredInputs, ['path', 'bytes', 'sha256'], 'Observed declared inputs');
   assertExactKeys(observations.packageSubject, ['path', 'sha256', 'identitySha256'], 'Observed package subject');
   if (!Number.isFinite(Date.parse(inputs.createdAt)) || !Number.isFinite(Date.parse(observations.createdAt))) throw new Error('Release evidence timestamps are invalid.');
-  if (typeof inputs.implementationTaskId !== 'string' || !inputs.implementationTaskId || inputs.expectedIndependentTester.model !== 'gpt-5.6-luna' || inputs.expectedIndependentTester.reasoningEffort !== 'high' || inputs.expectedIndependentTester.distinctTaskRequired !== true) throw new Error('Independent tester attribution contract is invalid.');
+  if (typeof inputs.implementationTaskId !== 'string' || !inputs.implementationTaskId || inputs.expectedIndependentTester.model !== 'gpt-6-astra' || inputs.expectedIndependentTester.reasoningEffort !== 'high' || inputs.expectedIndependentTester.distinctTaskRequired !== true) throw new Error('Independent tester attribution contract is invalid.');
   if (inputs.toolchain.platform !== process.platform || inputs.toolchain.architecture !== process.arch) throw new Error('Declared host platform or architecture drifted.');
   if (observations.acceptanceVerdict !== null || inputs.acceptanceVerdict !== null) throw new Error('A producer stored an acceptance verdict.');
   const producerJudgements = forbiddenJudgementKeys({ ...observations, acceptanceVerdict: undefined });
@@ -528,7 +528,7 @@ export async function verifyReleaseEvidence({
     ],
     limitations: [
       'AUTOMATED_GATES_PASS is not a Level 1 or Level 2 PASS.',
-      'A full level result requires a distinct Luna/high tester, isolated MCP, native Computer Use, both cross-surface directions, cleanup, and final package re-verification.',
+      'A full level result requires a distinct Astra/high tester, isolated MCP, native Computer Use, both cross-surface directions, cleanup, and final package re-verification.',
       'An ad-hoc signature does not earn Developer ID, Gatekeeper, notarization, stapling, updater, or distribution claims.',
     ],
   };
