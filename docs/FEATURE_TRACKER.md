@@ -54,7 +54,7 @@ The counts below are regenerated during tracker audits; feature work must update
 
 | ID | Feature | Status | Priority | Current truth and exit criterion |
 | --- | --- | --- | --- | --- |
-| FND-01 | Node 24 npm workspace and Electron/React/TypeScript shell | 🟢 Working | P0 | Workspace, Forge/Vite and Node-24 discovery/preflight exist; Electron is exactly pinned to registry-current supported `43.4.0`. Verify clean-clone install/package/launch in hosted Windows CI. |
+| FND-01 | Node 24 npm workspace and Electron/React/TypeScript shell | 🟢 Working | P0 | Workspace, Forge/Vite and Node-24 discovery/preflight exist; Electron is exactly pinned to supported `43.6.0`, matching the freshly checked `43-x-y` registry tag on 2026-09-09. Verify clean-clone install/package/launch in hosted Windows CI. |
 | FND-02 | Sandboxed renderer and narrow IPC boundary | ✅ Verified | P0 | Context isolation, sandbox, CSP and hardened fuses are enforced. A shared parsed-URL policy now rejects development-origin prefix confusion, credentials, wrong host/port/scheme and malformed URLs; automated negative tests cover exact IPC sender/frame/origin trust, navigation, new windows, webviews and permission denial. |
 | FND-03 | Application-owned schemas, migrations, reducer and inverses | ✅ Verified | P0 | Strict schemas, migration fixtures, inverse operations, revisions and integrity failures are covered by core tests. Expand to property tests for every operation family under QA-01. |
 | FND-04 | Canonical editor-independent `EngineRuntime` | ✅ Verified | P0 | The exact packaged cross-surface test proves UI and authenticated MCP mutate one project service; headless-only long-run proof remains under QA-06. |

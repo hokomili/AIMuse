@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 2026-09-09: Refresh Electron to `43.6.0` on the supported 43 release branch. Add direct installed-package version checks so stale npm hidden-lock metadata cannot make an older installed dependency tree pass the release checks.
+
 - 2026-09-09: Prepare `0.1.0-rc.1` around composition and export. Recording, physical MIDI and third-party plug-in hosting move to later development; the editor now identifies those unavailable capabilities and disables hardware-track creation and plug-in scanning. Independent release acceptance and publication remain pending.
 
 - 2026-09-09 release preparation: update Hono to `4.13.7`, Vitest and its companion packages to `4.1.11`, and locked transitive XML/URI/YAML/ID packages to patched compatible versions. Fresh runtime and complete dependency audits report no known vulnerabilities; this dependency refresh does not confer release-candidate acceptance on an earlier package.

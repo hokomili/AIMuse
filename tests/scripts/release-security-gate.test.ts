@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -17,6 +17,8 @@ type RootLock = {
     devDependencies?: Record<string, string>;
     name?: string;
     version?: string;
+    link?: boolean;
+    optional?: boolean;
   }>;
 };
 
@@ -38,20 +40,34 @@ const rootLock = JSON.parse(readFileSync(resolve('package-lock.json'), 'utf8')) 
 
 describe('release dependency-security gate', () => {
   it('pins the supported Electron runtime and patched build-tool substitutions', () => {
-    expect(rootPackage.devDependencies?.electron).toBe('43.4.0');
+    expect(rootPackage.devDependencies?.electron).toBe('43.6.0');
     expect(rootPackage.overrides).toEqual({
       'extract-zip': 'npm:@electron-internal/extract-zip@1.0.5',
       tar: '7.5.22',
       tmp: '0.2.7',
     });
-    expect(rootLock.packages?.['']?.devDependencies?.electron).toBe('43.4.0');
-    expect(rootLock.packages?.['node_modules/electron']?.version).toBe('43.4.0');
+    expect(rootLock.packages?.['']?.devDependencies?.electron).toBe('43.6.0');
+    expect(rootLock.packages?.['node_modules/electron']?.version).toBe('43.6.0');
     expect(rootLock.packages?.['node_modules/extract-zip']).toMatchObject({
       name: '@electron-internal/extract-zip',
       version: '1.0.5',
     });
     expect(rootLock.packages?.['node_modules/tar']?.version).toBe('7.5.22');
     expect(rootLock.packages?.['node_modules/tmp']?.version).toBe('0.2.7');
+  });
+
+  it('checks installed package versions directly instead of trusting npm hidden-lock metadata', () => {
+    let inspected = 0;
+    for (const [path, locked] of Object.entries(rootLock.packages ?? {})) {
+      if (!path || locked.link) continue;
+      const manifestPath = resolve(path, 'package.json');
+      if (!existsSync(manifestPath) && locked.optional) continue;
+      expect(existsSync(manifestPath), `Required installed package is missing: ${path}`).toBe(true);
+      const installed = JSON.parse(readFileSync(manifestPath, 'utf8')) as { version?: string };
+      expect(installed.version, `Installed bytes do not match the locked version: ${path}`).toBe(locked.version);
+      inspected++;
+    }
+    expect(inspected).toBeGreaterThan(0);
   });
 
   it('cannot omit build or packaging dependencies from the release audit', () => {

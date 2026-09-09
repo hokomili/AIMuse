@@ -11,7 +11,7 @@ Pinned native source inputs are recorded in `native/dependency-lock.json`. The W
 
 The Steinberg ASIO SDK/bridge is not included. Any optional ASIO bridge must use the stable external boundary, be reviewed, licensed, built and distributed separately.
 
-Hosted provider output is governed by the user's provider account, plan, API terms, model terms and declared input/output rights. AIMuse stores provenance and a user rights declaration; that metadata is not legal clearance.
+External agents may import media created with tools they control. AIMuse includes no generation-provider adapter or credential store; existing generation provenance remains passive compatibility data. Importing media or retaining that metadata does not establish rights to the content.
 
 `native/dependency-lock.json` remains `pinned-for-audit`. A public release must not mark it audited, ship SDK-derived binaries, or claim a complete SBOM until exact source, binary, license and notice review is complete.
 
