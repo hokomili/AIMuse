@@ -70,7 +70,7 @@
     "@tonejs/midi": "2.0.28",
     "archiver": "7.0.1",
     "fflate": "0.8.3",
-    "hono": "4.13.0",
+    "hono": "4.13.7",
     "immer": "11.1.15",
     "lucide-react": "1.28.0",
     "music-metadata": "11.14.0",
@@ -105,7 +105,7 @@
     "typescript": "5.9.3",
     "typescript-eslint": "8.57.1",
     "vite": "7.3.6",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "overrides": {
     "extract-zip": "npm:@electron-internal/extract-zip@1.0.5",
