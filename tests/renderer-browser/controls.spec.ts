@@ -167,7 +167,7 @@ test('wires the main studio controls to durable UI actions', async ({ page }) =>
 
   await page.getByRole('button', { name: 'Collapse editor' }).click();
   await expect(page.getByRole('button', { name: 'Expand editor' })).toBeVisible();
-  await expect(page.getByTitle('Recording input is not available in this alpha build')).toBeDisabled();
+  await expect(page.getByTitle('Recording is planned for a later release')).toBeDisabled();
 
   await page.locator('.track-header').first().click();
   const name = page.locator('.inspector .property-group input').first();

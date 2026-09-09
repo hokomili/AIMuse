@@ -10,6 +10,8 @@ AIMuse is not a built-in generative-AI platform. Neither surface exposes a provi
 
 Parity does not imply v1 DAW completeness. Recording/physical MIDI, deep audio and piano-roll gestures, complete mixer/automation, SDK-backed plug-ins, codecs, endpoint/hot-plug behavior, PDC, performance, accessibility, packaging, and Level 3 remain incomplete or separately gated.
 
+For the first `0.1` release candidate, the user deferred recording, physical MIDI and third-party plug-in hosting to later development; see [RELEASE_SCOPE.md](RELEASE_SCOPE.md). The editor disables recording, new hardware-MIDI tracks and plug-in scanning with explicit planned-feature labels. Compatibility descriptors and MCP unsupported-operation boundaries remain; these do not imply capture, hardware playback or SDK hosting. Other gaps above retain their existing status.
+
 ## Shared canonical boundary
 
 Renderer IPC and MCP commit through `ProjectService`, the same schema/reducer, per-project mutation queue, two-phase native graph handshake, recovery journal, and trace. Authenticated direct/branch edits, history, checkpoints/variants, plug-in device edits, WAV analysis, and audition/consolidation job creation share bounded external-agent admission. Server-owned actor identity, timestamps, and revisions are normalized at the boundary.

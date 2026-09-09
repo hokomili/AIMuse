@@ -1,8 +1,10 @@
 # AIMuse release checklist
 
-This checklist complements `FEATURE_TRACKER.md`; it cannot override an open tracker exit criterion.
+This checklist complements `FEATURE_TRACKER.md`; it cannot override an open exit criterion within the selected milestone. [RC1 scope](RELEASE_SCOPE.md) explicitly defers recording, physical MIDI and third-party plug-in hosting, while preserving other acceptance requirements and the longer-term roadmap.
 
 ## Prerelease
+
+For `0.1.0-rc.1`, complete this preparation and the applicable Level 3 release gates. Level 2 alone does not certify an RC.
 
 - [ ] Choose a SemVer prerelease and add a dated changelog entry.
 - [ ] Create a fresh owner-private formal root plus disjoint Playwright output, then run the documented package-once Level 2 workflow on the target platform.

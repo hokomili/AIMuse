@@ -1,3 +1,4 @@
+import { version as applicationVersion } from '../package.json';
 import { chromium, expect, test, type Browser, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
@@ -124,7 +125,7 @@ test.describe('packaged cross-surface smoke', () => {
     expect(unauthenticatedHealth.status).toBe(401);
     const health = await fetch(healthUrl, { headers: { authorization: `Bearer ${connection.token}`, accept: 'application/json' } });
     expect(health.status).toBe(200);
-    await expect(health.json()).resolves.toMatchObject({ name: 'AIMuse Engine', version: '0.1.0-alpha.0', status: 'ok', uiRequired: false });
+    await expect(health.json()).resolves.toMatchObject({ name: 'AIMuse Engine', version: applicationVersion, status: 'ok', uiRequired: false });
     const unauthorized = await fetch(connection.url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     expect(unauthorized.status).toBe(401);
 

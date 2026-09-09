@@ -4,7 +4,7 @@ Agent startup: read [AGENTS.md](AGENTS.md) before repository discovery. The live
 
 AIMuse is a native, agent-driven, Windows-first music and sound-design workstation. One canonical engine serves both an attachable Electron editor and authenticated external MCP clients, so a creator can work directly while an agent observes and edits the same project. AIMuse is not a built-in generative-content platform: it ships no external generation-provider adapter, provider credential store, generation job, or generation UI. External agents may create material with capabilities they control, then use AIMuse's ordinary import and editing tools.
 
-The repository is currently **`0.1.0-alpha.0`**. It contains a working foundation and packaged cross-surface alpha; it is deliberately not labeled `1.0.0` because the complete live audio graph, recording, third-party plug-in hosting, codec, performance, and exhaustive release gates in the v1 plan are not complete. See [the feature tracker](docs/FEATURE_TRACKER.md).
+The repository targets **`0.1.0-rc.1`**, the first composition/export release candidate. Independent acceptance and publication are still pending. Recording, physical MIDI input/output and third-party plug-in hosting are planned for later development. See [the RC1 scope](docs/RELEASE_SCOPE.md) and [feature tracker](docs/FEATURE_TRACKER.md) for supported behavior and remaining release requirements.
 
 ## What works now
 
@@ -12,6 +12,7 @@ The repository is currently **`0.1.0-alpha.0`**. It contains a working foundatio
 - A one-time, no-secret stdio setup for external MCP clients backed by authenticated loopback MCP with 12 tool-first contracts (including model-callable help), owner-scoped job resources, state subscriptions, a reservation-safe 32-session cap, approval jobs, and headless/editor attachment lifecycle. Configured clients automatically follow fresh engine authority across restarts.
 - Song and SFX editor surfaces with arrangement, media browser, inspector/activity/jobs/agents, lower editing dock, mixer controls, and SFX deliverable controls.
 - Controlled audio/MIDI import, MIDI export, deterministic WAV/master/stem/audition rendering, SFX variation batches, DAWproject interchange reports, working folders, and ZIP64 portable packs.
+- Bundled GeneralUser GS SoundFont instruments and drum kits, imported SF2 libraries, and persisted preset selection shared by preview and export.
 - A C++20 service protocol, two-phase graph prepare/commit, deterministic DSP kernels, isolated scanner/bridge process shells, crash degradation behavior, and staged native executables.
 - Pinned-miniaudio WASAPI shared playback with worker-rendered, background-prewarmed revision previews; play/pause/stop/exact seek/loop are native, ordinary edits preserve playback position, and ruler dragging scrubs continuously without blocking the Electron UI.
 - Hardened packaged Electron build with an exact-build UI/MCP end-to-end test.

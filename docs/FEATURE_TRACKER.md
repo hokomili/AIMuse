@@ -2,6 +2,8 @@
 
 Last audited: 2026-09-04
 
+Milestone scope updated: 2026-09-09; implementation audit counts below are unchanged.
+
 This is the source of truth for implementation status. AIMuse is a native agent-driven DAW, not a built-in generative-content platform. External agents edit through authenticated local MCP and may import media created under their own authority; AIMuse ships no provider adapter, provider credential store, generation job/tool/UI, or persistent protected-secret backend.
 
 ## Status rules
@@ -18,18 +20,20 @@ This is the source of truth for implementation status. AIMuse is a native agent-
 
 Priorities are `P0` release blocker, `P1` core v1 workflow, `P2` completeness/fidelity, and `P3` polish. Removed rows have no priority and cannot block release. A feature may move to **Verified** only when its current exit criterion has automated evidence.
 
+The first `0.1` release candidate has the explicit milestone exclusions in [RELEASE_SCOPE.md](RELEASE_SCOPE.md): recording, physical MIDI and third-party plug-in hosting are later development. The priorities and implementation statuses below continue to describe the longer-term roadmap; an excluded capability is neither an RC1 blocker nor newly implemented.
+
 ## Current release truth
 
-- AIMuse remains `0.1.0-alpha.0`, not a completed DAW release or release candidate.
+- Source metadata targets `0.1.0-rc.1`; independent acceptance and publication remain pending. A version string is not a release verdict.
 - Strong areas remain the project/reducer model, journal/trace/recovery, actor-safe collaboration, twelve-tool authenticated MCP, deterministic MIDI/media/export/interchange, managed-preview native audio, and hardened Electron shell.
 - Major gaps remain physical recording/MIDI, live graph/PDC/stretch/DSP completeness, SDK-backed VST3/CLAP hosting, codecs/interchange fidelity, accessibility, clean-machine packaging, performance/soak, and Level 3.
 - MCP clients use one static no-secret stdio setup. A user-private atomic run-state lets the AIMuse-owned bridge discover and authenticate fresh PID/instance-bound engine authority internally across GUI or headless restarts. AIMuse does not write client configuration or use Keychain, DPAPI, libsecret, Electron `safeStorage`, or another protected-secret backend.
 - Historical exact-subject Level 1/2 evidence remains history for those bytes only. This checkpoint adds fresh local clean-install, ad-hoc arm64 package, relocated exact-bridge and real stdio-client headless evidence. A later fresh arm64 package closes the observed macOS presentation defect: static `LSUIElement` bootstrap plus serialized activation fallback kept the exact `--headless` PID `BackgroundOnly` and non-frontmost through an ordinary LaunchServices reopen, admitted one editor only through instance/profile-bound show, returned to silent background operation after detach, reattached, and left no job-owned app/helper/native process after terminal quit. Ordinary interactive launch still produced one foreground editor. This does not add playback/recording quality, physical MIDI, non-macOS, Developer ID, notarization, updater, distribution, or Level 3 claims.
 - The pending AUD-03 native candidate is preserved as its own bounded work item and was not judged by this product-surface removal.
 
-### Literal release-candidate bar and ranked remaining gaps (2026-08-20)
+### Release-candidate bar (scope revised 2026-09-09)
 
-A release candidate requires one immutable checksummed subject plus fresh independent Level 3 evidence for clean install/portable lifecycle, exhaustive MCP/Computer Use, native audio/recording/MIDI/PDC/DSP/stretch, SDK plug-ins, codecs/interchange, corruption/recovery/security/performance/accessibility, signing/SBOM/licenses/advisories, and exact report/manifest/tracker agreement. Removed provider/generation/protected-storage rows are not part of that matrix and may not be revived as implicit blockers.
+A release candidate requires one immutable checksummed subject plus fresh independent Level 3 evidence for its selected scope: clean install/portable lifecycle, exhaustive MCP/Computer Use, native audio, applicable DSP and rendering, codecs/interchange, corruption/recovery/security/performance/accessibility, signing/SBOM/licenses/advisories, and exact report/manifest/tracker agreement. The user moved recording, physical MIDI and third-party plug-in hosting out of RC1; see [the exact exclusions and remaining requirements](RELEASE_SCOPE.md). Their original full-DAW requirements remain later development. Removed provider/generation/protected-storage rows are not part of that matrix and may not be revived as implicit blockers.
 
 ### Audit snapshot
 

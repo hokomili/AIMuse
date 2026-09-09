@@ -1,3 +1,4 @@
+import { version as applicationVersion } from '../../package.json';
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
@@ -177,6 +178,7 @@ describe('export pipeline', () => {
     const archive = unzipSync(await readFile(join(root, 'interchange.dawproject')));
     expect(Object.keys(archive).sort()).toEqual(['fallback-report.json', 'metadata.xml', 'project.xml']);
     expect(strFromU8(archive['project.xml'])).toContain('<Project version="1.0">');
+    expect(strFromU8(archive['project.xml'])).toContain(`<Application name="AIMuse" version="${applicationVersion}"/>`);
     expect(JSON.parse(strFromU8(archive['fallback-report.json']))).toMatchObject({ format: 'AIMuse DAWproject fallback report', warnings: [] });
   });
 

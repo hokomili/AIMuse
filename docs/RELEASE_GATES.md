@@ -2,6 +2,8 @@
 
 The release ladder mirrors the intended AIDraw discipline. [TESTING.md](TESTING.md) is the executable source of truth for independent Level 1–3 QA; this document summarizes product-specific blockers. A green lower level does not waive a higher level.
 
+For the first `0.1` release candidate, apply the user's [2026-09-09 scope decision](RELEASE_SCOPE.md): recording, physical MIDI and third-party plug-in hosting belong to later development. Preserve the corresponding full-DAW requirements below for that later scope. Other release requirements and negative checks for unsupported operations remain in force.
+
 ## Smoke
 
 Run for every packaged candidate:
