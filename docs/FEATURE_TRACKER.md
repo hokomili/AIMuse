@@ -4,6 +4,8 @@ Last audited: 2026-09-04
 
 Milestone scope updated: 2026-09-09; implementation audit counts below are unchanged.
 
+2026-09-10 focused correction: the stdio bridge now permits the full 30-second `job_manage.wait` with a separate 35-second forwarded-request deadline; health/session cleanup remain bounded at two seconds. Transport timeouts disclose uncertain completion and are never automatically replayed. Real-engine regressions cover a full bounded wait, completion after the former cutoff and continued owner-session observation; lifecycle and timeout/no-replay coverage remain required. This is a Level 1 bug-fix scope, without a new formal certificate or broader status promotion.
+
 This is the source of truth for implementation status. AIMuse is a native agent-driven DAW, not a built-in generative-content platform. External agents edit through authenticated local MCP and may import media created under their own authority; AIMuse ships no provider adapter, provider credential store, generation job/tool/UI, or persistent protected-secret backend.
 
 ## Status rules

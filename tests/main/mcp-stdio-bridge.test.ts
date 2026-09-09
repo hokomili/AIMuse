@@ -108,6 +108,82 @@ describe('stable AIMuse stdio bridge lifecycle', () => {
     if (root) await rm(root, { recursive: true, force: true });
   });
 
+  it.each(['running', 'completed'] as const)('preserves an owned job wait beyond two seconds and returns %s on the same session', async (status) => {
+    root = await mkdtemp(join(tmpdir(), 'aimuse-mcp-bridge-job-wait-'));
+    const profileId = profileIdForPath(root);
+    firstRuntime = new EngineRuntime({ userDataPath: root, profileId, appVersion: 'test', mode: 'headless' });
+    await firstRuntime.start();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    bridge = new McpStdioBridge({ userDataPath: root, expectedProfileId: profileId, input, output, pollMs: 5, log: () => undefined });
+    await bridge.start();
+    const client = new StaticStdioClient(input, output);
+    client.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'long-job-wait', version: '1' } } });
+    expect(await client.response(1)).not.toHaveProperty('error');
+    client.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    client.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'session_manage', arguments: { action: 'join', name: 'Long Job Owner' } } });
+    const joined = await client.response(2);
+    const actorId = (joined.result?.structuredContent as { data: { actor: { id: string } } }).data.actor.id;
+    const timestamp = new Date().toISOString();
+    const job = {
+      id: 'bridge-long-job', ownerActorId: actorId, projectId: firstRuntime.projects.getActiveProject()!.id,
+      kind: 'render' as const, status: 'running' as const, progress: 0.4, message: 'Controlled long job',
+      createdAt: timestamp, updatedAt: timestamp, cancellable: true,
+    };
+    firstRuntime.projects.upsertJob(job);
+    const finish = status === 'completed' ? setTimeout(() => {
+      firstRuntime!.projects.upsertJob({ ...job, status: 'completed', progress: 1, result: { output: 'finished-once' } });
+    }, 2_500) : undefined;
+    try {
+      const started = Date.now();
+      client.send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'job_manage', arguments: { action: 'wait', jobId: job.id, timeoutMs: 30_000 } } });
+      const waited = await client.response(3, 35_000);
+      expect(waited.error).toBeUndefined();
+      expect(Date.now() - started).toBeGreaterThanOrEqual(status === 'completed' ? 2_400 : 30_000);
+      expect(waited.result?.structuredContent).toMatchObject({ data: { id: job.id, status } });
+      // Re-observation must retain the authenticated owner, not allocate a new session.
+      client.send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'job_manage', arguments: { action: 'inspect', jobId: job.id } } });
+      expect((await client.response(4)).result?.structuredContent).toMatchObject({ data: { id: job.id, status } });
+      expect(firstRuntime.projects.getJob(job.id)?.ownerActorId).toBe(actorId);
+    } finally {
+      clearTimeout(finish);
+    }
+  }, 45_000);
+
+  it('reports an uncertain timed-out mutation without replaying it or replacing its session', async () => {
+    root = await mkdtemp(join(tmpdir(), 'aimuse-mcp-bridge-post-timeout-'));
+    const profileId = profileIdForPath(root);
+    const state = fakeRuntimeState(profileId);
+    await publishMcpRuntimeState(root, state);
+    const postSessionIds: string[] = [];
+    let writes = 0;
+    const fetchImplementation: typeof fetch = async (input, init = {}) => {
+      if (new URL(String(input)).pathname === '/health') return healthResponse(state);
+      if (init.method === 'DELETE') return new Response(null, { status: 204 });
+      const message = JSON.parse(String(init.body)) as RpcMessage;
+      postSessionIds.push(new Headers(init.headers).get('mcp-session-id') ?? '');
+      if (message.method === 'initialize') return initializeResponse(message.id ?? null, 'slow-engine-session');
+      if (message.method === 'tools/call') {
+        writes += 1;
+        throw new DOMException('Private transport details must not escape.', 'TimeoutError');
+      }
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: { tools: [] } });
+    };
+    const input = new PassThrough();
+    const output = new PassThrough();
+    bridge = new McpStdioBridge({ userDataPath: root, expectedProfileId: profileId, input, output, fetchImplementation, pollMs: 5, log: () => undefined });
+    await bridge.start();
+    const client = new StaticStdioClient(input, output);
+    client.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'uncertain-timeout', version: '1' } } });
+    await client.response(1);
+    client.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'project_manage', arguments: { action: 'new', name: 'Only once' } } });
+    expect((await client.response(2)).error).toEqual({ code: -32_000, message: 'The AIMuse engine response timed out. The request may still be running; inspect its job or project before retrying.' });
+    client.send({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} });
+    expect(await client.response(3)).not.toHaveProperty('error');
+    expect(writes).toBe(1);
+    expect(postSessionIds).toEqual(['', 'slow-engine-session', 'slow-engine-session']);
+  });
+
   it('uses one no-secret setup before launch and reconnects across fresh engine authority without mutation', async () => {
     root = await mkdtemp(join(tmpdir(), 'aimuse-mcp-bridge-'));
     const profileId = profileIdForPath(root);

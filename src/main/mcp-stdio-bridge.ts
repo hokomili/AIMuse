@@ -20,7 +20,10 @@ import {
   type PreparedMcpRuntimeStateLocation,
 } from './mcp-runtime-state';
 
-const HTTP_TIMEOUT_MS = 2_000;
+const HTTP_CONTROL_TIMEOUT_MS = 2_000;
+// job_manage.wait can deliberately hold its response for 30 seconds. Keep
+// forwarded requests bounded, with time for admission and response delivery.
+const HTTP_REQUEST_TIMEOUT_MS = 35_000;
 
 interface DownstreamSession {
   state: McpRuntimeState;
@@ -49,6 +52,8 @@ export interface McpStdioBridgeOptions {
 class DownstreamHttpError extends Error {
   constructor(readonly status: number) { super(`AIMuse engine returned HTTP ${status}.`); }
 }
+
+class DownstreamTimeoutError extends Error {}
 
 function defaultProcessAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
@@ -89,6 +94,7 @@ function responseMatches(message: JSONRPCMessage, request: JSONRPCRequest): bool
 }
 
 function bridgeErrorMessage(error: unknown): string {
+  if (error instanceof DownstreamTimeoutError) return 'The AIMuse engine response timed out. The request may still be running; inspect its job or project before retrying.';
   if (error instanceof DownstreamHttpError && error.status === 401) return 'The engine replaced its MCP authority before the request was accepted.';
   if (error instanceof DownstreamHttpError && error.status === 404) return 'The engine replaced the MCP session before the request was accepted.';
   return 'AIMuse could not establish a private connection to the current engine.';
@@ -215,7 +221,7 @@ export class McpStdioBridge {
         method: 'GET',
         headers: { authorization: `Bearer ${state.token}`, accept: 'application/json' },
         redirect: 'error',
-        signal: AbortSignal.any([this.bridgeAbort.signal, AbortSignal.timeout(HTTP_TIMEOUT_MS)]),
+        signal: AbortSignal.any([this.bridgeAbort.signal, AbortSignal.timeout(HTTP_CONTROL_TIMEOUT_MS)]),
       });
       if (!response.ok) return false;
       const body = await response.json() as Record<string, unknown>;
@@ -283,21 +289,29 @@ export class McpStdioBridge {
   }
 
   private async post(session: DownstreamSession, message: JSONRPCMessage): Promise<DownstreamResponse> {
-    const response = await this.fetchImplementation(session.state.url, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${session.state.token}`,
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-        ...(session.sessionId ? { 'mcp-session-id': session.sessionId } : {}),
-      },
-      body: JSON.stringify(message),
-      redirect: 'error',
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new DownstreamHttpError(response.status);
-    const text = await response.text();
-    return { messages: parseHttpMessages(text, response.headers.get('content-type')), sessionId: response.headers.get('mcp-session-id') ?? undefined };
+    const signal = AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await this.fetchImplementation(session.state.url, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${session.state.token}`,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...(session.sessionId ? { 'mcp-session-id': session.sessionId } : {}),
+        },
+        body: JSON.stringify(message),
+        redirect: 'error',
+        signal,
+      });
+      if (!response.ok) throw new DownstreamHttpError(response.status);
+      const text = await response.text();
+      return { messages: parseHttpMessages(text, response.headers.get('content-type')), sessionId: response.headers.get('mcp-session-id') ?? undefined };
+    } catch (error) {
+      // A timeout says nothing about whether an admitted operation completed.
+      // Never replay it through the 401/404-only session retry path.
+      if (signal.aborted || (error instanceof Error && error.name === 'TimeoutError')) throw new DownstreamTimeoutError();
+      throw error;
+    }
   }
 
   private ensureEventStream(session: DownstreamSession): void {
@@ -362,7 +376,7 @@ export class McpStdioBridge {
       method: 'DELETE',
       headers: { authorization: `Bearer ${session.state.token}`, accept: 'application/json, text/event-stream', 'mcp-session-id': session.sessionId },
       redirect: 'error',
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+      signal: AbortSignal.timeout(HTTP_CONTROL_TIMEOUT_MS),
     }).catch(() => undefined);
   }
 }
